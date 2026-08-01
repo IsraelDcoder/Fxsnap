@@ -1,0 +1,47 @@
+{
+  "expo": {
+    "name": "FXSnap",
+    "slug": "mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "mobile",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/images/icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.fxsnap.mobile",
+      "infoPlist": {
+        "NSCameraUsageDescription": "FXSnap uses the camera so you can submit a trading chart for analysis.",
+        "NSPhotoLibraryUsageDescription": "FXSnap uses your photo library so you can select a trading chart for analysis."
+      }
+    },
+    "android": {
+      "package": "com.fxsnap.mobile",
+      "permissions": ["CAMERA", "READ_MEDIA_IMAGES"]
+    },
+    "web": {
+      "favicon": "./assets/images/icon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "replace_with_eas_project_id"
+      }
+    },
+    "plugins": [
+      "expo-router",
+      "expo-font",
+      "expo-web-browser",
+      "@sentry/react-native/expo"
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    }
+  }
+}
