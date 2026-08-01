@@ -12,8 +12,9 @@
     "build:android": "npx eas build --platform android --profile production",
     "build:all": "npx eas build --platform all --profile production",
     "serve": "node server/serve.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
-    ,"test": "tsx --test tests/**/*.test.ts"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsx --test tests/**/*.test.ts",
+    "deploy:vercel": "vercel --prod"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",

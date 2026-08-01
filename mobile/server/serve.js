@@ -380,47 +380,58 @@ async function updateSignalOutcome(req, res) {
 const landingPageTemplate = fs.readFileSync(TEMPLATE_PATH, 'utf-8');
 const appName = getAppName();
 
-const server = http.createServer((req, res) => {
-  const url = new URL(req.url || '/', `http://${req.headers.host}`);
-  let pathname = url.pathname;
+function createRequestHandler() {
+  return (req, res) => {
+    const url = new URL(req.url || '/', `http://${req.headers.host}`);
+    let pathname = url.pathname;
 
-  if (req.method === 'OPTIONS') return sendJson(res, 204, {});
-  if (pathname === '/api/session' && req.method === 'POST') {
-    return readJsonBody(req).then((body) => {
-      const deviceId = String(body.deviceId || '');
-      if (!/^[a-zA-Z0-9_-]{16,128}$/.test(deviceId)) return sendJson(res, 400, { error: 'Invalid device identity.' });
-      return sendJson(res, 200, { token: signToken(deviceId), expiresIn: 30 * 24 * 60 * 60 });
-    }).catch((error) => sendJson(res, 400, { error: error.message }));
-  }
-
-  if (pathname === '/api/strategy' && req.method === 'POST') return generateStrategy(req, res);
-  if (pathname === '/api/chart-analysis' && req.method === 'POST') return analyzeChart(req, res);
-  if (pathname === '/api/events' && req.method === 'POST') return receiveEvent(req, res);
-  if (pathname === '/api/entitlement' && req.method === 'GET') return getEntitlement(req, res);
-  if (pathname === '/api/signals' && req.method === 'POST') return recordSignal(req, res);
-  if (pathname.startsWith('/api/signals/') && req.method === 'PATCH') return updateSignalOutcome(req, res);
-  if (pathname === '/api/market-data' && req.method === 'GET') return marketData(req, res);
-  if (pathname === '/api/strategy' && req.method !== 'POST') return sendJson(res, 405, { error: 'POST required.' });
-
-  if (basePath && pathname.startsWith(basePath)) {
-    pathname = pathname.slice(basePath.length) || '/';
-  }
-
-  if (pathname === '/' || pathname === '/manifest') {
-    const platform = req.headers['expo-platform'];
-    if (platform === 'ios' || platform === 'android') {
-      return serveManifest(platform, res);
+    if (req.method === 'OPTIONS') return sendJson(res, 204, {});
+    if (pathname === '/api/health' && req.method === 'GET') return sendJson(res, 200, { status: 'ok', service: 'fxsnap' });
+    if (pathname === '/api/session' && req.method === 'POST') {
+      return readJsonBody(req).then((body) => {
+        const deviceId = String(body.deviceId || '');
+        if (!/^[a-zA-Z0-9_-]{16,128}$/.test(deviceId)) return sendJson(res, 400, { error: 'Invalid device identity.' });
+        return sendJson(res, 200, { token: signToken(deviceId), expiresIn: 30 * 24 * 60 * 60 });
+      }).catch((error) => sendJson(res, 400, { error: error.message }));
     }
 
-    if (pathname === '/') {
-      return serveLandingPage(req, res, landingPageTemplate, appName);
+    if (pathname === '/api/strategy' && req.method === 'POST') return generateStrategy(req, res);
+    if (pathname === '/api/chart-analysis' && req.method === 'POST') return analyzeChart(req, res);
+    if (pathname === '/api/events' && req.method === 'POST') return receiveEvent(req, res);
+    if (pathname === '/api/entitlement' && req.method === 'GET') return getEntitlement(req, res);
+    if (pathname === '/api/signals' && req.method === 'POST') return recordSignal(req, res);
+    if (pathname.startsWith('/api/signals/') && req.method === 'PATCH') return updateSignalOutcome(req, res);
+    if (pathname === '/api/market-data' && req.method === 'GET') return marketData(req, res);
+    if (pathname === '/api/strategy' && req.method !== 'POST') return sendJson(res, 405, { error: 'POST required.' });
+
+    if (basePath && pathname.startsWith(basePath)) {
+      pathname = pathname.slice(basePath.length) || '/';
     }
-  }
 
-  serveStaticFile(pathname, res);
-});
+    if (pathname === '/' || pathname === '/manifest') {
+      const platform = req.headers['expo-platform'];
+      if (platform === 'ios' || platform === 'android') {
+        return serveManifest(platform, res);
+      }
 
-const port = parseInt(process.env.PORT || '3000', 10);
-server.listen(port, '0.0.0.0', () => {
-  console.log(`Serving static Expo build on port ${port}`);
-});
+      if (pathname === '/') {
+        return serveLandingPage(req, res, landingPageTemplate, appName);
+      }
+    }
+
+    serveStaticFile(pathname, res);
+  };
+}
+
+const requestHandler = createRequestHandler();
+
+if (require.main === module) {
+  const server = http.createServer(requestHandler);
+  const port = parseInt(process.env.PORT || '3000', 10);
+  server.listen(port, '0.0.0.0', () => {
+    console.log(`Serving static Expo build on port ${port}`);
+  });
+}
+
+module.exports = requestHandler;
+module.exports.createRequestHandler = createRequestHandler;
