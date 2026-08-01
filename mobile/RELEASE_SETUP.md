@@ -35,7 +35,6 @@ Set these in the deployment secret manager, not in a committed `.env`:
 - `FXSNAP_AUTH_SECRET`
 - `REVENUECAT_SECRET_API_KEY`
 - `EXPO_PUBLIC_SENTRY_DSN` for the client build
-- `REDIS_URL` for distributed rate limits, market cache, and telemetry retention
 - `ALLOWED_ORIGIN` for the deployed web client origin
 
 Use HTTPS and set `ALLOWED_ORIGIN` to the real web origin. Rotate any key previously exposed during development.

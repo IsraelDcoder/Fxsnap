@@ -297,20 +297,20 @@ export default function HomeScreen() {
           icon="activity"
           label="Run Analysis"
           sublabel="Upload a chart to get signals"
-          onPress={() => { if (!isSubscribed) router.push('/paywall'); else router.push('/analysis'); }}
+          onPress={() => router.push('/analysis')}
           primary
         />
         <ActionButton
           icon="sliders"
           label="Strategy"
           sublabel="Generate a personalised trading plan"
-          onPress={() => { if (!isSubscribed) router.push('/paywall'); else router.push('/strategy'); }}
+          onPress={() => router.push('/strategy')}
         />
         <ActionButton
           icon="cpu"
           label="My Strategies"
           sublabel="View your saved strategies"
-          onPress={() => { if (!isSubscribed) router.push('/paywall'); else router.push('/my-strategies'); }}
+          onPress={() => router.push('/my-strategies')}
           badge={savedStrategies.length}
         />
         <Text style={[styles.disclaimer, { color: colors.textMuted }]}>

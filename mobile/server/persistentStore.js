@@ -1,40 +1,54 @@
-const { createClient } = require('redis');
+const memoryStore = new Map();
 
-const redisUrl = process.env.REDIS_URL;
-const client = redisUrl ? createClient({ url: redisUrl }) : null;
-let connected = false;
+function getTtlKey(key, ttlSeconds) {
+  return `${key}:${ttlSeconds}`;
+}
+
+function pruneExpired() {
+  const now = Date.now();
+  for (const [key, value] of memoryStore.entries()) {
+    if (value.expiresAt && value.expiresAt <= now) memoryStore.delete(key);
+  }
+}
 
 async function connect() {
-  if (!client || connected) return Boolean(client);
-  client.on('error', (error) => console.error('[Redis]', error.message));
-  try { await client.connect(); connected = true; return true; } catch (error) { console.error('[Redis] connection failed:', error.message); return false; }
+  return true;
 }
 
 async function increment(key, windowSeconds) {
-  if (!(await connect())) return null;
-  const count = await client.incr(key);
-  if (count === 1) await client.expire(key, windowSeconds);
-  return count;
+  await connect();
+  pruneExpired();
+  const normalizedKey = getTtlKey(key, windowSeconds);
+  const current = memoryStore.get(normalizedKey) || { value: 0, expiresAt: Date.now() + windowSeconds * 1000 };
+  current.value += 1;
+  current.expiresAt = Date.now() + windowSeconds * 1000;
+  memoryStore.set(normalizedKey, current);
+  return current.value;
 }
 
 async function getJson(key) {
-  if (!(await connect())) return null;
-  const value = await client.get(key);
-  return value ? JSON.parse(value) : null;
+  await connect();
+  pruneExpired();
+  const entry = memoryStore.get(key);
+  if (!entry) return null;
+  return entry.value;
 }
 
 async function setJson(key, value, ttlSeconds) {
-  if (!(await connect())) return false;
-  await client.set(key, JSON.stringify(value), { EX: ttlSeconds });
+  await connect();
+  pruneExpired();
+  memoryStore.set(key, { value, expiresAt: Date.now() + ttlSeconds * 1000 });
   return true;
 }
 
 async function appendJson(key, value, maxItems, ttlSeconds) {
-  if (!(await connect())) return false;
-  const list = (await getJson(key)) || [];
-  list.push(value);
+  await connect();
+  pruneExpired();
+  const current = (await getJson(key)) || [];
+  const list = [...current, value];
   while (list.length > maxItems) list.shift();
-  return setJson(key, list, ttlSeconds);
+  memoryStore.set(key, { value: list, expiresAt: Date.now() + ttlSeconds * 1000 });
+  return true;
 }
 
-module.exports = { enabled: Boolean(redisUrl), connect, increment, getJson, setJson, appendJson };
+module.exports = { enabled: false, connect, increment, getJson, setJson, appendJson };

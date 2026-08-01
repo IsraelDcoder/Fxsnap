@@ -1,6 +1,26 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3000';
+function normalizeBaseUrl(value: string): string {
+  return value.replace(/\/$/, '');
+}
+
+export function resolveApiBaseUrl(value?: string | null): string {
+  const candidate = (value || process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3000').trim();
+  if (!candidate) return 'http://localhost:3000';
+
+  const placeholderPattern = /your-vercel-app-name\.vercel\.app|your-backend-url\.example\.com|replace_with\//i;
+  if (placeholderPattern.test(candidate)) {
+    return 'http://localhost:3000';
+  }
+
+  if (candidate === 'http://127.0.0.1:3000' || candidate === 'http://10.0.2.2:3000') {
+    return 'http://localhost:3000';
+  }
+
+  return normalizeBaseUrl(candidate);
+}
+
+const API_URL = resolveApiBaseUrl();
 const DEVICE_ID_KEY = 'fxsnap:deviceId';
 const SESSION_TOKEN_KEY = 'fxsnap:sessionToken';
 

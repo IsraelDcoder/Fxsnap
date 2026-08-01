@@ -31,6 +31,7 @@ import type { AnalysisResult } from '@/context/AppContext';
 import { useColors } from '@/hooks/useColors';
 import * as MarketData from '@/services/marketData';
 import * as ChartDetection from '../services/chartDetection';
+import { buildNeutralChartResult } from '../services/chartDetection';
 import { trackEvent } from '@/services/telemetry';
 import { recordGeneratedSignal } from '@/services/signalTracking';
 
@@ -178,7 +179,6 @@ function StepRow({ label, icon, state }: { label: string; icon: string; state: S
       entering={FadeInDown.duration(300)}
       style={[
         styles.stepRow,
-        cardStyle,
         {
           backgroundColor: bg,
           borderColor: border,
@@ -187,18 +187,20 @@ function StepRow({ label, icon, state }: { label: string; icon: string; state: S
         },
       ]}
     >
-      <View style={[styles.stepIconBox, { borderColor: iconColor }]}>
-        <Feather name={icon as any} size={16} color={iconColor} />
-      </View>
-      <Text style={[styles.stepText, { color: textColor }]}>{label}</Text>
-      <Animated.View style={dotStyle}>
-        {state === 'done' ? (
-          <Feather name="check" size={16} color="#00E676" />
-        ) : state === 'active' ? (
-          <View style={[styles.activeDot]} />
-        ) : (
-          <View style={styles.pendingDot} />
-        )}
+      <Animated.View style={[styles.stepRowContent, cardStyle]}>
+        <View style={[styles.stepIconBox, { borderColor: iconColor }]}>
+          <Feather name={icon as any} size={16} color={iconColor} />
+        </View>
+        <Text style={[styles.stepText, { color: textColor }]}>{label}</Text>
+        <Animated.View style={dotStyle}>
+          {state === 'done' ? (
+            <Feather name="check" size={16} color="#00E676" />
+          ) : state === 'active' ? (
+            <View style={[styles.activeDot]} />
+          ) : (
+            <View style={styles.pendingDot} />
+          )}
+        </Animated.View>
       </Animated.View>
     </Animated.View>
   );
@@ -295,7 +297,7 @@ function AnalyzingView() {
         entering={FadeInDown.delay(150).duration(500)}
         style={[styles.analyzingTitle, { color: colors.text }]}
       >
-      apiDataTime: candles[candles.length - 1]?.timestamp,
+        Reading market structure…
       </Animated.Text>
 
       {/* Progress bar with percentage */}
@@ -344,6 +346,8 @@ export default function AnalysisScreen() {
   const [selectedPair, setSelectedPair] = useState<string | null>(null);
   const [showPairModal, setShowPairModal] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [manualMode, setManualMode] = useState(false);
+  const [manualModeNotice, setManualModeNotice] = useState<string | null>(null);
 
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
   const botPad = Platform.OS === 'web' ? 34 : insets.bottom;
@@ -409,6 +413,17 @@ export default function AnalysisScreen() {
     const validation = await ChartDetection.validateChartImage(imageBase64, imageMimeType);
     
     if (!validation.isChart) {
+      // Distinguish a genuine "not a chart" rejection from AI unavailability.
+      if (validation.availability === 'fallback') {
+        // AI service is unavailable — proceed in manual mode so the core
+        // feature still works using live market data.
+        trackEvent('chart_validation_fallback');
+        setManualMode(true);
+        setManualModeNotice('Chart AI is unavailable right now. Continuing with live market data.');
+        setShowPairModal(true);
+        setAnalysisError(null);
+        return;
+      }
       trackEvent('chart_validation_failed');
       setAnalysisError('❌ No chart detected. Please upload a valid trading chart.');
       Alert.alert('Invalid Image', validation.reason);
@@ -416,6 +431,8 @@ export default function AnalysisScreen() {
     }
     
     // Step 2: Show pair selection modal
+    setManualMode(false);
+    setManualModeNotice(null);
     setShowPairModal(true);
     setAnalysisError(null);
   };
@@ -436,16 +453,27 @@ export default function AnalysisScreen() {
       setStage('preview');
       return;
     }
-    const chart = await ChartDetection.validateChartImage(imageBase64, imageMimeType, pair);
+    let chart = await ChartDetection.validateChartImage(imageBase64, imageMimeType, pair);
     if (!chart.isChart || chart.confidence < 55) {
-      setAnalysisError(`Chart AI could not validate this image: ${chart.reason}`);
-      setStage('preview');
-      return;
+      // Strict rejection stays for genuine "not a chart" verdicts, but when the
+      // AI service is unavailable (fallback) or we're already in manual mode,
+      // continue with a neutral chart read backed by live market data.
+      if (manualMode || chart.availability === 'fallback') {
+        setManualMode(true);
+        setManualModeNotice('Chart AI is unavailable. Analysis is based on live market data.');
+        chart = buildNeutralChartResult(pair);
+      } else {
+        setAnalysisError(`Chart AI could not validate this image: ${chart.reason}`);
+        setStage('preview');
+        return;
+      }
     }
     const result = await generateAnalysisWithRealData(pair, settings, {
       ...chart,
-      marketAgreement: 'aligned',
-      fusionReason: 'Chart direction and market-data direction aligned.',
+      marketAgreement: chart.availability === 'neutral' ? 'not_available' : 'aligned',
+      fusionReason: chart.availability === 'neutral'
+        ? 'Manual mode: analysis based on live market data only.'
+        : 'Chart direction and market-data direction aligned.',
     });
     
     // Step 5: Handle result or error
@@ -558,6 +586,12 @@ export default function AnalysisScreen() {
               <Feather name="zap" size={18} color="#000" />
               <Text style={[styles.analyzeBtnText, { color: colors.primaryForeground }]}>Analyse Chart</Text>
             </TouchableOpacity>
+            {manualModeNotice && (
+              <View style={[styles.manualModeNotice, { backgroundColor: colors.surface, borderColor: colors.gold }]}>
+                <Feather name="alert-circle" size={15} color="#FFD60A" />
+                <Text style={[styles.manualModeNoticeText, { color: colors.text }]}>{manualModeNotice}</Text>
+              </View>
+            )}
             {analysisError && (
               <Text style={styles.errorText}>{analysisError}</Text>
             )}
@@ -705,6 +739,23 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 12,
   },
+  manualModeNotice: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 9,
+    borderRadius: 12,
+    padding: 13,
+    borderWidth: 1,
+    backgroundColor: '#1A1600',
+    borderColor: '#3D3400',
+  },
+  manualModeNoticeText: {
+    flex: 1,
+    fontSize: 12.5,
+    fontFamily: 'Inter_400Regular',
+    color: '#C7C7CC',
+    lineHeight: 18,
+  },
   previewContainer: {
     borderRadius: 20,
     overflow: 'hidden',
@@ -828,6 +879,12 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     paddingHorizontal: 14,
     borderWidth: 1,
+  },
+  stepRowContent: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
   },
   stepIconBox: {
     width: 36,

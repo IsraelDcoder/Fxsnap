@@ -25,8 +25,12 @@ git push -u origin main
 2. Set the project root to the mobile folder.
 3. Add the following environment variables:
    - OPENROUTER_API_KEY
+   - OPENROUTER_MODEL (text model for strategy generation)
+   - OPENROUTER_VISION_MODEL (OpenRouter vision model, e.g. `openai/gpt-4o-mini`)
    - OPENROUTER_SITE_URL
    - OPENROUTER_APP_NAME
+   - GEMINI_API_KEY (Google Gemini key for chart analysis)
+   - GEMINI_VISION_MODEL (default `gemini-1.5-flash`)
    - ALPHA_VANTAGE_API_KEY
    - REVENUECAT_SECRET_API_KEY
    - REVENUECAT_ENTITLEMENT_ID

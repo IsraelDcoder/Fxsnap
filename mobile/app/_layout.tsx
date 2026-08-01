@@ -17,11 +17,15 @@ import * as SplashScreen from 'expo-splash-screen';
 import * as Sentry from '@sentry/react-native';
 
 SplashScreen.preventAutoHideAsync();
-Sentry.init({
-  dsn: process.env.EXPO_PUBLIC_SENTRY_DSN,
-  enabled: Boolean(process.env.EXPO_PUBLIC_SENTRY_DSN && !process.env.EXPO_PUBLIC_SENTRY_DSN.startsWith('replace_')),
-  sendDefaultPii: false,
-});
+const sentryDsn = process.env.EXPO_PUBLIC_SENTRY_DSN?.trim();
+const hasValidSentryDsn = Boolean(sentryDsn && !sentryDsn.startsWith('replace_') && /^https:\/\/[^@\s]+@[^\/\s]+\/[^\s]+$/i.test(sentryDsn));
+if (hasValidSentryDsn) {
+  Sentry.init({
+    dsn: sentryDsn,
+    enabled: true,
+    sendDefaultPii: false,
+  });
+}
 const queryClient = new QueryClient();
 
 function RootLayoutNav() {

@@ -239,7 +239,10 @@ export default function SavedScreen() {
           <Text style={[styles.emptySubtext, { color: colors.textSecondary }]}> 
             After running a chart analysis, tap "Save Analysis" to keep it here for reference.
           </Text>
-          <TouchableOpacity style={[styles.runBtn, { backgroundColor: colors.primary }]} onPress={() => router.push('/analysis')}>
+          <TouchableOpacity
+            style={[styles.runBtn, { backgroundColor: colors.primary }]}
+            onPress={() => router.push('/analysis')}
+          >
             <Feather name="activity" size={16} color={colors.primaryForeground} />
             <Text style={[styles.runBtnText, { color: colors.primaryForeground }]}>Run Analysis</Text>
           </TouchableOpacity>
