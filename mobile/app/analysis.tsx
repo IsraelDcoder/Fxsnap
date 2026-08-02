@@ -38,117 +38,98 @@ type Stage = 'pick' | 'preview' | 'analyzing';
 type StepState = 'done' | 'active' | 'pending';
 
 const STEPS = [
-  { label: 'Reading price structure…', icon: 'bar-chart-2' },
-  { label: 'Identifying market direction…', icon: 'trending-up' },
-  { label: 'Mapping key levels…', icon: 'layers' },
-  { label: 'Enforcing risk discipline…', icon: 'percent' },
+  { label: 'Reading price structure', icon: 'bar-chart-2' },
+  { label: 'Identifying market direction', icon: 'trending-up' },
+  { label: 'Mapping key levels', icon: 'layers' },
+  { label: 'Risk evaluation', icon: 'shield' },
+  { label: 'Filtering low-probability setups', icon: 'filter' },
 ];
 
 const AI_STATUS_MESSAGES = [
-  'Analyzing volatility patterns…',
-  'Checking market structure…',
-  'Evaluating entry & exit zones…',
-  'Validating risk-reward…',
+  'Reading structure…',
+  'Detecting trend…',
+  'Marking key zones…',
+  'Evaluating risk levels…',
   'Filtering low-probability setups…',
-  'Processing price action…',
 ];
 
 function StepRow({ label, icon, state }: { label: string; icon: string; state: StepState }) {
   const colors = useColors();
-  const pulse = useSharedValue(0.5);
-  const scaleVal = useSharedValue(1);
+  const pulse = useSharedValue(1);
 
   useEffect(() => {
     if (state === 'active') {
       pulse.value = withRepeat(
         withSequence(
-          withTiming(1, { duration: 600, easing: Easing.inOut(Easing.ease) }),
-          withTiming(0.4, { duration: 600, easing: Easing.inOut(Easing.ease) })
+          withTiming(1.2, { duration: 700, easing: Easing.inOut(Easing.ease) }),
+          withTiming(0.9, { duration: 700, easing: Easing.inOut(Easing.ease) })
         ),
         -1
       );
-      scaleVal.value = withSpring(1.02, { damping: 2, mass: 0.5, overshootClamping: false });
     } else {
       pulse.value = 1;
-      scaleVal.value = 1;
     }
   }, [state]);
 
-  const dotStyle = useAnimatedStyle(() => ({
-    opacity: state === 'active' ? pulse.value : 1,
-    transform: [{ scale: state === 'active' ? 1.1 : 1 }],
+  const animatedIconStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: state === 'active' ? pulse.value : 1 }],
   }));
 
-  const cardStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scaleVal.value }],
-  }));
-
-  const bg =
-    state === 'done' ? colors.surface : state === 'active' ? colors.surface : colors.card;
-  const border =
-    state === 'done' ? colors.buy : state === 'active' ? colors.buy : colors.cardBorder;
-  const borderOpacity = state === 'active' ? 0.3 : 1;
-  const iconColor =
-    state === 'done' ? colors.buy : state === 'active' ? colors.buy : colors.textMuted;
-  const textColor =
-    state === 'done' ? colors.text : state === 'active' ? colors.text : colors.textSecondary;
+  const backgroundColor =
+    state === 'done' ? '#071A0D' : state === 'active' ? '#0E2619' : '#0A0A0A';
+  const borderColor =
+    state === 'done' ? '#00FF9C' : state === 'active' ? '#00FF9C' : '#222222';
+  const opacity = state === 'pending' ? 0.55 : 1;
+  const textColor = state === 'pending' ? '#8E8E93' : '#FFFFFF';
+  const iconColor = state === 'pending' ? '#636366' : '#00FF9C';
 
   return (
     <Animated.View
-      entering={FadeInDown.duration(300)}
+      entering={FadeInDown.duration(280)}
       style={[
         styles.stepRow,
         {
-          backgroundColor: bg,
-          borderColor: border,
-          borderWidth: 1,
-          opacity: borderOpacity === 0.3 ? 1 : 0.8,
+          backgroundColor,
+          borderColor,
+          opacity,
         },
       ]}
     >
-      <Animated.View style={[styles.stepRowContent, cardStyle]}>
-        <View style={[styles.stepIconBox, { borderColor: iconColor }]}>
-          <Feather name={icon as any} size={16} color={iconColor} />
-        </View>
+      <View style={[styles.stepRowContent, { opacity }]}> 
+        <Animated.View style={[styles.stepIconBox, { borderColor, backgroundColor: state === 'pending' ? '#121212' : '#071B0F' }, animatedIconStyle]}>
+          <Feather name={icon as any} size={18} color={iconColor} />
+        </Animated.View>
         <Text style={[styles.stepText, { color: textColor }]}>{label}</Text>
-        <Animated.View style={dotStyle}>
+        <View style={styles.stepStatusIcon}>
           {state === 'done' ? (
-            <Feather name="check" size={16} color="#00E676" />
+            <Feather name="check" size={18} color="#00FF9C" />
           ) : state === 'active' ? (
-            <View style={[styles.activeDot]} />
+            <View style={styles.activeDot} />
           ) : (
             <View style={styles.pendingDot} />
           )}
-        </Animated.View>
-      </Animated.View>
+        </View>
+      </View>
     </Animated.View>
   );
 }
 
 function AnalyzingView() {
   const insets = useSafeAreaInsets();
-  const colors = useColors();
   const [activeStep, setActiveStep] = useState(0);
   const [progress, setProgress] = useState(0);
-  const [statusMessage, setStatusMessage] = useState(AI_STATUS_MESSAGES[0]);
 
   const progressValue = useSharedValue(0);
   const glowPulse = useSharedValue(0.12);
 
   useEffect(() => {
-    const totalDuration = 10000 + Math.random() * 5000;
-    const stepStarts = [0, totalDuration * 0.23, totalDuration * 0.49, totalDuration * 0.76];
-
-    const statusInterval = setInterval(() => {
-      setStatusMessage(
-        AI_STATUS_MESSAGES[Math.floor(Math.random() * AI_STATUS_MESSAGES.length)]
-      );
-    }, 1800);
+    const totalDuration = 12000 + Math.random() * 3000;
+    const stepStarts = [0, totalDuration * 0.18, totalDuration * 0.38, totalDuration * 0.58, totalDuration * 0.78];
 
     glowPulse.value = withRepeat(
       withSequence(
-        withTiming(0.18, { duration: 1200, easing: Easing.inOut(Easing.ease) }),
-        withTiming(0.08, { duration: 1200, easing: Easing.inOut(Easing.ease) })
+        withTiming(0.18, { duration: 1100, easing: Easing.inOut(Easing.ease) }),
+        withTiming(0.08, { duration: 1100, easing: Easing.inOut(Easing.ease) })
       ),
       -1
     );
@@ -157,6 +138,7 @@ function AnalyzingView() {
       duration: totalDuration,
       easing: Easing.linear,
     });
+
     const progressInterval = setInterval(() => {
       setProgress((current) => Math.min(96, current + 1));
     }, totalDuration / 96);
@@ -164,7 +146,6 @@ function AnalyzingView() {
     const stepTimers = stepStarts.map((startTime, stepIndex) =>
       setTimeout(() => {
         setActiveStep(stepIndex);
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       }, startTime)
     );
 
@@ -173,11 +154,9 @@ function AnalyzingView() {
       setProgress(100);
       progressValue.value = withTiming(100, { duration: 450 });
       setActiveStep(STEPS.length);
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     }, totalDuration);
 
     return () => {
-      clearInterval(statusInterval);
       clearInterval(progressInterval);
       stepTimers.forEach(clearTimeout);
       clearTimeout(finishTimer);
@@ -198,29 +177,38 @@ function AnalyzingView() {
     return 'pending';
   };
 
+  const currentStatus = AI_STATUS_MESSAGES[Math.min(activeStep, AI_STATUS_MESSAGES.length - 1)];
+
   return (
-    <View style={[styles.analyzingContainer, { paddingTop: insets.top + 20, backgroundColor: colors.background }]}>
+    <View style={[styles.analyzingContainer, { paddingTop: insets.top + 20 }]}> 
       <Animated.View style={[styles.analyzingGlow, glowStyle]} />
 
-      <Animated.View entering={FadeIn.duration(500)} style={[styles.analyzingIcon, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
-        <Feather name="cpu" size={42} color="#00E676" />
+      <Animated.View entering={FadeIn.duration(500)} style={styles.analyzingIcon}>
+        <Feather name="cpu" size={40} color="#00FF9C" />
       </Animated.View>
 
       <Animated.Text
         entering={FadeInDown.delay(150).duration(500)}
-        style={[styles.analyzingTitle, { color: colors.text }]}
+        style={styles.analyzingTitle}
       >
-        Reading market structure…
+        Analyzing Market Structure
+      </Animated.Text>
+
+      <Animated.Text
+        entering={FadeInDown.delay(220).duration(500)}
+        style={styles.analysisSubtext}
+      >
+        {currentStatus}
       </Animated.Text>
 
       <Animated.View
-        entering={FadeInDown.delay(250).duration(500)}
+        entering={FadeInDown.delay(280).duration(500)}
         style={styles.progressSection}
       >
         <View style={styles.progressBarContainer}>
-          <Animated.View style={[styles.progressBarFill, progressStyle, { backgroundColor: colors.buy }]} />
+          <Animated.View style={[styles.progressBarFill, progressStyle]} />
         </View>
-        <Text style={[styles.progressPercent, { color: colors.textSecondary }]}>{progress}%</Text>
+        <Text style={styles.progressPercent}>{progress}%</Text>
       </Animated.View>
 
       <View style={styles.stepsContainer}>
@@ -233,14 +221,6 @@ function AnalyzingView() {
           />
         ))}
       </View>
-
-      <Animated.Text
-        entering={FadeIn.duration(400)}
-        style={[styles.aiStatusMessage, { color: colors.textMuted }]}
-        key={statusMessage}
-      >
-        {statusMessage}
-      </Animated.Text>
     </View>
   );
 }
@@ -613,69 +593,140 @@ const styles = StyleSheet.create({
   // ── Analyzing stage ──
   analyzingContainer: {
     flex: 1,
-    paddingHorizontal: 18,
+    paddingHorizontal: 22,
     paddingBottom: 24,
-    paddingTop: 4,
-    backgroundColor: '#050806',
+    backgroundColor: '#000000',
     justifyContent: 'flex-start',
   },
   analyzingGlow: {
     position: 'absolute',
-    width: 180,
-    height: 180,
-    borderRadius: 90,
-    backgroundColor: '#00E676',
+    width: 140,
+    height: 140,
+    borderRadius: 70,
+    backgroundColor: '#00FF9C',
     top: 28,
     alignSelf: 'center',
-    opacity: 0.12,
+    opacity: 0.14,
   },
   analyzingIcon: {
-    width: 80,
-    height: 80,
-    borderRadius: 24,
-    backgroundColor: '#0D1A12',
+    width: 64,
+    height: 64,
+    borderRadius: 18,
+    backgroundColor: '#071B0F',
     borderWidth: 1.5,
-    borderColor: '#1A3D26',
+    borderColor: '#0A3F25',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 16,
+    marginBottom: 12,
     zIndex: 1,
   },
-  analyzingTitle: { fontSize: 28, fontFamily: 'Inter_700Bold', color: '#FFFFFF', marginBottom: 18, letterSpacing: -0.5 },
-  progressSection: { gap: 8, marginBottom: 24 },
+  analyzingTitle: {
+    fontSize: 26,
+    fontFamily: 'Inter_700Bold',
+    color: '#FFFFFF',
+    marginBottom: 8,
+    textAlign: 'center',
+    letterSpacing: -0.4,
+  },
+  analysisSubtext: {
+    fontSize: 14,
+    fontFamily: 'Inter_500Medium',
+    color: '#B3B3B8',
+    textAlign: 'center',
+    marginBottom: 20,
+    lineHeight: 20,
+  },
+  progressSection: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginBottom: 24,
+  },
   progressBarContainer: {
-    height: 5,
-    backgroundColor: '#1A1A1A',
-    borderRadius: 2.5,
+    flex: 1,
+    height: 8,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderRadius: 999,
     overflow: 'hidden',
-    borderWidth: 0.5,
-    borderColor: '#2A2A2A',
   },
   progressBarFill: {
     height: '100%',
-    backgroundColor: '#00E676',
-    borderRadius: 2.5,
-    shadowColor: '#00E676',
-    shadowOpacity: 0.8,
-    shadowRadius: 5,
+    backgroundColor: '#00FF9C',
+    borderRadius: 999,
+    shadowColor: '#00FF9C',
+    shadowOpacity: 0.45,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 3,
+  },
+  progressPercent: {
+    minWidth: 48,
+    textAlign: 'right',
+    fontSize: 13,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#E5E5EA',
+  },
+  stepsContainer: {
+    gap: 14,
+    marginBottom: 16,
+  },
+  stepRow: {
+    borderRadius: 16,
+    borderWidth: 1.25,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    borderColor: '#161616',
+    backgroundColor: '#070A0B',
+  },
+  stepRowContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+  },
+  stepIconBox: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stepText: {
+    flex: 1,
+    fontSize: 14,
+    fontFamily: 'Inter_600SemiBold',
+    lineHeight: 20,
+  },
+  stepStatusIcon: {
+    width: 24,
+    height: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  activeDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#00FF9C',
+    shadowColor: '#00FF9C',
+    shadowOpacity: 0.9,
+    shadowRadius: 6,
     shadowOffset: { width: 0, height: 0 },
     elevation: 2,
   },
-  progressPercent: { fontSize: 13, fontFamily: 'Inter_500Medium', color: '#8E8E93', textAlign: 'right' },
-  stepsContainer: { gap: 10, marginBottom: 16 },
-  stepRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    borderRadius: 12,
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    borderWidth: 1,
+  pendingDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#3C3C43',
   },
-  stepRowContent: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12 },
-  stepIconBox: { width: 36, height: 36, borderRadius: 9, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center' },
-  stepText: { flex: 1, fontSize: 13.5, fontFamily: 'Inter_500Medium', lineHeight: 18 },
-  activeDot: { width: 9, height: 9, borderRadius: 4.5, backgroundColor: '#00E676' },
-  pendingDot: { width: 9, height: 9, borderRadius: 4.5, backgroundColor: '#3A3A3A' },
-  aiStatusMessage: { fontSize: 12, fontFamily: 'Inter_400Regular', color: '#48484A', textAlign: 'center', lineHeight: 17, fontStyle: 'italic' },
+  aiStatusMessage: {
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
+    color: '#48484A',
+    textAlign: 'center',
+    lineHeight: 17,
+    fontStyle: 'italic',
+  },
 });
