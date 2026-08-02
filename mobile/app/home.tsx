@@ -256,7 +256,7 @@ function ActionButton({
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const colors = useColors();
-  const { isSubscribed, savedStrategies } = useApp();
+  const { isSubscribed, isLoading, savedStrategies } = useApp();
 
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
   const botPad = Platform.OS === 'web' ? 34 : insets.bottom;
@@ -296,14 +296,22 @@ export default function HomeScreen() {
           icon="activity"
           label="Run Analysis"
           sublabel="Upload a chart to get signals"
-          onPress={() => router.push('/analysis')}
+          onPress={() => {
+            if (isLoading) return;
+            if (!isSubscribed) return router.push('/paywall');
+            router.push('/analysis');
+          }}
           primary
         />
         <ActionButton
           icon="sliders"
           label="Strategy"
           sublabel="Generate a personalised trading plan"
-          onPress={() => router.push('/strategy')}
+          onPress={() => {
+            if (isLoading) return;
+            if (!isSubscribed) return router.push('/paywall');
+            router.push('/strategy');
+          }}
         />
         <ActionButton
           icon="cpu"

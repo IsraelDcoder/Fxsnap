@@ -156,7 +156,7 @@ function StrategyCard({
 export default function MyStrategiesScreen() {
   const insets = useSafeAreaInsets();
   const colors = useColors();
-  const { savedStrategies, deleteStrategy } = useApp();
+  const { savedStrategies, deleteStrategy, isSubscribed, isLoading } = useApp();
 
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
   const botPad = Platform.OS === 'web' ? 34 : insets.bottom;
@@ -182,7 +182,14 @@ export default function MyStrategiesScreen() {
           <Text style={[styles.emptySubtitle, { color: colors.textSecondary }]}> 
             Generate a strategy and tap "Save Strategy" to store it here.
           </Text>
-          <TouchableOpacity style={[styles.emptyBtn, { backgroundColor: colors.primary }]} onPress={() => router.push('/strategy')}>
+          <TouchableOpacity
+            style={[styles.emptyBtn, { backgroundColor: colors.primary }]}
+            onPress={() => {
+              if (isLoading) return;
+              if (!isSubscribed) return router.push('/paywall');
+              router.push('/strategy');
+            }}
+          >
             <Feather name="plus" size={18} color={colors.primaryForeground} />
             <Text style={[styles.emptyBtnText, { color: colors.primaryForeground }]}>Generate Strategy</Text>
           </TouchableOpacity>

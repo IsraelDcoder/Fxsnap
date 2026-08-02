@@ -44,9 +44,15 @@ function Generation({ onComplete, onError }: { onComplete: () => Promise<void>; 
 }
 
 export default function StrategyScreen() {
-  const insets = useSafeAreaInsets(); const colors = useColors(); const { saveStrategy, savedStrategies } = useApp();
+  const insets = useSafeAreaInsets(); const colors = useColors(); const { saveStrategy, savedStrategies, isSubscribed, isLoading } = useApp();
   const [stage, setStage] = useState<Stage>('inputs'); const [answers, setAnswers] = useState<Answers>({ style: null, risk: '1', pairs: [], session: null, experience: null }); const [variation, setVariation] = useState(0); const [name, setName] = useState(''); const [strategy, setStrategy] = useState<Strategy | null>(null); const [error, setError] = useState<string | null>(null);
   const top = Platform.OS === 'web' ? 67 : insets.top; const bottom = Platform.OS === 'web' ? 34 : insets.bottom; const valid = Boolean(answers.style && answers.session && answers.experience && answers.pairs.length && Number(answers.risk) > 0 && Number(answers.risk) <= 5); const set = <K extends keyof Answers>(key: K, value: Answers[K]) => setAnswers((old) => ({ ...old, [key]: value }));
+
+  useEffect(() => {
+    if (!isLoading && !isSubscribed) {
+      router.replace('/paywall');
+    }
+  }, [isLoading, isSubscribed]);
   const generate = async () => { setError(null); setStage('generating'); };
   const completeGeneration = async () => { const result = await requestAIStrategy(answers, variation); setStrategy(result); setStage('result'); };
   const save = async () => { if (!strategy) return; const sections = strategy.sections; const saved: SavedStrategy = { id: `${Date.now()}-${Math.random()}`, name: name.trim() || strategy.name, description: strategy.description, level: answers.experience === 'beginner' ? 'beginner' : 'advanced', rules: { entry: sections.find((s) => s.title === 'Entry rules')?.items || [], exit: [...(sections.find((s) => s.title === 'Stop loss')?.items || []), ...(sections.find((s) => s.title === 'Take profit')?.items || [])], risk: [...(sections.find((s) => s.title === 'Risk management')?.items || []), `When not to trade: ${(sections.find((s) => s.title === 'When not to trade')?.items || []).join(' ')}`] }, bestPairs: answers.pairs, timeframe: strategy.timeframe, riskTolerance: `${answers.risk}%`, tradingStyle: answers.style, createdAt: new Date().toISOString() }; await saveStrategy(saved); Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); };
