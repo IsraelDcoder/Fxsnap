@@ -23,25 +23,29 @@
     },
     "android": {
       "package": "com.fxsnap.mobile",
-      "permissions": ["CAMERA", "READ_MEDIA_IMAGES"]
+      "permissions": [
+        "CAMERA",
+        "READ_MEDIA_IMAGES"
+      ]
     },
     "web": {
       "favicon": "./assets/images/icon.png"
     },
-    "extra": {
-      "eas": {
-        "projectId": "replace_with_eas_project_id"
-      }
-    },
     "plugins": [
       "expo-router",
       "expo-font",
-      "expo-web-browser",
-      "@sentry/react-native/expo"
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "34e68993-4970-4cd5-8804-4e9805ef6d8c"
+      }
+    },
+    "owner": "eazy001kng1"
   }
 }

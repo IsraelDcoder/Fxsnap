@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Alert,
   Platform,
@@ -18,23 +18,24 @@ import { router } from 'expo-router';
 import * as Haptics from '@/services/haptics';
 import { useApp } from '@/context/AppContext';
 import { useColors } from '@/hooks/useColors';
+import { getAvailablePlans, type PlanOffering } from '@/services/billing';
 
-const PLANS = [
+const FALLBACK_PLANS = [
   {
-    id: 'weekly',
-    label: 'Weekly',
+    plan: 'weekly' as const,
+    title: 'Weekly',
     price: '$7.99',
     period: '/ week',
-    tag: undefined as string | undefined,
-    savings: undefined as string | undefined,
+    productId: 'fxsnap_weekly',
+    available: false,
   },
   {
-    id: 'quarterly',
-    label: '3 Months',
+    plan: 'quarterly' as const,
+    title: '3 Months',
     price: '$29.99',
     period: '/ 3 months',
-    tag: 'MOST POPULAR',
-    savings: undefined as string | undefined,
+    productId: 'fxsnap_quarterly',
+    available: false,
   },
 ];
 
@@ -51,17 +52,56 @@ export default function PaywallScreen() {
   const colors = useColors();
   const { purchasePlan, restorePurchases, billingAvailable } = useApp();
   const [selectedPlan, setSelectedPlan] = useState('quarterly');
+  const [plans, setPlans] = useState<PlanOffering[]>(FALLBACK_PLANS);
   const [loading, setLoading] = useState(false);
+  const [loadingPlans, setLoadingPlans] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      try {
+        const availablePlans = await getAvailablePlans();
+        if (!active) return;
+        setPlans(availablePlans);
+        if (!availablePlans.find((plan) => plan.plan === selectedPlan && plan.available)) {
+          const fallback = availablePlans.find((plan) => plan.available);
+          if (fallback) setSelectedPlan(fallback.plan);
+        }
+      } catch {
+        // keep fallback plans and let billing availability determine messaging.
+      } finally {
+        if (active) setLoadingPlans(false);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
   const botPad = Platform.OS === 'web' ? 34 : insets.bottom;
 
   const handleSubscribe = async () => {
     setLoading(true);
-    const purchased = await purchasePlan(selectedPlan as 'weekly' | 'quarterly');
-    setLoading(false);
-    if (purchased) router.back();
-    else Alert.alert('Purchases unavailable', billingAvailable ? 'This plan is not configured in RevenueCat yet.' : 'RevenueCat billing is not configured for this build.');
+    try {
+      const purchased = await purchasePlan(selectedPlan as 'weekly' | 'quarterly');
+      if (purchased) {
+        router.back();
+        return;
+      }
+      Alert.alert('Subscription failed', 'Unable to confirm your premium subscription. Please try again.');
+    } catch (error) {
+      Alert.alert(
+        'Purchase failed',
+        error instanceof Error
+          ? error.message
+          : billingAvailable
+          ? 'This plan is not configured in RevenueCat yet.'
+          : 'RevenueCat billing is not configured for this build.'
+      );
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -97,23 +137,27 @@ export default function PaywallScreen() {
         </Animated.View>
 
         <Animated.View entering={FadeInUp.delay(300).duration(600)} style={styles.plans}>
-          {PLANS.map((plan) => (
+          {plans.map((plan) => (
             <TouchableOpacity
-              key={plan.id}
-              style={[styles.planCard, selectedPlan === plan.id && styles.planCardSelected, { backgroundColor: colors.card, borderColor: selectedPlan === plan.id ? colors.text : colors.cardBorder }]}
+              key={plan.plan}
+              style={[
+                styles.planCard,
+                selectedPlan === plan.plan && styles.planCardSelected,
+                { backgroundColor: colors.card, borderColor: selectedPlan === plan.plan ? colors.text : colors.cardBorder },
+              ]}
               onPress={() => {
                 Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                setSelectedPlan(plan.id);
+                setSelectedPlan(plan.plan);
               }}
             >
-              {plan.tag && (
+              {plan.plan === 'quarterly' && (
                 <View style={styles.planTag}>
-                  <Text style={styles.planTagText}>{plan.tag}</Text>
+                  <Text style={styles.planTagText}>MOST POPULAR</Text>
                 </View>
               )}
               <View>
-                <Text style={[styles.planName, { color: colors.text }]}>{plan.label}</Text>
-                {plan.savings && <Text style={[styles.planSavings, { color: colors.buy }]}>{plan.savings}</Text>}
+                <Text style={[styles.planName, { color: colors.text }]}>{plan.title}</Text>
+                <Text style={[styles.planSavings, { color: colors.buy }]}>Powered by RevenueCat</Text>
               </View>
               <View style={{ alignItems: 'flex-end' }}>
                 <Text style={[styles.planPrice, { color: colors.text }]}>{plan.price}</Text>
@@ -125,12 +169,16 @@ export default function PaywallScreen() {
 
         <Animated.View entering={FadeInUp.delay(400).duration(600)} style={styles.actions}>
           <TouchableOpacity
-            style={[styles.subscribeBtn, loading && { opacity: 0.7 }, { backgroundColor: colors.primary }]}
+            style={[
+              styles.subscribeBtn,
+              (loading || !billingAvailable) && { opacity: 0.65 },
+              { backgroundColor: colors.primary },
+            ]}
             onPress={handleSubscribe}
-            disabled={loading}
+            disabled={loading || !billingAvailable}
           >
             <Text style={[styles.subscribeBtnText, { color: colors.primaryForeground }]}>
-              {loading ? 'Processing...' : 'Start Subscription'}
+              {loading ? 'Processing...' : billingAvailable ? 'Start Subscription' : 'Billing unavailable'}
             </Text>
           </TouchableOpacity>
           <TouchableOpacity onPress={async () => {

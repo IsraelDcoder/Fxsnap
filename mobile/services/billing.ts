@@ -24,6 +24,15 @@ function hasPremium(info: CustomerInfo) {
   return Boolean(info.entitlements.active[PREMIUM_ENTITLEMENT_ID]);
 }
 
+export interface PlanOffering {
+  plan: BillingPlan;
+  title: string;
+  price: string;
+  period: string;
+  productId: string;
+  available: boolean;
+}
+
 export function billingIsConfigured() {
   const key = configuredKey();
   return Boolean(key && !key.startsWith('replace_') && !key.startsWith('REPLACE_'));
@@ -33,7 +42,7 @@ export async function configureBilling(): Promise<boolean> {
   if (!billingIsConfigured()) return false;
   if (!configured) {
     await Purchases.setLogLevel(__DEV__ ? LOG_LEVEL.DEBUG : LOG_LEVEL.INFO);
-    Purchases.configure({ apiKey: configuredKey(), appUserID: await getDeviceId() });
+    await Purchases.configure({ apiKey: configuredKey(), appUserID: await getDeviceId() });
     configured = true;
   }
   return true;
@@ -41,7 +50,8 @@ export async function configureBilling(): Promise<boolean> {
 
 export async function getPremiumStatus(): Promise<boolean> {
   if (!(await configureBilling())) return false;
-  await Purchases.getCustomerInfo();
+  const customerInfo = await Purchases.getCustomerInfo();
+  if (hasPremium(customerInfo)) return true;
   const serverStatus = await getServerPremiumStatus();
   return serverStatus === true;
 }
@@ -51,21 +61,58 @@ async function findPackage(plan: BillingPlan): Promise<PurchasesPackage | null> 
   const current = offerings.current;
   if (!current) return null;
   const productId = PRODUCT_IDS[plan];
-  return current.availablePackages.find((item) => item.product.identifier === productId || item.identifier === productId) || null;
+  return current.availablePackages.find(
+    (item) => item.product.identifier === productId || item.identifier === productId
+  ) || null;
+}
+
+export async function getAvailablePlans(): Promise<PlanOffering[]> {
+  if (!(await configureBilling())) return [];
+  const offerings = await Purchases.getOfferings();
+  const current = offerings.current;
+  const fallback = Object.entries(PRODUCT_IDS).map(([plan, productId]) => ({
+    plan: plan as BillingPlan,
+    title: plan === 'weekly' ? 'Weekly' : '3 Months',
+    price: plan === 'weekly' ? '$7.99' : '$29.99',
+    period: plan === 'weekly' ? '/ week' : '/ 3 months',
+    productId,
+    available: false,
+  }));
+
+  if (!current) return fallback;
+
+  return Object.entries(PRODUCT_IDS).map(([plan, productId]) => {
+    const selected = current.availablePackages.find(
+      (item) => item.product.identifier === productId || item.identifier === productId
+    );
+    return {
+      plan: plan as BillingPlan,
+      title: selected?.product.title || (plan === 'weekly' ? 'Weekly' : '3 Months'),
+      price: selected?.product.priceString || (plan === 'weekly' ? '$7.99' : '$29.99'),
+      period: selected?.product.subscriptionPeriod || (plan === 'weekly' ? '/ week' : '/ 3 months'),
+      productId,
+      available: Boolean(selected),
+    };
+  });
 }
 
 export async function purchasePlan(plan: BillingPlan): Promise<boolean> {
   if (!(await configureBilling())) return false;
   const selectedPackage = await findPackage(plan);
   if (!selectedPackage) throw new Error(`RevenueCat package is not configured for the ${plan} plan.`);
-  await Purchases.purchasePackage(selectedPackage);
+  const purchaseResult = await Purchases.purchasePackage(selectedPackage) as any;
+  const customerInfo = purchaseResult.customerInfo ?? purchaseResult.purchaserInfo;
+  if (customerInfo && hasPremium(customerInfo)) {
+    return true;
+  }
   const serverStatus = await getServerPremiumStatus();
   return serverStatus === true;
 }
 
 export async function restorePurchases(): Promise<boolean> {
   if (!(await configureBilling())) return false;
-  await Purchases.restorePurchases();
+  const purchaserInfo = await Purchases.restorePurchases();
+  if (hasPremium(purchaserInfo)) return true;
   const serverStatus = await getServerPremiumStatus();
   return serverStatus === true;
 }

@@ -343,7 +343,18 @@ export default function SettingsScreen() {
               <Row icon="moon" label="Dark Mode">
                 <Switch
                   value={settings.darkMode}
-                  onValueChange={(v) => updateSettings({ darkMode: v })}
+                  onValueChange={(v) => {
+                    if (v === false) {
+                      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+                      Alert.alert(
+                        'Light mode coming soon',
+                        'Light mode is not available yet. Dark mode remains enforced for this release.'
+                      );
+                      updateSettings({ darkMode: true });
+                      return;
+                    }
+                    updateSettings({ darkMode: true });
+                  }}
                   trackColor={{ false: '#2A2A2A', true: '#00E676' }}
                   thumbColor="#FFFFFF"
                 />
