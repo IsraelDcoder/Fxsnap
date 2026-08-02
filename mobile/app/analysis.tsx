@@ -26,94 +26,13 @@ import { router } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import * as Haptics from '@/services/haptics';
 import { useApp } from '@/context/AppContext';
-import { PairSelectionModal } from '@/components/PairSelectionModal';
 import type { AnalysisResult } from '@/context/AppContext';
+import { PairSelectionModal } from '@/components/PairSelectionModal';
 import { useColors } from '@/hooks/useColors';
-import * as MarketData from '@/services/marketData';
-import * as ChartDetection from '../services/chartDetection';
-import { buildNeutralChartResult } from '../services/chartDetection';
+import { analyzeChartImage, type ChartAnalysisResult } from '../services/chartDetection';
 import { trackEvent } from '@/services/telemetry';
-import { recordGeneratedSignal } from '@/services/signalTracking';
 
-type Stage = 'pick' | 'preview' | 'selectPair' | 'analyzing';
-
-function chartDirection(value?: string | null): 'BUY' | 'SELL' | null {
-  const text = String(value || '').toUpperCase();
-  if (/BUY|BULL|UPTREND|UPWARD/.test(text)) return 'BUY';
-  if (/SELL|BEAR|DOWNTREND|DOWNWARD/.test(text)) return 'SELL';
-  return null;
-}
-
-/**
- * REAL DATA ANALYSIS FUNCTION (v2)
- * Replaces mocked generateAnalysis
- * Uses actual market API data + trend analysis
- */
-async function generateAnalysisWithRealData(
-  pair: string,
-  settings: { accountBalance: number; riskPercent: number },
-  chartAnalysis: NonNullable<AnalysisResult['chartAnalysis']>
-): Promise<AnalysisResult | null> {
-  try {
-    // Step 1: Fetch real market data
-    const candles = await MarketData.fetchCandleData(pair);
-    if (!candles || candles.length < 2) {
-      console.error('[Analysis] No market data available');
-      return null;
-    }
-
-    // Step 2: Analyze trend from real data
-    const trend = MarketData.analyzeTrend(candles, pair);
-    if (!trend.direction || trend.isLowConfidence) {
-      console.warn('[Analysis] Signal held back:', trend.confidenceReason);
-      return null;
-    }
-    const visualDirection = chartDirection(chartAnalysis.trend);
-    const normalizedDetectedPair = chartAnalysis.detectedPair?.replace('/', '').toUpperCase();
-    if (normalizedDetectedPair && normalizedDetectedPair !== pair.replace('/', '').toUpperCase()) return null;
-    if (visualDirection && visualDirection !== trend.direction) return null;
-    const compositeScore = Math.round(trend.confidence * 0.65 + chartAnalysis.confidence * 0.35);
-
-    // Step 3: Get current price
-    const currentPrice = MarketData.getCurrentPrice(candles);
-    if (!currentPrice) {
-      console.error('[Analysis] No current price available');
-      return null;
-    }
-
-    // Step 4: Calculate entry, SL, TP
-    const levels = MarketData.calculateLevels(trend, currentPrice, pair);
-    // Step 5: Calculate lot size
-    const lotSize = MarketData.calculateLotSize(
-      pair,
-      settings.accountBalance,
-      settings.riskPercent,
-      levels.slPips,
-      currentPrice
-    );
-
-    return {
-      id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
-      pair,
-      direction: trend.direction,
-      confidence: compositeScore,
-      confidenceType: 'composite_score',
-      entry: levels.entry,
-      sl: levels.sl,
-      tp: levels.tp,
-      lotSize,
-      slPips: levels.slPips,
-      createdAt: new Date().toISOString(),
-      dataSource: 'api',
-      volatility: trend.volatility,
-      apiDataTime: new Date().toISOString(),
-      chartAnalysis,
-    };
-  } catch (error) {
-    console.error('[Analysis] Error generating real data analysis:', error);
-    return null;
-  }
-}
+type Stage = 'pick' | 'preview' | 'analyzing';
 
 // ─── Step states ──────────────────────────────────────────────────────────────
 type StepState = 'done' | 'active' | 'pending';
@@ -122,15 +41,15 @@ const STEPS = [
   { label: 'Reading price structure…', icon: 'bar-chart-2' },
   { label: 'Identifying market direction…', icon: 'trending-up' },
   { label: 'Mapping key levels…', icon: 'layers' },
-  { label: 'Calculating risk & position size…', icon: 'percent' },
+  { label: 'Enforcing risk discipline…', icon: 'percent' },
 ];
 
 const AI_STATUS_MESSAGES = [
   'Analyzing volatility patterns…',
-  'Cross-referencing historical data…',
-  'Optimizing entry & exit zones…',
-  'Validating market structure…',
-  'Analyzing deeper for signal quality…',
+  'Checking market structure…',
+  'Evaluating entry & exit zones…',
+  'Validating risk-reward…',
+  'Filtering low-probability setups…',
   'Processing price action…',
 ];
 
@@ -212,12 +131,11 @@ function AnalyzingView() {
   const [activeStep, setActiveStep] = useState(0);
   const [progress, setProgress] = useState(0);
   const [statusMessage, setStatusMessage] = useState(AI_STATUS_MESSAGES[0]);
-  
+
   const progressValue = useSharedValue(0);
   const glowPulse = useSharedValue(0.12);
 
   useEffect(() => {
-    // Keep the experience deliberate: every session takes 10–15 seconds.
     const totalDuration = 10000 + Math.random() * 5000;
     const stepStarts = [0, totalDuration * 0.23, totalDuration * 0.49, totalDuration * 0.76];
 
@@ -227,7 +145,6 @@ function AnalyzingView() {
       );
     }, 1800);
 
-    // Subtle glow pulse
     glowPulse.value = withRepeat(
       withSequence(
         withTiming(0.18, { duration: 1200, easing: Easing.inOut(Easing.ease) }),
@@ -236,7 +153,6 @@ function AnalyzingView() {
       -1
     );
 
-    // Progress advances continuously rather than jumping when a step changes.
     progressValue.value = withTiming(96, {
       duration: totalDuration,
       easing: Easing.linear,
@@ -284,15 +200,12 @@ function AnalyzingView() {
 
   return (
     <View style={[styles.analyzingContainer, { paddingTop: insets.top + 20, backgroundColor: colors.background }]}>
-      {/* Subtle glow behind icon */}
       <Animated.View style={[styles.analyzingGlow, glowStyle]} />
 
-      {/* Icon */}
       <Animated.View entering={FadeIn.duration(500)} style={[styles.analyzingIcon, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
         <Feather name="cpu" size={42} color="#00E676" />
       </Animated.View>
 
-      {/* Title */}
       <Animated.Text
         entering={FadeInDown.delay(150).duration(500)}
         style={[styles.analyzingTitle, { color: colors.text }]}
@@ -300,7 +213,6 @@ function AnalyzingView() {
         Reading market structure…
       </Animated.Text>
 
-      {/* Progress bar with percentage */}
       <Animated.View
         entering={FadeInDown.delay(250).duration(500)}
         style={styles.progressSection}
@@ -311,7 +223,6 @@ function AnalyzingView() {
         <Text style={[styles.progressPercent, { color: colors.textSecondary }]}>{progress}%</Text>
       </Animated.View>
 
-      {/* Steps */}
       <View style={styles.stepsContainer}>
         {STEPS.map((step, i) => (
           <StepRow
@@ -323,7 +234,6 @@ function AnalyzingView() {
         ))}
       </View>
 
-      {/* AI Status message */}
       <Animated.Text
         entering={FadeIn.duration(400)}
         style={[styles.aiStatusMessage, { color: colors.textMuted }]}
@@ -335,10 +245,47 @@ function AnalyzingView() {
   );
 }
 
+/** Convert the disciplined chart result into the app's AnalysisResult model. */
+function buildAnalysisResult(chart: ChartAnalysisResult, pair: string, imageUri?: string): AnalysisResult {
+  const isBuy = chart.trade_setup.type === 'buy';
+  const isSell = chart.trade_setup.type === 'sell';
+  return {
+    id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
+    pair,
+    status: chart.status,
+    direction: isBuy ? 'BUY' : isSell ? 'SELL' : undefined,
+    confidence: chart.confidence,
+    confidenceType: 'composite_score',
+    imageUri,
+    createdAt: new Date().toISOString(),
+    analysis: {
+      trend: chart.analysis.trend,
+      structure: chart.analysis.structure,
+      volatility: chart.analysis.volatility,
+      volume: chart.analysis.volume,
+      sentiment: chart.analysis.sentiment,
+      indicators: chart.analysis.indicators,
+      notes: chart.analysis.notes,
+    },
+    zones: {
+      support: chart.zones.support,
+      resistance: chart.zones.resistance,
+      liquidity: chart.zones.liquidity,
+    },
+    tradeSetup: {
+      type: chart.trade_setup.type,
+      entryZone: chart.trade_setup.entry_zone,
+      stopLoss: chart.trade_setup.stop_loss,
+      takeProfit: chart.trade_setup.take_profit,
+      riskReward: chart.trade_setup.risk_reward,
+    },
+  };
+}
+
 export default function AnalysisScreen() {
   const insets = useSafeAreaInsets();
   const colors = useColors();
-  const { settings, setCurrentAnalysis } = useApp();
+  const { setCurrentAnalysis } = useApp();
   const [stage, setStage] = useState<Stage>('pick');
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [imageBase64, setImageBase64] = useState<string | null>(null);
@@ -346,8 +293,6 @@ export default function AnalysisScreen() {
   const [selectedPair, setSelectedPair] = useState<string | null>(null);
   const [showPairModal, setShowPairModal] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
-  const [manualMode, setManualMode] = useState(false);
-  const [manualModeNotice, setManualModeNotice] = useState<string | null>(null);
 
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
   const botPad = Platform.OS === 'web' ? 34 : insets.bottom;
@@ -401,38 +346,14 @@ export default function AnalysisScreen() {
   const handleImageSelected = async () => {
     trackEvent('analysis_started');
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    
-    // Step 1: Validate chart image
     if (!imageUri) return;
-    
-    console.log('[Analysis] Validating chart...');
+
+    console.log('[Analysis] Preparing chart for AI analysis...');
     if (!imageBase64) {
       setAnalysisError('Unable to read the image for AI analysis. Please choose the chart again.');
       return;
     }
-    const validation = await ChartDetection.validateChartImage(imageBase64, imageMimeType);
-    
-    if (!validation.isChart) {
-      // Distinguish a genuine "not a chart" rejection from AI unavailability.
-      if (validation.availability === 'fallback') {
-        // AI service is unavailable — proceed in manual mode so the core
-        // feature still works using live market data.
-        trackEvent('chart_validation_fallback');
-        setManualMode(true);
-        setManualModeNotice('Chart AI is unavailable right now. Continuing with live market data.');
-        setShowPairModal(true);
-        setAnalysisError(null);
-        return;
-      }
-      trackEvent('chart_validation_failed');
-      setAnalysisError('❌ No chart detected. Please upload a valid trading chart.');
-      Alert.alert('Invalid Image', validation.reason);
-      return;
-    }
-    
-    // Step 2: Show pair selection modal
-    setManualMode(false);
-    setManualModeNotice(null);
+
     setShowPairModal(true);
     setAnalysisError(null);
   };
@@ -440,87 +361,59 @@ export default function AnalysisScreen() {
   const handlePairSelected = async (pair: string) => {
     setSelectedPair(pair);
     setShowPairModal(false);
-    
-    // Step 3: Start real data analysis
+
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setStage('analyzing');
     setAnalysisError(null);
     const analysisStartedAt = Date.now();
-    
-    // Step 4: Fetch and analyze real market data
+
     if (!imageBase64) {
       setAnalysisError('Chart image data is unavailable. Please upload it again.');
       setStage('preview');
       return;
     }
-    let chart = await ChartDetection.validateChartImage(imageBase64, imageMimeType, pair);
-    if (!chart.isChart || chart.confidence < 55) {
-      // Strict rejection stays for genuine "not a chart" verdicts, but when the
-      // AI service is unavailable (fallback) or we're already in manual mode,
-      // continue with a neutral chart read backed by live market data.
-      if (manualMode || chart.availability === 'fallback') {
-        setManualMode(true);
-        setManualModeNotice('Chart AI is unavailable. Analysis is based on live market data.');
-        chart = buildNeutralChartResult(pair);
-      } else {
-        setAnalysisError(`Chart AI could not validate this image: ${chart.reason}`);
-        setStage('preview');
-        return;
-      }
-    }
-    const result = await generateAnalysisWithRealData(pair, settings, {
-      ...chart,
-      marketAgreement: chart.availability === 'neutral' ? 'not_available' : 'aligned',
-      fusionReason: chart.availability === 'neutral'
-        ? 'Manual mode: analysis based on live market data only.'
-        : 'Chart direction and market-data direction aligned.',
-    });
-    
-    // Step 5: Handle result or error
-    if (!result) {
-      trackEvent('analysis_failed', { pair });
-      setAnalysisError('⚠️ Signal held back. Market data is unavailable or confidence is too low.');
-      Alert.alert(
-        'No High-Confidence Signal',
-        'FXSnap only shows focused signals when the selected instrument has enough clean data. Try again later or choose another core pair.'
-      );
-      setStage('preview');
-      return;
-    }
-    
-    // Success!
-    result.imageUri = imageUri ?? undefined;
-    setCurrentAnalysis(result);
-    void recordGeneratedSignal({ id: result.id, pair: result.pair, direction: result.direction, entry: Number(result.entry), sl: Number(result.sl), tp: Number(result.tp) });
-    trackEvent('analysis_succeeded', { pair, chartConfidence: chart.confidence });
-    
-    // Never reveal a result before the minimum intelligence-building wait.
+
+    // Single-pass disciplined AI analysis (server enforces the validation layer).
+    const chart = await analyzeChartImage(imageBase64, imageMimeType, pair);
+
     const elapsed = Date.now() - analysisStartedAt;
     const remainingMinimumTime = Math.max(0, 10000 - elapsed);
     await new Promise((resolve) => setTimeout(resolve, remainingMinimumTime));
-    
+
+    // Handle clean states.
+    if (chart.status === 'ai_unavailable') {
+      trackEvent('analysis_ai_unavailable', { pair });
+      setAnalysisError(chart.message || 'Chart AI is unavailable right now. Please try again shortly.');
+      Alert.alert('AI Unavailable', chart.message || 'Chart AI is unavailable right now. Please try again shortly.');
+      setStage('preview');
+      return;
+    }
+
+    if (chart.status === 'invalid_image') {
+      trackEvent('analysis_invalid_image', { pair });
+      setAnalysisError(chart.analysis.notes || 'No valid trading chart detected. Please upload a clearer chart.');
+      Alert.alert('Invalid Image', chart.analysis.notes || 'No valid trading chart detected. Please upload a clearer chart.');
+      setStage('preview');
+      return;
+    }
+
+    // success OR no_trade both land on the result screen with a disciplined state.
+    const result = buildAnalysisResult(chart, pair, imageUri ?? undefined);
+    setCurrentAnalysis(result);
+    trackEvent('analysis_succeeded', { pair, status: chart.status, confidence: chart.confidence });
+
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     router.replace('/analysis-result');
   };
 
-  const BalanceBanner = () => {
-    if (settings.balanceSet) return null;
-    return (
-      <Animated.View entering={FadeInDown.duration(400)} style={[styles.balanceBanner, { backgroundColor: colors.surface, borderColor: colors.gold }]}>
-        <Feather name="alert-circle" size={16} color="#FFD60A" />
-        <Text style={[styles.balanceBannerText, { color: colors.text }]}>
-          Set your account balance in{' '}
-          <Text
-            style={[styles.balanceBannerLink, { color: colors.gold }]}
-            onPress={() => router.push('/settings')}
-          >
-            Settings
-          </Text>{' '}
-          for accurate lot size.
-        </Text>
-      </Animated.View>
-    );
-  };
+
+
+  const NoticeBanner = () => (
+    <Animated.View entering={FadeInDown.duration(400)} style={[styles.balanceBanner, { backgroundColor: colors.surface, borderColor: colors.gold }]}> 
+      <Feather name="bar-chart-2" size={16} color="#FFD60A" />
+      <Text style={[styles.balanceBannerText, { color: colors.text }]}>📊 For best results, upload a clear chart image showing price action, timeframe, and visible levels.{"\n"}Blurry, cropped, or cluttered charts may lead to inaccurate analysis.</Text>
+    </Animated.View>
+  );
 
   return (
     <View style={[styles.container, { paddingTop: topPad, backgroundColor: colors.background }]}>
@@ -536,7 +429,6 @@ export default function AnalysisScreen() {
 
       {stage === 'pick' && (
         <Animated.View entering={FadeInUp.delay(100).duration(500)} style={[styles.content, { paddingBottom: botPad + 24 }]}>
-          <BalanceBanner />
           <View style={styles.uploadHero}>
             <View style={[styles.uploadIcon, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
               <Feather name="image" size={48} color="#8E8E93" />
@@ -566,15 +458,15 @@ export default function AnalysisScreen() {
           </View>
 
           <Text style={[styles.analysisDisclaimer, { color: colors.textMuted }]}>
-            This app does not provide financial advice. Trade at your own risk.
+            The AI analyzes only the uploaded chart image. This app does not provide financial advice. Trade at your own risk.
           </Text>
         </Animated.View>
       )}
 
       {stage === 'preview' && imageUri && (
         <Animated.View entering={FadeIn.duration(400)} style={[styles.content, { paddingBottom: botPad + 24 }]}>
-          <BalanceBanner />
-          <View style={[styles.previewContainer, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+          <NoticeBanner />
+          <View style={[styles.previewContainer, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}> 
             <Image source={{ uri: imageUri }} style={styles.previewImage} resizeMode="cover" />
           </View>
           <View style={styles.previewActions}>
@@ -586,21 +478,15 @@ export default function AnalysisScreen() {
               <Feather name="zap" size={18} color="#000" />
               <Text style={[styles.analyzeBtnText, { color: colors.primaryForeground }]}>Analyse Chart</Text>
             </TouchableOpacity>
-            {manualModeNotice && (
-              <View style={[styles.manualModeNotice, { backgroundColor: colors.surface, borderColor: colors.gold }]}>
-                <Feather name="alert-circle" size={15} color="#FFD60A" />
-                <Text style={[styles.manualModeNoticeText, { color: colors.text }]}>{manualModeNotice}</Text>
-              </View>
-            )}
-            {analysisError && (
-              <Text style={styles.errorText}>{analysisError}</Text>
-            )}
           </View>
+          {analysisError && (
+            <Text style={styles.errorText}>{analysisError}</Text>
+          )}
         </Animated.View>
       )}
 
       {stage === 'analyzing' && <AnalyzingView />}
-      
+
       <PairSelectionModal
         visible={showPairModal}
         onSelectPair={handlePairSelected}
@@ -611,10 +497,7 @@ export default function AnalysisScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#000000',
-  },
+  container: { flex: 1, backgroundColor: '#000000' },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -632,17 +515,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#2A2A2A',
   },
-  headerTitle: {
-    fontSize: 17,
-    fontFamily: 'Inter_600SemiBold',
-    color: '#FFFFFF',
-  },
-  content: {
-    flex: 1,
-    paddingHorizontal: 20,
-    paddingTop: 12,
-    gap: 20,
-  },
+  headerTitle: { fontSize: 17, fontFamily: 'Inter_600SemiBold', color: '#FFFFFF' },
+  content: { flex: 1, paddingHorizontal: 20, paddingTop: 12, gap: 20 },
   balanceBanner: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -660,15 +534,7 @@ const styles = StyleSheet.create({
     color: '#C7C7CC',
     lineHeight: 19,
   },
-  balanceBannerLink: {
-    fontFamily: 'Inter_600SemiBold',
-    color: '#FFD60A',
-  },
-  uploadHero: {
-    alignItems: 'center',
-    gap: 16,
-    paddingVertical: 28,
-  },
+  uploadHero: { alignItems: 'center', gap: 16, paddingVertical: 28 },
   uploadIcon: {
     width: 100,
     height: 100,
@@ -680,11 +546,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  uploadTitle: {
-    fontSize: 26,
-    fontFamily: 'Inter_700Bold',
-    color: '#FFFFFF',
-  },
+  uploadTitle: { fontSize: 26, fontFamily: 'Inter_700Bold', color: '#FFFFFF' },
   uploadSubtext: {
     fontSize: 15,
     fontFamily: 'Inter_400Regular',
@@ -693,10 +555,7 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     paddingHorizontal: 16,
   },
-  pickActions: {
-    flexDirection: 'row',
-    gap: 14,
-  },
+  pickActions: { flexDirection: 'row', gap: 14 },
   pickBtn: {
     flex: 1,
     backgroundColor: '#1A1A1A',
@@ -715,47 +574,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  pickBtnLabel: {
-    fontSize: 16,
-    fontFamily: 'Inter_600SemiBold',
-    color: '#FFFFFF',
-  },
-  pickBtnSub: {
-    fontSize: 12,
-    fontFamily: 'Inter_400Regular',
-    color: '#8E8E93',
-    textAlign: 'center',
-  },
-  analysisDisclaimer: {
-    fontSize: 12,
-    fontFamily: 'Inter_400Regular',
-    color: '#48484A',
-    textAlign: 'center',
-  },
-  errorText: {
-    fontSize: 13,
-    fontFamily: 'Inter_500Medium',
-    color: '#FF5252',
-    textAlign: 'center',
-    marginTop: 12,
-  },
-  manualModeNotice: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 9,
-    borderRadius: 12,
-    padding: 13,
-    borderWidth: 1,
-    backgroundColor: '#1A1600',
-    borderColor: '#3D3400',
-  },
-  manualModeNoticeText: {
-    flex: 1,
-    fontSize: 12.5,
-    fontFamily: 'Inter_400Regular',
-    color: '#C7C7CC',
-    lineHeight: 18,
-  },
+  pickBtnLabel: { fontSize: 16, fontFamily: 'Inter_600SemiBold', color: '#FFFFFF' },
+  pickBtnSub: { fontSize: 12, fontFamily: 'Inter_400Regular', color: '#8E8E93', textAlign: 'center' },
+  analysisDisclaimer: { fontSize: 12, fontFamily: 'Inter_400Regular', color: '#48484A', textAlign: 'center' },
+  errorText: { fontSize: 13, fontFamily: 'Inter_500Medium', color: '#FF5252', textAlign: 'center', marginTop: 12 },
   previewContainer: {
     borderRadius: 20,
     overflow: 'hidden',
@@ -764,13 +586,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#2A2A2A',
   },
-  previewImage: {
-    width: '100%',
-    height: '100%',
-  },
-  previewActions: {
-    gap: 12,
-  },
+  previewImage: { width: '100%', height: '100%' },
+  previewActions: { gap: 12 },
   changeBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -782,11 +599,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#2A2A2A',
   },
-  changeBtnText: {
-    fontSize: 15,
-    fontFamily: 'Inter_500Medium',
-    color: '#8E8E93',
-  },
+  changeBtnText: { fontSize: 15, fontFamily: 'Inter_500Medium', color: '#8E8E93' },
   analyzeBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -796,11 +609,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     backgroundColor: '#FFFFFF',
   },
-  analyzeBtnText: {
-    fontSize: 17,
-    fontFamily: 'Inter_700Bold',
-    color: '#000',
-  },
+  analyzeBtnText: { fontSize: 17, fontFamily: 'Inter_700Bold', color: '#000' },
   // ── Analyzing stage ──
   analyzingContainer: {
     flex: 1,
@@ -832,17 +641,8 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     zIndex: 1,
   },
-  analyzingTitle: {
-    fontSize: 28,
-    fontFamily: 'Inter_700Bold',
-    color: '#FFFFFF',
-    marginBottom: 18,
-    letterSpacing: -0.5,
-  },
-  progressSection: {
-    gap: 8,
-    marginBottom: 24,
-  },
+  analyzingTitle: { fontSize: 28, fontFamily: 'Inter_700Bold', color: '#FFFFFF', marginBottom: 18, letterSpacing: -0.5 },
+  progressSection: { gap: 8, marginBottom: 24 },
   progressBarContainer: {
     height: 5,
     backgroundColor: '#1A1A1A',
@@ -861,16 +661,8 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 0 },
     elevation: 2,
   },
-  progressPercent: {
-    fontSize: 13,
-    fontFamily: 'Inter_500Medium',
-    color: '#8E8E93',
-    textAlign: 'right',
-  },
-  stepsContainer: {
-    gap: 10,
-    marginBottom: 16,
-  },
+  progressPercent: { fontSize: 13, fontFamily: 'Inter_500Medium', color: '#8E8E93', textAlign: 'right' },
+  stepsContainer: { gap: 10, marginBottom: 16 },
   stepRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -880,44 +672,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     borderWidth: 1,
   },
-  stepRowContent: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  stepIconBox: {
-    width: 36,
-    height: 36,
-    borderRadius: 9,
-    borderWidth: 1.5,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  stepText: {
-    flex: 1,
-    fontSize: 13.5,
-    fontFamily: 'Inter_500Medium',
-    lineHeight: 18,
-  },
-  activeDot: {
-    width: 9,
-    height: 9,
-    borderRadius: 4.5,
-    backgroundColor: '#00E676',
-  },
-  pendingDot: {
-    width: 9,
-    height: 9,
-    borderRadius: 4.5,
-    backgroundColor: '#3A3A3A',
-  },
-  aiStatusMessage: {
-    fontSize: 12,
-    fontFamily: 'Inter_400Regular',
-    color: '#48484A',
-    textAlign: 'center',
-    lineHeight: 17,
-    fontStyle: 'italic',
-  },
+  stepRowContent: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12 },
+  stepIconBox: { width: 36, height: 36, borderRadius: 9, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center' },
+  stepText: { flex: 1, fontSize: 13.5, fontFamily: 'Inter_500Medium', lineHeight: 18 },
+  activeDot: { width: 9, height: 9, borderRadius: 4.5, backgroundColor: '#00E676' },
+  pendingDot: { width: 9, height: 9, borderRadius: 4.5, backgroundColor: '#3A3A3A' },
+  aiStatusMessage: { fontSize: 12, fontFamily: 'Inter_400Regular', color: '#48484A', textAlign: 'center', lineHeight: 17, fontStyle: 'italic' },
 });

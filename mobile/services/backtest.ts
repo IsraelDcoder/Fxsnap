@@ -1,8 +1,49 @@
-import type { CandleData, TrendAnalysis } from '@/services/marketData';
+/** Minimal candle shape used by the backtest engine. */
+export interface CandleData {
+  timestamp: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+}
 
-export interface BacktestTrade { index: number; direction: 'BUY' | 'SELL'; entry: number; sl: number; tp: number; outcome: 'win' | 'loss' | 'open'; rMultiple: number; exitIndex?: number; }
-export interface BacktestMetrics { sampleSize: number; wins: number; losses: number; open: number; winRate: number; expectancyR: number; maxDrawdownR: number; totalR: number; inSample: boolean; }
-export interface BacktestConfig { warmupCandles: number; stopPips: number; rewardRisk: number; pipSize: number; maxBarsInTrade?: number; splitRatio?: number; }
+/** Signal shape produced by a signal function fed to the backtest engine. */
+export interface TrendAnalysis {
+  direction: 'BUY' | 'SELL' | null;
+  confidence: number; // 0-100
+  isLowConfidence: boolean;
+  [key: string]: unknown;
+}
+
+export interface BacktestTrade {
+  index: number;
+  direction: 'BUY' | 'SELL';
+  entry: number;
+  sl: number;
+  tp: number;
+  outcome: 'win' | 'loss' | 'open';
+  rMultiple: number;
+  exitIndex?: number;
+}
+export interface BacktestMetrics {
+  sampleSize: number;
+  wins: number;
+  losses: number;
+  open: number;
+  winRate: number;
+  expectancyR: number;
+  maxDrawdownR: number;
+  totalR: number;
+  inSample: boolean;
+}
+export interface BacktestConfig {
+  warmupCandles: number;
+  stopPips: number;
+  rewardRisk: number;
+  pipSize: number;
+  maxBarsInTrade?: number;
+  splitRatio?: number;
+}
 
 export function evaluateTrade(candles: CandleData[], start: number, direction: 'BUY' | 'SELL', config: BacktestConfig): BacktestTrade {
   const entry = candles[start].close;
@@ -39,3 +80,4 @@ export function runBacktest(candles: CandleData[], signalFor: (history: CandleDa
   }
   return { trades, inSample: calculateMetrics(trades.filter((trade) => trade.index < split), true), outOfSample: calculateMetrics(trades.filter((trade) => trade.index >= split), false) };
 }
+

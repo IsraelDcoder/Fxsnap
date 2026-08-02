@@ -16,6 +16,7 @@ const crypto = require('crypto');
 const { z } = require('zod');
 const persistentStore = require('./persistentStore');
 const { createAuth, verifyAuth } = require('./auth');
+const { buildSessionContext } = require('./tradingSessions');
 
 function loadEnvFile() {
   const envPath = path.resolve(__dirname, '..', '.env');
@@ -31,10 +32,8 @@ loadEnvFile();
 const STATIC_ROOT = path.resolve(__dirname, '..', 'static-build');
 const TEMPLATE_PATH = path.resolve(__dirname, 'templates', 'landing-page.html');
 const basePath = (process.env.BASE_PATH || '/').replace(/\/+$/, '');
-const marketCache = new Map();
 const requestCounts = new Map();
 const recentEvents = [];
-const providerState = { failures: 0, blockedUntil: 0 };
 const AUTH_SECRET = process.env.FXSNAP_AUTH_SECRET || 'development-only-change-me';
 const StrategyInputSchema = z.object({
   style: z.enum(['scalping', 'intraday', 'swing']),
@@ -56,11 +55,184 @@ const StrategyResponseSchema = z.object({
   const titles = value.sections.map((section) => section.title);
   if (new Set(titles).size !== required.length || required.some((title) => !titles.includes(title))) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'AI response must contain the five required strategy sections.' });
 });
-const ChartResponseSchema = z.object({
-  isChart: z.boolean(), confidence: z.number().min(0).max(100), reason: z.string().trim().min(3).max(500),
-  detectedPair: z.string().nullable().optional(), timeframe: z.string().nullable().optional(), trend: z.string().nullable().optional(),
-  indicators: z.array(z.string().max(100)).max(12).optional(), support: z.array(z.string().max(80)).max(12).optional(), resistance: z.array(z.string().max(80)).max(12).optional(), chartNotes: z.array(z.string().max(300)).max(12).optional(),
+const ANALYSIS_STATUS = ['success', 'no_trade', 'invalid_image'];
+// Lenient schema: the AI may return minimal fields when it concludes
+// "invalid_image". Post-parse normalization fills safe defaults, and the
+// validation layer enforces the trade rules on "success" verdicts.
+const TradeAnalysisSchema = z.object({
+  status: z.enum(ANALYSIS_STATUS),
+  analysis: z.object({
+    trend: z.enum(['bullish', 'bearish', 'neutral']).optional(),
+    structure: z.string().trim().max(300).optional(),
+    volatility: z.enum(['low', 'moderate', 'high']).optional(),
+    volume: z.enum(['low', 'moderate', 'high', 'not_visible']).optional(),
+    sentiment: z.enum(['bullish', 'bearish', 'neutral']).optional(),
+    indicators: z.string().trim().max(200).optional(),
+    notes: z.string().trim().max(400).optional(),
+  }).optional(),
+  zones: z.object({
+    support: z.string().trim().max(200).optional(),
+    resistance: z.string().trim().max(200).optional(),
+    liquidity: z.string().trim().max(200).optional(),
+  }).optional(),
+  trade_setup: z.object({
+    type: z.enum(['buy', 'sell', 'none']).optional(),
+    entry_zone: z.string().trim().max(200).optional(),
+    stop_loss: z.string().trim().max(200).optional(),
+    take_profit: z.string().trim().max(200).optional(),
+    risk_reward: z.union([z.number(), z.string().trim().max(20)]).optional(),
+  }).optional(),
+  confidence: z.number().min(0).max(100).optional(),
 });
+
+/** Fill safe defaults so every state returns the same complete JSON shape. */
+function normalizeAnalysis(raw) {
+  const analysis = raw.analysis || {};
+  const zones = raw.zones || {};
+  const trade = raw.trade_setup || {};
+  const normalized = {
+    status: raw.status,
+    analysis: {
+      trend: analysis.trend || 'neutral',
+      structure: analysis.structure || '',
+      volatility: analysis.volatility || 'low',
+      volume: analysis.volume || 'not_visible',
+      sentiment: analysis.sentiment || 'neutral',
+      indicators: analysis.indicators || 'none',
+      notes: analysis.notes || '',
+    },
+    zones: {
+      support: zones.support || 'not_clear',
+      resistance: zones.resistance || 'not_clear',
+      liquidity: zones.liquidity || 'not_clear',
+    },
+    trade_setup: {
+      type: trade.type || 'none',
+      entry_zone: trade.entry_zone || 'none',
+      stop_loss: trade.stop_loss || 'none',
+      take_profit: trade.take_profit || 'none',
+      risk_reward: trade.risk_reward != null ? trade.risk_reward : 'none',
+    },
+    confidence: typeof raw.confidence === 'number' ? raw.confidence : 0,
+  };
+  // The disciplined output contract requires "no_trade" to always carry
+  // trade_setup.type === "none".
+  if (normalized.status === 'no_trade') {
+    normalized.trade_setup.type = 'none';
+  }
+  return normalized;
+}
+
+function getTraderSystemPrompt() {
+  return `You are a professional price action trader and technical analyst.
+
+Your job is to analyze a trading chart image and return a structured, disciplined, and consistent analysis.
+
+Current session context: ${buildSessionContext()}
+
+You MUST behave like a strict, rule-based trader — not a storyteller.
+
+IMPORTANT RULES:
+
+1. The analysis is based ONLY on the uploaded chart image.
+2. Do NOT assume real-time market data.
+3. Do NOT hallucinate unknown data (news, fundamentals, unseen candles).
+4. If the chart is unclear or not a valid trading chart → return "invalid_image".
+5. If there is no clear, high-probability setup → return "no_trade".
+6. You must be conservative. Avoid forcing trades.
+7. Confidence must reflect clarity of structure, not guesswork.
+8. Keep explanations short, precise, and professional.
+
+ANALYSIS REQUIREMENTS:
+
+You must extract and evaluate:
+
+- Trend (bullish, bearish, or neutral)
+- Market structure (higher highs/lows or lower highs/lows)
+- Key zones (support and resistance)
+- Liquidity areas (if visible)
+- Volatility (low, moderate, high based on candle size and movement)
+- Volume (only if visible on chart)
+- Indicators (only if clearly visible)
+- Price behavior (breakouts, consolidations, rejections)
+
+TRADE DECISION RULES:
+
+Only return a trade if ALL conditions are met:
+- Clear trend or strong range structure
+- Clear entry zone
+- Logical stop loss placement
+- Minimum risk-reward ratio of 1.5
+- No conflicting signals
+
+If any condition fails → return "no_trade"
+
+OUTPUT FORMAT (STRICT JSON):
+
+{
+  "status": "success | no_trade | invalid_image",
+
+  "analysis": {
+    "trend": "bullish | bearish | neutral",
+    "structure": "short description",
+    "volatility": "low | moderate | high",
+    "volume": "low | moderate | high | not_visible",
+    "sentiment": "bullish | bearish | neutral",
+    "indicators": "list or 'none'",
+    "notes": "short explanation"
+  },
+
+  "zones": {
+    "support": "price zone or description",
+    "resistance": "price zone or description",
+    "liquidity": "description or 'not_clear'"
+  },
+
+  "trade_setup": {
+    "type": "buy | sell | none",
+    "entry_zone": "zone or 'none'",
+    "stop_loss": "level or 'none'",
+    "take_profit": "level or 'none'",
+    "risk_reward": "number or 'none'"
+  },
+
+  "confidence": 0-100
+}
+
+FINAL RULES:
+
+- If status = "no_trade", then trade_setup.type MUST be "none"
+- If status = "invalid_image", all fields except status can be null or minimal
+- Do NOT include extra text outside JSON
+- Do NOT explain beyond what is required`;
+}
+
+/** Backend validation layer — enforced AFTER the AI responds. */
+function enforceValidationRules(response) {
+  if (!response) return null;
+
+  if (response.status === 'success') {
+    if (response.confidence < 70) {
+      response.status = 'no_trade';
+      response.trade_setup.type = 'none';
+      response.trade_setup.entry_zone = 'none';
+      response.trade_setup.stop_loss = 'none';
+      response.trade_setup.take_profit = 'none';
+      response.trade_setup.risk_reward = 'none';
+      response.analysis.notes = 'Signal held back: confidence is below the 70% validation threshold.';
+    } else if (Number(response.trade_setup.risk_reward) < 1.5) {
+      response.status = 'no_trade';
+      response.trade_setup.type = 'none';
+      response.trade_setup.entry_zone = 'none';
+      response.trade_setup.stop_loss = 'none';
+      response.trade_setup.take_profit = 'none';
+      response.trade_setup.risk_reward = 'none';
+      response.analysis.notes = 'Signal held back: risk-reward is below the 1.5 minimum.';
+    }
+  }
+
+  return response;
+}
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -252,85 +424,6 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 12_000) {
   finally { clearTimeout(timer); }
 }
 
-async function fetchProvider(url) {
-  if (providerState.blockedUntil > Date.now()) throw new Error('Market data provider circuit is open.');
-  let lastError;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    try {
-      const response = await fetchWithTimeout(url);
-      if (!response.ok) throw new Error(`Provider HTTP ${response.status}`);
-      providerState.failures = 0;
-      return response;
-    } catch (error) {
-      lastError = error;
-      providerState.failures += 1;
-      if (providerState.failures >= 5) providerState.blockedUntil = Date.now() + 30_000;
-      if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
-    }
-  }
-  throw lastError;
-}
-
-function validTimeSeries(timeSeries) {
-  const entries = Object.entries(timeSeries || {});
-  if (entries.length < 36) return false;
-  return entries.every(([timestamp, values]) => {
-    const numbers = ['1. open', '2. high', '3. low', '4. close'].map((key) => Number(values[key]));
-    return !Number.isNaN(Date.parse(timestamp)) && numbers.every(Number.isFinite) && numbers[1] >= numbers[2];
-  });
-}
-
-async function marketData(req, res) {
-  const deviceId = requireAuth(req, res); if (!deviceId) return;
-  if (!(await allowRequest(req, deviceId))) return sendJson(res, 429, { error: 'Too many requests. Try again shortly.' });
-  if (!process.env.ALPHA_VANTAGE_API_KEY || process.env.ALPHA_VANTAGE_API_KEY.startsWith('replace_')) {
-    return sendJson(res, 503, { error: 'Market data provider is not configured.' });
-  }
-  const url = new URL(req.url || '/', `http://${req.headers.host}`);
-  const pair = String(url.searchParams.get('pair') || '').replace('/', '').toUpperCase();
-  if (!/^[A-Z]{6}$/.test(pair)) return sendJson(res, 400, { error: 'A valid six-letter forex pair is required.' });
-  const cached = (await persistentStore.getJson(`fxsnap:market:${pair}`)) || marketCache.get(pair);
-  if (cached && Date.now() - cached.createdAt < 60_000) return sendJson(res, 200, cached.data);
-  try {
-    const response = await fetchProvider(`https://www.alphavantage.co/query?function=FX_INTRADAY&from_symbol=${pair.slice(0, 3)}&to_symbol=${pair.slice(3)}&interval=5min&outputsize=compact&apikey=${encodeURIComponent(process.env.ALPHA_VANTAGE_API_KEY)}`);
-    const data = await response.json();
-    if (!response.ok || data['Error Message'] || data['Note']) return sendJson(res, 502, { error: data['Error Message'] || data['Note'] || 'Market data provider failed.' });
-    const timeSeries = data['Time Series FX (5min)'];
-    if (!validTimeSeries(timeSeries)) return sendJson(res, 502, { error: 'Market data provider returned insufficient or malformed candles.' });
-    const result = { pair, provider: 'alphavantage', providerTimestamp: Object.keys(timeSeries).sort().at(-1), timeSeries };
-    marketCache.set(pair, { createdAt: Date.now(), data: result });
-    await persistentStore.setJson(`fxsnap:market:${pair}`, { createdAt: Date.now(), data: result }, 60);
-    return sendJson(res, 200, result);
-  } catch (error) { return sendJson(res, 504, { error: error.name === 'AbortError' ? 'Market data request timed out.' : 'Market data request failed.' }); }
-}
-
-function normalizeLayer1(payload) {
-  const confidenceScore = Number(payload?.confidence_score || payload?.confidence || 0);
-  return {
-    trend_direction: typeof payload?.trend_direction === 'string' ? payload.trend_direction : 'ranging',
-    market_structure: typeof payload?.market_structure === 'string' ? payload.market_structure : 'unclear',
-    support_levels: Array.isArray(payload?.support_levels) ? payload.support_levels : [],
-    resistance_levels: Array.isArray(payload?.resistance_levels) ? payload.resistance_levels : [],
-    price_action_signals: Array.isArray(payload?.price_action_signals) ? payload.price_action_signals : [],
-    chart_quality: typeof payload?.chart_quality === 'string' ? payload.chart_quality : 'unclear',
-    confidence_score: Number.isFinite(confidenceScore) ? Math.max(0, Math.min(100, confidenceScore)) : 0,
-  };
-}
-
-function normalizeLayer2(payload) {
-  const confidence = Number(payload?.confidence || 0);
-  const tradeDecision = typeof payload?.trade_decision === 'string' ? payload.trade_decision.toLowerCase() : 'no_trade';
-  return {
-    trade_decision: tradeDecision,
-    entry: typeof payload?.entry === 'string' ? payload.entry : '',
-    stop_loss: typeof payload?.stop_loss === 'string' ? payload.stop_loss : '',
-    take_profit: typeof payload?.take_profit === 'string' ? payload.take_profit : '',
-    risk_reward_ratio: typeof payload?.risk_reward_ratio === 'string' ? payload.risk_reward_ratio : '',
-    confidence: Number.isFinite(confidence) ? Math.max(0, Math.min(100, confidence)) : 0,
-    reasoning: typeof payload?.reasoning === 'string' ? payload.reasoning : '',
-  };
-}
-
 function parseJsonPayload(rawContent) {
   if (!rawContent) return null;
   const trimmed = String(rawContent).trim();
@@ -368,62 +461,39 @@ async function callVisionModel(messages, timeoutMs = 30000) {
   return parseJsonPayload(payload.choices?.[0]?.message?.content);
 }
 
-const GEMINI_CHART_PROMPT = `You are a professional forex chart analyst.
-
-Analyze this chart image and extract ONLY factual observations.
-
-DO NOT give any trading advice.
-
-Return ONLY valid JSON.
-
-Extract the following:
-
-1. trend_direction: (bullish / bearish / ranging)
-2. market_structure: (higher highs, lower lows, consolidation, breakout, etc.)
-3. support_levels: array of price levels
-4. resistance_levels: array of price levels
-5. price_action_signals: array (e.g. rejection wicks, engulfing candles, break and retest)
-6. chart_quality: (clear / unclear)
-7. confidence_score: (0-100)
-
-Return format:
-
-{
-  "trend_direction": "",
-  "market_structure": "",
-  "support_levels": [],
-  "resistance_levels": [],
-  "price_action_signals": [],
-  "chart_quality": "",
-  "confidence_score": 0
-}`;
-
 /**
- * Google Gemini Vision (Layer 1 — factual chart extraction only).
+ * Google Gemini Vision — single-pass disciplined chart analysis.
  *
  * Uses the native REST API (no SDK) so it works in this CommonJS server with
- * the existing fetchWithTimeout helper. Model is gemini-1.5-flash by default
- * and can be overridden with GEMINI_VISION_MODEL.
+ * the existing fetchWithTimeout helper. Primary/fallback Gemini models are
+ * defined by GEMINI_VISION_MODEL_PRIMARY and GEMINI_VISION_MODEL_FALLBACK.
  */
-async function callGeminiVision(imageBase64, mimeType, pair, timeoutMs = 15000) {
+const DEFAULT_GEMINI_PRIMARY_MODEL = 'models/gemini-2.0-flash-001';
+const DEFAULT_GEMINI_FALLBACK_MODEL = 'models/gemini-1.5-pro-latest';
+
+async function callGeminiTrader(imageBase64, mimeType, pair, model, timeoutMs = 30000) {
   const apiKey = process.env.GEMINI_API_KEY;
-  const model = process.env.GEMINI_VISION_MODEL || 'gemini-1.5-flash';
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const modelName = model || process.env.GEMINI_VISION_MODEL_PRIMARY || DEFAULT_GEMINI_PRIMARY_MODEL;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelName)}:generateContent?key=${encodeURIComponent(apiKey)}`;
   const response = await fetchWithTimeout(url, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       contents: [{
         parts: [
-          { text: `Pair: ${pair || 'unknown'}\n\n${GEMINI_CHART_PROMPT}` },
+          { text: `Analyze this forex chart image for ${pair || 'unknown'} with careful market structure and risk-aware trade setup.\n\n${getTraderSystemPrompt()}` },
           { inline_data: { mime_type: mimeType, data: imageBase64 } },
         ],
       }],
       generationConfig: { response_mime_type: 'application/json', temperature: 0.2 },
     }),
   }, timeoutMs);
+
   const payload = await response.json();
-  if (!response.ok) throw new Error(payload?.error?.message || `Gemini HTTP ${response.status}`);
+  if (!response.ok) {
+    throw new Error(payload?.error?.message || `Gemini HTTP ${response.status}`);
+  }
+
   const text = String(
     payload?.candidates?.[0]?.content?.parts?.map((part) => part.text || '').filter(Boolean).join('') || ''
   ).trim();
@@ -431,58 +501,90 @@ async function callGeminiVision(imageBase64, mimeType, pair, timeoutMs = 15000) 
   return parseJsonPayload(text);
 }
 
-function buildFallbackChartResult(input) {
-  return {
-    fallback: true,
-    availability: 'fallback',
-    canContinue: true,
-    message: 'Image analysis unavailable. Continuing in manual mode.',
-    isChart: false,
-    confidence: 0,
-    reason: 'The chart AI provider was unavailable, so FXSnap used manual mode with live market data.',
-    detectedPair: input?.pair || null,
-    timeframe: input?.timeframe || null,
-    trend: 'Neutral',
-    indicators: ['Manual review'],
-    support: ['Manual review is recommended if you need a stricter technical read.'],
-    resistance: [],
-    chartNotes: ['This fallback keeps the app moving when the AI provider is unavailable.'],
-  };
+async function callGeminiTraderWithFallback(imageBase64, mimeType, pair, timeoutMs = 30000) {
+  const models = [
+    process.env.GEMINI_VISION_MODEL_PRIMARY || DEFAULT_GEMINI_PRIMARY_MODEL,
+    process.env.GEMINI_VISION_MODEL_FALLBACK || DEFAULT_GEMINI_FALLBACK_MODEL,
+  ];
+
+  let lastError = null;
+  for (let modelIndex = 0; modelIndex < models.length; modelIndex += 1) {
+    const model = models[modelIndex];
+    const isFallback = modelIndex === 1;
+
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      try {
+        console.log(`[Chart AI] Gemini ${isFallback ? 'fallback' : 'primary'} model ${model} attempt ${attempt}`);
+        const result = await callGeminiTrader(imageBase64, mimeType, pair, model, timeoutMs);
+        if (attempt > 1) {
+          console.log(`[Chart AI] Gemini model ${model} succeeded after retry ${attempt}`);
+        }
+        return result;
+      } catch (error) {
+        lastError = error;
+        console.error(`[Chart AI] Gemini model failure: ${model} attempt ${attempt} - ${(error instanceof Error ? error.message : String(error))}`);
+        if (attempt < 2) continue;
+      }
+    }
+
+    if (isFallback) {
+      console.error(`[Chart AI] Falling back to Gemini model: ${model}`);
+    }
+  }
+
+  throw lastError || new Error('Gemini analysis failed after retries and fallback.');
 }
 
-function buildHybridChartResult(input, layer1, layer2) {
-  const direction = layer2.trade_decision === 'buy' ? 'Bullish' : layer2.trade_decision === 'sell' ? 'Bearish' : 'Neutral';
-  const confidence = Math.round((Number(layer1.confidence_score || 0) + Number(layer2.confidence || 0)) / 2);
+/** OpenRouter vision fallback — single-pass disciplined chart analysis. */
+async function callOpenRouterTrader(imageBase64, mimeType, pair, timeoutMs = 45000) {
+  const messages = [
+    { role: 'system', content: getTraderSystemPrompt() },
+    { role: 'user', content: [{ type: 'text', text: `Analyze this trading chart image for ${pair || 'unknown'}.` }, { type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageBase64}` } }] },
+  ];
+  return callVisionModel(messages, timeoutMs);
+}
+
+function aiUnavailableResponse(input, message) {
   return {
-    fallback: false,
-    availability: 'ai',
-    canContinue: true,
-    isChart: true,
-    confidence,
-    reason: layer2.reasoning || 'Structured chart analysis completed.',
+    status: 'ai_unavailable',
+    availability: 'ai_unavailable',
+    message: message || 'Chart AI is unavailable right now. Please try again shortly.',
     detectedPair: input?.pair || null,
     timeframe: input?.timeframe || null,
-    trend: direction,
-    indicators: layer1.price_action_signals || [],
-    support: layer1.support_levels || [],
-    resistance: layer1.resistance_levels || [],
-    chartNotes: [
-      layer1.market_structure || 'Market structure unclear',
-      layer2.reasoning || 'Trade decision generated conservatively.',
-      `Trade decision: ${layer2.trade_decision}`,
-    ],
-    hybrid: {
-      layer1,
-      layer2,
+    analysis: {
+      trend: 'neutral',
+      structure: '',
+      volatility: 'low',
+      volume: 'not_visible',
+      sentiment: 'neutral',
+      indicators: 'none',
+      notes: message || 'Chart AI is unavailable right now. Please try again shortly.',
     },
-    trade_decision: layer2.trade_decision,
-    entry: layer2.entry,
-    stop_loss: layer2.stop_loss,
-    take_profit: layer2.take_profit,
-    risk_reward_ratio: layer2.risk_reward_ratio,
+    zones: {
+      support: 'not_clear',
+      resistance: 'not_clear',
+      liquidity: 'not_clear',
+    },
+    trade_setup: {
+      type: 'none',
+      entry_zone: 'none',
+      stop_loss: 'none',
+      take_profit: 'none',
+      risk_reward: 'none',
+    },
+    confidence: 0,
   };
 }
 
+/**
+ * Single-pass disciplined chart analysis.
+ *
+ * Flow:
+ * 1. Send image → AI (with the strict trader system prompt)
+ * 2. AI returns structured JSON
+ * 3. Backend validates rules (confidence < 70 → no_trade, RR < 1.5 → no_trade)
+ * 4. Return ONE clean state: success | no_trade | invalid_image | ai_unavailable
+ */
 async function analyzeChart(req, res) {
   const deviceId = requireAuth(req, res); if (!deviceId) return;
   if (!(await allowRequest(req, deviceId))) return sendJson(res, 429, { error: 'Too many requests. Try again shortly.' });
@@ -507,63 +609,48 @@ async function analyzeChart(req, res) {
     const hasGemini = Boolean(process.env.GEMINI_API_KEY && !process.env.GEMINI_API_KEY.startsWith('replace_'));
     const hasOpenRouter = Boolean(process.env.OPENROUTER_API_KEY && !process.env.OPENROUTER_API_KEY.startsWith('replace_'));
     if (!hasGemini && !hasOpenRouter) {
-      return sendJson(res, 200, { ...buildFallbackChartResult(input), message: 'Chart AI is not configured on the server.' });
+      return sendJson(res, 200, aiUnavailableResponse(input, 'Chart AI is not configured on the server.'));
     }
 
-    const layer1Messages = [
-      { role: 'system', content: 'You are a professional forex chart analyst. Analyze the chart image and extract only factual observations. Do not give any trade advice. Return only structured JSON with trend_direction, market_structure, support_levels, resistance_levels, price_action_signals, chart_quality, confidence_score.' },
-      { role: 'user', content: [{ type: 'text', text: `Analyze this chart image for pair ${input.pair || 'unknown'} and timeframe ${input.timeframe || 'unknown'}.` }, { type: 'image_url', image_url: { url: `data:${mime};base64,${imageBase64}` } }] },
-    ];
-
-    let layer1 = null;
-    let layer1Error = null;
-    for (let attempt = 0; attempt < 2; attempt += 1) {
+    // Preferred provider: Google Gemini Vision. Fallback: OpenRouter vision.
+    let raw = null;
+    let lastError = null;
+    if (hasGemini) {
       try {
-        // Preferred provider: Google Gemini Vision. Fallback: OpenRouter vision.
-        layer1 = hasGemini
-          ? await callGeminiVision(imageBase64, mime, input.pair || 'unknown', 15000)
-          : await callVisionModel(layer1Messages, 30000);
-        if (layer1) break;
+        raw = await callGeminiTraderWithFallback(imageBase64, mime, input.pair || 'unknown', 30000);
       } catch (error) {
-        layer1Error = error;
+        lastError = error;
+        console.error('[Chart AI] Gemini pipeline failed, falling back to OpenRouter.', error);
       }
     }
 
-    if (!layer1) {
-      console.error('[Hybrid Chart] Layer 1 failed:', layer1Error);
-      const message = hasGemini
-        ? `Chart analysis failed. Try again. (${(layer1Error instanceof Error ? layer1Error.message : 'unknown provider error')})`
-        : `Chart AI could not analyze the image: ${(layer1Error instanceof Error ? layer1Error.message : 'unknown provider error')}`;
-      return sendJson(res, 200, { ...buildFallbackChartResult(input), message });
-    }
-
-    const normalizedLayer1 = normalizeLayer1(layer1);
-    console.log('[Hybrid Chart] Layer 1 raw:', layer1);
-    console.log('[Hybrid Chart] Layer 1 confidence:', normalizedLayer1.confidence_score);
-
-    if (normalizedLayer1.chart_quality === 'unclear' || normalizedLayer1.confidence_score < 60) {
-      return sendJson(res, 200, { error: 'Chart unclear. Please upload a better image.', availability: 'rejected', canContinue: false, fallback: false, layer1: normalizedLayer1 });
-    }
-
-    const layer2Messages = [{ role: 'system', content: 'You are a professional forex trading strategist. Based on the structured chart analysis, generate a conservative trade setup. If conditions are unclear, return no_trade. Return only structured JSON with trade_decision, entry, stop_loss, take_profit, risk_reward_ratio, confidence, reasoning.' }, { role: 'user', content: `Trend: ${normalizedLayer1.trend_direction}\nStructure: ${normalizedLayer1.market_structure}\nSupport: ${normalizedLayer1.support_levels.join(', ') || 'none'}\nResistance: ${normalizedLayer1.resistance_levels.join(', ') || 'none'}\nSignals: ${normalizedLayer1.price_action_signals.join(', ') || 'none'}` }];
-    let layer2 = null;
-    if (hasOpenRouter) {
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        try {
-          layer2 = await callVisionModel(layer2Messages, 30000);
-          if (layer2) break;
-        } catch (error) {
-          console.error('[Hybrid Chart] Layer 2 failed:', error);
-        }
+    if (!raw && hasOpenRouter) {
+      try {
+        raw = await callOpenRouterTrader(imageBase64, mime, input.pair || 'unknown', 45000);
+      } catch (error) {
+        lastError = error;
+        console.error('[Chart AI] OpenRouter fallback failed.', error);
       }
     }
 
-    const normalizedLayer2 = normalizeLayer2(layer2 || {});
-    console.log('[Hybrid Chart] Layer 2 raw:', layer2 || {});
-    return sendJson(res, 200, buildHybridChartResult(input, normalizedLayer1, normalizedLayer2));
+    if (!raw) {
+      console.error('[Chart AI] Provider failed:', lastError);
+      const message = `Chart AI could not analyze the image. ${(lastError instanceof Error ? lastError.message : 'unknown provider error')}`;
+      return sendJson(res, 200, aiUnavailableResponse(input, message));
+    }
+
+    const parsed = TradeAnalysisSchema.safeParse(raw);
+    if (!parsed.success) {
+      console.error('[Chart AI] Invalid AI shape:', parsed.error.flatten());
+      return sendJson(res, 200, aiUnavailableResponse(input, 'Chart AI returned an invalid analysis shape.'));
+    }
+
+    // Normalize + enforce the backend validation layer.
+    const normalized = enforceValidationRules(normalizeAnalysis(parsed.data));
+    return sendJson(res, 200, normalized);
   } catch (error) {
-    console.error('[Hybrid Chart] fallback:', error);
-    return sendJson(res, 200, { ...buildFallbackChartResult(input), message: `Chart AI failed: ${(error instanceof Error ? error.message : 'unknown error')}` });
+    console.error('[Chart AI] Error:', error);
+    return sendJson(res, 200, aiUnavailableResponse(input, `Chart AI failed: ${(error instanceof Error ? error.message : 'unknown error')}`));
   }
 }
 
@@ -641,7 +728,6 @@ function createRequestHandler() {
     if (pathname === '/api/entitlement' && req.method === 'GET') return getEntitlement(req, res);
     if (pathname === '/api/signals' && req.method === 'POST') return recordSignal(req, res);
     if (pathname.startsWith('/api/signals/') && req.method === 'PATCH') return updateSignalOutcome(req, res);
-    if (pathname === '/api/market-data' && req.method === 'GET') return marketData(req, res);
     if (pathname === '/api/strategy' && req.method !== 'POST') return sendJson(res, 405, { error: 'POST required.' });
 
     if (basePath && pathname.startsWith(basePath)) {
@@ -675,3 +761,4 @@ if (require.main === module) {
 
 module.exports = requestHandler;
 module.exports.createRequestHandler = createRequestHandler;
+

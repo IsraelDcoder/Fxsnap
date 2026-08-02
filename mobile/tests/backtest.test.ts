@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { calculateMetrics, evaluateTrade } from '../services/backtest';
-import type { CandleData } from '../services/marketData';
+import type { CandleData } from '../services/backtest';
 
 const candle = (close: number, high = close, low = close): CandleData => ({ timestamp: new Date().toISOString(), open: close, high, low, close });
 

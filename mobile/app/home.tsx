@@ -25,21 +25,18 @@ import { router } from 'expo-router';
 import * as Haptics from '@/services/haptics';
 import { useApp } from '@/context/AppContext';
 import { useColors } from '@/hooks/useColors';
+import { getTradingSessionState, SESSION_DEFINITIONS } from '@/services/tradingSessions';
 
 // ─── Market sessions ──────────────────────────────────────────────────────────
 type Session = { name: string; color: string; open: boolean };
 
 function getMarketSessions(): Session[] {
-  const now = new Date();
-  const utcMins = now.getUTCHours() * 60 + now.getUTCMinutes();
-  const inRange = (s: number, e: number) =>
-    e >= s ? utcMins >= s && utcMins < e : utcMins >= s || utcMins < e;
-  return [
-    { name: 'London',   color: '#4FC3F7', open: inRange(480, 1020) },
-    { name: 'New York', color: '#00E676', open: inRange(780, 1320) },
-    { name: 'Tokyo',    color: '#FFD60A', open: inRange(0, 540) },
-    { name: 'Sydney',   color: '#FF80AB', open: inRange(1320, 420) },
-  ];
+  const state = getTradingSessionState();
+  return SESSION_DEFINITIONS.map((session) => ({
+    name: session.name,
+    color: session.color,
+    open: state.activeSessions.some((active) => active.name === session.name),
+  }));
 }
 
 function SessionPill({ session }: { session: Session }) {
@@ -78,7 +75,11 @@ function MarketBar() {
   const [sessions, setSessions] = useState<Session[]>(getMarketSessions());
 
   useEffect(() => {
-    const t = setInterval(() => setSessions(getMarketSessions()), 30000);
+    const tick = () => {
+      setSessions(getMarketSessions());
+    };
+    tick();
+    const t = setInterval(tick, 30000);
     return () => clearInterval(t);
   }, []);
 
@@ -88,9 +89,7 @@ function MarketBar() {
     <Animated.View entering={FadeInDown.delay(320).duration(600)} style={styles.marketBar}>
       <View style={styles.marketBarLeft}>
         <View style={[styles.liveDot, { backgroundColor: openCount > 0 ? '#00E676' : '#3A3A3A' }]} />
-        <Text style={styles.marketBarLabel}>
-          {openCount > 0 ? `${openCount} open` : 'Closed'}
-        </Text>
+        <Text style={styles.marketBarLabel}>{openCount > 0 ? `${openCount} open` : 'Closed'}</Text>
       </View>
       <View style={styles.sessionRow}>
         {sessions.map((s) => (

@@ -134,24 +134,35 @@ function AnalysisCard({
 }) {
   const colors = useColors();
   const isBuy = item.direction === 'BUY';
-  const color = isBuy ? colors.buy : colors.sell;
+  const isSell = item.direction === 'SELL';
+  const isNoTrade = item.status === 'no_trade';
+  const color = isBuy ? colors.buy : isSell ? colors.sell : colors.textSecondary;
+  const dirLabel = isNoTrade ? 'NO TRADE' : isBuy ? 'BUY' : isSell ? 'SELL' : '—';
+  const entryText = item.entry ?? item.tradeSetup?.entryZone ?? '—';
+  const slText = item.sl ?? item.tradeSetup?.stopLoss ?? '—';
+  const tpText = item.tp ?? item.tradeSetup?.takeProfit ?? '—';
+  const lotLabel = typeof item.lotSize === 'number' && item.lotSize > 0
+    ? `${item.lotSize.toFixed(2)} lot`
+    : item.status === 'success'
+      ? 'Size n/a'
+      : 'No setup';
 
   return (
     <Animated.View entering={FadeInDown.duration(350)}>
       <TouchableOpacity style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder }]} onPress={onPress} activeOpacity={0.85}>
         {/* Left content */}
         <View style={styles.cardLeft}>
-          <View style={[styles.dirBadge, { backgroundColor: color + '20' }]}>
-            <Feather name={isBuy ? 'trending-up' : 'trending-down'} size={13} color={color} />
-            <Text style={[styles.dirText, { color }]}>{item.direction}</Text>
+          <View style={[styles.dirBadge, { backgroundColor: isBuy || isSell ? color + '20' : '#1A1A1A' }]}>
+            <Feather name={isBuy ? 'trending-up' : isSell ? 'trending-down' : 'shield'} size={13} color={color} />
+            <Text style={[styles.dirText, { color }]}>{dirLabel}</Text>
           </View>
           <Text style={[styles.pairText, { color: colors.text }]}>{item.pair}</Text>
           <View style={styles.cardMeta}>
-            <Text style={[styles.metaItem, { color: colors.textSecondary }]}>Entry: {item.entry}</Text>
+            <Text style={[styles.metaItem, { color: colors.textSecondary }]}>Entry: {entryText}</Text>
             <View style={[styles.metaDot, { backgroundColor: colors.textMuted }]} />
-            <Text style={[styles.metaItem, { color: colors.textSecondary }]}>SL: {item.sl}</Text>
+            <Text style={[styles.metaItem, { color: colors.textSecondary }]}>SL: {slText}</Text>
             <View style={[styles.metaDot, { backgroundColor: colors.textMuted }]} />
-            <Text style={[styles.metaItem, { color: colors.textSecondary }]}>TP: {item.tp}</Text>
+            <Text style={[styles.metaItem, { color: colors.textSecondary }]}>TP: {tpText}</Text>
           </View>
           <Text style={[styles.dateText, { color: colors.textMuted }]}>{formatDate(item.createdAt)}</Text>
         </View>
@@ -162,7 +173,7 @@ function AnalysisCard({
             <Text style={[styles.confidenceText, { color }]}>{item.confidence}%</Text>
           </View>
           <View style={styles.lotPill}>
-            <Text style={[styles.lotText, { color: colors.textSecondary }]}>{item.lotSize > 0 ? `${item.lotSize.toFixed(2)} lot` : 'Size unavailable'}</Text>
+            <Text style={[styles.lotText, { color: colors.textSecondary }]}>{lotLabel}</Text>
           </View>
           <TouchableOpacity
             style={styles.deleteBtn}

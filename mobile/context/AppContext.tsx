@@ -7,24 +7,46 @@ export const APP_DATA_VERSION = 2;
 const DATA_VERSION_KEY = 'fxsnap:dataVersion';
 const BACKUP_VERSION = 1;
 
+export type AnalysisStatus = 'success' | 'no_trade' | 'invalid_image' | 'ai_unavailable';
+
 export interface AnalysisResult {
   id: string;
   pair: string;
-  direction: 'BUY' | 'SELL';
+  status?: AnalysisStatus;
+  direction?: 'BUY' | 'SELL';
   confidence: number;
   confidenceType?: 'composite_score';
-  entry: string;
-  sl: string;
-  tp: string;
-  lotSize: number;
-  slPips: number;
+  // Legacy live-data fields (kept optional for old saved entries)
+  entry?: string;
+  sl?: string;
+  tp?: string;
+  lotSize?: number;
+  slPips?: number;
   imageUri?: string;
   createdAt: string;
-  // Real data validation fields
-  dataSource?: 'api'; // Data source (currently only 'api' = Alpha Vantage)
-  chartValidated?: boolean; // Was chart validation passed?
-  apiDataTime?: string; // Timestamp of when API data was fetched
-  volatility?: number; // Calculated volatility (pips)
+  // Disciplined price-action analysis (new shape)
+  analysis?: {
+    trend: 'bullish' | 'bearish' | 'neutral';
+    structure: string;
+    volatility: 'low' | 'moderate' | 'high';
+    volume: 'low' | 'moderate' | 'high' | 'not_visible';
+    sentiment: 'bullish' | 'bearish' | 'neutral';
+    indicators: string;
+    notes: string;
+  };
+  zones?: {
+    support: string;
+    resistance: string;
+    liquidity: string;
+  };
+  tradeSetup?: {
+    type: 'buy' | 'sell' | 'none';
+    entryZone: string;
+    stopLoss: string;
+    takeProfit: string;
+    riskReward: number | string;
+  };
+  // Legacy chart validation fields (kept for backward compatibility)
   chartAnalysis?: {
     confidence: number;
     detectedPair?: string | null;

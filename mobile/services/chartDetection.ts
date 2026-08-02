@@ -2,102 +2,130 @@ import { getApiHeaders, resolveApiBaseUrl } from '@/services/apiAuth';
 
 const API_URL = resolveApiBaseUrl();
 
-export interface ChartValidationResult {
-  isChart: boolean;
-  confidence: number;
-  reason: string;
-  availability?: 'ai' | 'fallback' | 'rejected' | 'neutral';
+export type AnalysisStatus = 'success' | 'no_trade' | 'invalid_image' | 'ai_unavailable';
+
+export interface ChartAnalysisResult {
+  status: AnalysisStatus;
+  message?: string;
   detectedPair?: string | null;
   timeframe?: string | null;
-  trend?: string | null;
-  indicators?: string[];
-  support?: string[];
-  resistance?: string[];
-  chartNotes?: string[];
+  analysis: {
+    trend: 'bullish' | 'bearish' | 'neutral';
+    structure: string;
+    volatility: 'low' | 'moderate' | 'high';
+    volume: 'low' | 'moderate' | 'high' | 'not_visible';
+    sentiment: 'bullish' | 'bearish' | 'neutral';
+    indicators: string;
+    notes: string;
+  };
+  zones: {
+    support: string;
+    resistance: string;
+    liquidity: string;
+  };
+  trade_setup: {
+    type: 'buy' | 'sell' | 'none';
+    entry_zone: string;
+    stop_loss: string;
+    take_profit: string;
+    risk_reward: number | string;
+  };
+  confidence: number;
 }
 
-function buildFallbackChartResult(pair?: string, reason = 'Chart AI unavailable; using a permissive fallback so analysis can continue.') {
+function emptyAnalysis(status: AnalysisStatus, message: string): ChartAnalysisResult {
   return {
-    isChart: false,
+    status,
+    message,
+    analysis: {
+      trend: 'neutral',
+      structure: '',
+      volatility: 'low',
+      volume: 'not_visible',
+      sentiment: 'neutral',
+      indicators: 'none',
+      notes: message,
+    },
+    zones: {
+      support: 'not_clear',
+      resistance: 'not_clear',
+      liquidity: 'not_clear',
+    },
+    trade_setup: {
+      type: 'none',
+      entry_zone: 'none',
+      stop_loss: 'none',
+      take_profit: 'none',
+      risk_reward: 'none',
+    },
     confidence: 0,
-    reason,
-    availability: 'fallback',
-    detectedPair: pair || null,
-    timeframe: 'Unknown',
-    trend: 'Neutral',
-    indicators: ['Fallback review'],
-    support: ['The chart AI service was unavailable, so FXSnap used a safe fallback to keep analysis moving.'],
-    resistance: [],
-    chartNotes: ['Review the chart manually if you need a stricter read.'],
-  } satisfies ChartValidationResult;
+  };
 }
 
-export function buildNeutralChartResult(pair?: string, reason = 'Manual mode: analysis based on live market data.') {
-  return {
-    isChart: true,
-    confidence: 55,
-    reason,
-    availability: 'neutral',
-    detectedPair: pair || null,
-    timeframe: 'Unknown',
-    trend: 'Neutral',
-    indicators: ['Manual review'],
-    support: [],
-    resistance: [],
-    chartNotes: ['Chart AI was unavailable, so FXSnap used manual mode with live market data.'],
-  } satisfies ChartValidationResult;
-}
-
-
-export async function validateChartImage(imageBase64: string, mimeType = 'image/jpeg', pair?: string): Promise<ChartValidationResult> {
+/**
+ * Send a chart image to the backend for strict, disciplined price-action
+ * analysis. The server enforces the full system prompt + validation layer and
+ * returns exactly one clean state: success | no_trade | invalid_image |
+ * ai_unavailable.
+ */
+export async function analyzeChartImage(
+  imageBase64: string,
+  mimeType = 'image/jpeg',
+  pair?: string
+): Promise<ChartAnalysisResult> {
   try {
-    const response = await fetch(`${API_URL}/analyze-chart`, { method: 'POST', headers: await getApiHeaders(), body: JSON.stringify({ imageBase64, mimeType, pair }) });
+    const response = await fetch(`${API_URL}/analyze-chart`, {
+      method: 'POST',
+      headers: await getApiHeaders(),
+      body: JSON.stringify({ imageBase64, mimeType, pair }),
+    });
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.error || 'Chart AI is unavailable.');
-
-    if (payload.fallback) {
-      return buildFallbackChartResult(pair, payload.message || 'Image analysis unavailable. Switch to manual mode.');
+    if (!response.ok) {
+      return emptyAnalysis('ai_unavailable', payload.error || 'Chart AI is unavailable.');
     }
 
-    if (payload.error) {
-      // The server explicitly rejected the image (e.g. "not a chart" or
-      // unclear). Keep this a strict rejection so users know to retry.
-      return {
-        isChart: false,
-        confidence: 0,
-        reason: typeof payload.error === 'string' ? payload.error : 'Chart AI could not validate the image.',
-        availability: 'rejected',
-        detectedPair: pair || null,
-        timeframe: payload.timeframe || null,
-        trend: 'Neutral',
-        indicators: [],
-        support: [],
-        resistance: [],
-        chartNotes: [],
-      } satisfies ChartValidationResult;
-    }
+    const status: AnalysisStatus = ['success', 'no_trade', 'invalid_image', 'ai_unavailable'].includes(payload.status)
+      ? payload.status
+      : 'ai_unavailable';
 
+    if (status === 'ai_unavailable') {
+      return emptyAnalysis(status, payload.message || 'Chart AI is unavailable right now. Please try again shortly.');
+    }
 
     return {
-      isChart: payload.isChart === true,
+      status,
+      message: payload.message || undefined,
+      detectedPair: payload.detectedPair ?? null,
+      timeframe: payload.timeframe ?? null,
+      analysis: {
+        trend: payload.analysis?.trend || 'neutral',
+        structure: payload.analysis?.structure || '',
+        volatility: payload.analysis?.volatility || 'low',
+        volume: payload.analysis?.volume || 'not_visible',
+        sentiment: payload.analysis?.sentiment || 'neutral',
+        indicators: payload.analysis?.indicators || 'none',
+        notes: payload.analysis?.notes || '',
+      },
+      zones: {
+        support: payload.zones?.support || 'not_clear',
+        resistance: payload.zones?.resistance || 'not_clear',
+        liquidity: payload.zones?.liquidity || 'not_clear',
+      },
+      trade_setup: {
+        type: payload.trade_setup?.type || 'none',
+        entry_zone: payload.trade_setup?.entry_zone || 'none',
+        stop_loss: payload.trade_setup?.stop_loss || 'none',
+        take_profit: payload.trade_setup?.take_profit || 'none',
+        risk_reward: payload.trade_setup?.risk_reward ?? 'none',
+      },
       confidence: Math.max(0, Math.min(100, Number(payload.confidence) || 0)),
-      reason: typeof payload.reason === 'string' ? payload.reason : 'Chart analysis completed.',
-      availability: 'ai',
-      detectedPair: payload.detectedPair || null,
-      timeframe: payload.timeframe || null,
-      trend: payload.trend || null,
-      indicators: Array.isArray(payload.indicators) ? payload.indicators : [],
-      support: Array.isArray(payload.support) ? payload.support : [],
-      resistance: Array.isArray(payload.resistance) ? payload.resistance : [],
-      chartNotes: Array.isArray(payload.chartNotes) ? payload.chartNotes : [],
     };
   } catch (error) {
     console.error('[Chart Detection] Error:', error);
-    return buildFallbackChartResult(pair, error instanceof Error ? error.message : 'Unable to analyze image.');
+    return emptyAnalysis(
+      'ai_unavailable',
+      error instanceof Error ? error.message : 'Unable to analyze image.'
+    );
   }
 }
 
-export async function detectPairFromChart(imageBase64: string, mimeType = 'image/jpeg'): Promise<string | null> {
-  const result = await validateChartImage(imageBase64, mimeType);
-  return result.detectedPair || null;
-}
