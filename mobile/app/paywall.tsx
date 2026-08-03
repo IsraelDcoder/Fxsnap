@@ -43,6 +43,7 @@ export default function PaywallScreen() {
   // ScreenWrapper handles safe area and scrolling
   const colors = useColors();
   const { purchasePlan, restorePurchases, billingAvailable } = useApp();
+  const supportEmail = process.env.EXPO_PUBLIC_SUPPORT_EMAIL || 'support@fxsnap.app';
   const [selectedPlan, setSelectedPlan] = useState('quarterly');
   const [plans, setPlans] = useState<PlanOffering[]>(FALLBACK_PLANS);
   const [loading, setLoading] = useState(false);
@@ -178,6 +179,7 @@ export default function PaywallScreen() {
           }}>
             <Text style={[styles.restoreText, { color: colors.textSecondary }]}>Restore Purchase</Text>
           </TouchableOpacity>
+          <Text style={[styles.legalText, { color: colors.textMuted }]}>If you need help, contact support@fxsnap.app with your app build information.</Text>
           <Text style={[styles.legalText, { color: colors.textMuted }]}>
             Cancel anytime. No hidden fees. Prices in USD.
           </Text>

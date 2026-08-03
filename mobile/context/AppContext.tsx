@@ -106,6 +106,7 @@ interface AppContextValue {
   deleteStrategy: (id: string) => Promise<void>;
   exportData: () => Promise<string>;
   importData: (backupJson: string) => Promise<void>;
+  deleteAccount: () => Promise<void>;
 }
 
 const defaultSettings: AppSettings = {
@@ -327,6 +328,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setSavedStrategies(importedStrategies);
   };
 
+  const deleteAccount = async () => {
+    await AsyncStorage.multiRemove([
+      'onboardingComplete',
+      'settings',
+      'savedAnalyses',
+      'savedStrategies',
+      DATA_VERSION_KEY,
+    ]);
+    setOnboardingComplete(false);
+    setIsSubscribed(false);
+    setSettings(defaultSettings);
+    setHapticsEnabled(defaultSettings.hapticsEnabled);
+    setSavedAnalyses([]);
+    setSavedStrategies([]);
+    setCurrentAnalysis(null);
+  };
+
   return (
     <AppContext.Provider
       value={{
@@ -349,6 +367,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         deleteStrategy,
         exportData,
         importData,
+        deleteAccount,
       }}
     >
       {children}

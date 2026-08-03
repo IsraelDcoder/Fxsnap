@@ -29,18 +29,46 @@ const RISK_OPTIONS = [0.5, 1, 1.5, 2, 3, 5];
 export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
   const colors = useColors();
-  const { settings, updateSettings, isSubscribed, exportData, importData } = useApp();
+  const { settings, updateSettings, isSubscribed, exportData, importData, deleteAccount } = useApp();
 
   const privacyPolicyUrl = process.env.EXPO_PUBLIC_PRIVACY_POLICY_URL || 'https://fxsnap.app/privacy';
-  const openPrivacyPolicy = async () => {
+  const termsUrl = process.env.EXPO_PUBLIC_TERMS_URL || 'https://fxsnap.app/terms';
+  const supportEmail = process.env.EXPO_PUBLIC_SUPPORT_EMAIL || 'support@fxsnap.app';
+  const rateUrl = process.env.EXPO_PUBLIC_RATE_URL || 'https://play.google.com/store/apps/details?id=com.fxsnap';
+  const subscriptionManagerUrl = process.env.EXPO_PUBLIC_SUBSCRIPTION_URL || 'https://play.google.com/store/account/subscriptions';
+
+  const openUrl = async (url: string, fallbackMessage: string) => {
     try {
-      await Linking.openURL(privacyPolicyUrl);
+      await Linking.openURL(url);
     } catch {
-      Alert.alert(
-        'Unable to open privacy policy',
-        'Please visit the privacy page in your browser.'
-      );
+      Alert.alert('Unable to open link', fallbackMessage);
     }
+  };
+
+  const openPrivacyPolicy = async () => openUrl(privacyPolicyUrl, 'Please visit the privacy page in your browser.');
+  const openTerms = async () => openUrl(termsUrl, 'Please visit the terms page in your browser.');
+  const openSupportEmail = async () => openUrl(`mailto:${supportEmail}`, 'Please copy the support email address to contact us.');
+  const openRateApp = async () => openUrl(rateUrl, 'Please visit the app store to rate FXSnap.');
+  const openSubscriptionManager = async () => openUrl(subscriptionManagerUrl, 'Please use Google Play to manage your subscription.');
+
+  const confirmDeleteAccount = () => {
+    Alert.alert(
+      'Delete account?',
+      'This will remove all local data, saved analyses, strategies, and settings. This cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            await deleteAccount();
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+            Alert.alert('Account deleted', 'Your local FXSnap data has been removed.');
+            router.replace('/onboarding');
+          },
+        },
+      ]
+    );
   };
 
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
@@ -54,14 +82,21 @@ export default function SettingsScreen() {
   const [calcRisk, setCalcRisk] = useState(settings.riskPercent.toString());
   const [calcSl, setCalcSl] = useState('20');
 
+  const parsedBalance = parseFloat(calcBalance);
+  const parsedRisk = parseFloat(calcRisk);
+  const parsedSl = parseFloat(calcSl);
+  const minimumLot = 0.01;
+  const supportsNanoLot = true;
+  const minimumSupportedLot = supportsNanoLot ? 0.001 : minimumLot;
+  const riskAmount = parsedBalance * (parsedRisk / 100);
+  const rawLot = parsedSl > 0 ? riskAmount / (parsedSl * 10) : 0;
+  const roundedLot = rawLot > 0 ? Math.max(minimumSupportedLot, rawLot) : 0;
   const calcLotSize =
-    parseFloat(calcBalance) && parseFloat(calcRisk) && parseFloat(calcSl)
-      ? ((parseFloat(calcBalance) * (parseFloat(calcRisk) / 100)) /
-          (parseFloat(calcSl) * 10)) >= 0.01
-        ? ((parseFloat(calcBalance) * (parseFloat(calcRisk) / 100)) /
-            (parseFloat(calcSl) * 10)).toFixed(2)
-        : 'Below minimum'
+    parsedBalance >= 0 && parsedRisk >= 0 && parsedSl > 0
+      ? roundedLot.toFixed(supportsNanoLot ? 3 : 2)
       : '—';
+  const isSmallAccount = parsedBalance > 0 && parsedBalance < 100;
+  const isVerySmallLot = rawLot > 0 && rawLot < minimumSupportedLot;
 
   const saveBalance = () => {
     const val = parseFloat(balanceInput);
@@ -298,6 +333,16 @@ export default function SettingsScreen() {
                 <Feather name="refresh-cw" size={13} color="#8E8E93" />
                 <Text style={styles.syncBtnText}>Sync from my account settings</Text>
               </TouchableOpacity>
+              <Text style={styles.calcResultNote}>{
+                isSmallAccount
+                  ? 'Small Account Mode Enabled — optimized for low balances.'
+                  : 'Forex estimate only. Quote-currency conversion and broker contract rules may change the result.'
+              }</Text>
+              {isVerySmallLot && (
+                <Text style={styles.calcResultNote}>
+                  Calculated lot size is very small; adjusted to minimum supported lot size.
+                </Text>
+              )}
               <Text style={styles.calcFormula}>
                 Forex estimate only. Quote-currency conversion and broker contract rules may change the result.
               </Text>
@@ -334,6 +379,19 @@ export default function SettingsScreen() {
                   </View>
                 )}
               </View>
+              <View style={styles.rowDivider} />
+              <TouchableOpacity style={styles.navigationRow} onPress={openSubscriptionManager}>
+                <View style={styles.rowLeft}>
+                  <View style={styles.rowIcon}>
+                    <Feather name="settings" size={16} color="#8E8E93" />
+                  </View>
+                  <Text style={styles.rowLabel}>Manage subscription</Text>
+                </View>
+                <Feather name="external-link" size={18} color="#8E8E93" />
+              </TouchableOpacity>
+              <Text style={styles.cardNote}>
+                Subscription billing is handled through Google Play. Use the manage link above to update, cancel, or restore your subscription.
+              </Text>
             </View>
           </Animated.View>
 
@@ -378,15 +436,65 @@ export default function SettingsScreen() {
           <Animated.View entering={FadeInDown.delay(360).duration(500)}>
             <SectionHeader title="Legal" />
             <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}> 
-              <TouchableOpacity style={styles.navigationRow} onPress={openPrivacyPolicy}>
+              <TouchableOpacity style={styles.navigationRow} onPress={openTerms}>
                 <View style={styles.rowLeft}>
                   <View style={styles.rowIcon}>
                     <Feather name="file-text" size={16} color="#8E8E93" />
+                  </View>
+                  <Text style={styles.rowLabel}>Terms of Use</Text>
+                </View>
+                <Feather name="external-link" size={18} color="#8E8E93" />
+              </TouchableOpacity>
+              <View style={styles.rowDivider} />
+              <TouchableOpacity style={styles.navigationRow} onPress={openPrivacyPolicy}>
+                <View style={styles.rowLeft}>
+                  <View style={styles.rowIcon}>
+                    <Feather name="shield" size={16} color="#8E8E93" />
                   </View>
                   <Text style={styles.rowLabel}>Privacy policy</Text>
                 </View>
                 <Feather name="external-link" size={18} color="#8E8E93" />
               </TouchableOpacity>
+              <Text style={styles.cardNote}>
+                FXSnap analyzes chart images you select. We do not provide financial advice and may not have access to your trading account.
+              </Text>
+            </View>
+          </Animated.View>
+
+          <Animated.View entering={FadeInDown.delay(400).duration(500)}>
+            <SectionHeader title="Support" />
+            <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}> 
+              <TouchableOpacity style={styles.navigationRow} onPress={openSupportEmail}>
+                <View style={styles.rowLeft}>
+                  <View style={styles.rowIcon}>
+                    <Feather name="mail" size={16} color="#8E8E93" />
+                  </View>
+                  <Text style={styles.rowLabel}>{supportEmail}</Text>
+                </View>
+                <Feather name="external-link" size={18} color="#8E8E93" />
+              </TouchableOpacity>
+              <View style={styles.rowDivider} />
+              <TouchableOpacity style={styles.navigationRow} onPress={openRateApp}>
+                <View style={styles.rowLeft}>
+                  <View style={styles.rowIcon}>
+                    <Feather name="star" size={16} color="#8E8E93" />
+                  </View>
+                  <Text style={styles.rowLabel}>Rate FXSnap</Text>
+                </View>
+                <Feather name="external-link" size={18} color="#8E8E93" />
+              </TouchableOpacity>
+              <View style={styles.rowDivider} />
+              <TouchableOpacity style={styles.destructiveRow} onPress={confirmDeleteAccount}>
+                <View style={styles.rowLeft}>
+                  <View style={[styles.rowIcon, { backgroundColor: '#2A0B0B' }]}> 
+                    <Feather name="trash-2" size={16} color="#FF4D4F" />
+                  </View>
+                  <Text style={styles.destructiveText}>Delete Account</Text>
+                </View>
+              </TouchableOpacity>
+              <Text style={styles.cardNote}>
+                Need help with billing, account data, or cancellation? Contact support using the email above.
+              </Text>
             </View>
           </Animated.View>
 
@@ -602,6 +710,13 @@ const styles = StyleSheet.create({
   },
   calcResultLabel: { fontSize: 15, fontFamily: 'Inter_500Medium', color: '#8E8E93' },
   calcResultValue: { fontSize: 28, fontFamily: 'Inter_700Bold', color: '#00E676' },
+  calcResultNote: {
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
+    color: '#A3E635',
+    textAlign: 'center',
+    paddingHorizontal: 4,
+  },
   syncBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -613,6 +728,17 @@ const styles = StyleSheet.create({
   calcFormula: { fontSize: 12, fontFamily: 'Inter_400Regular', color: '#48484A', textAlign: 'center' },
   subRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   subLeft: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  subInfo: { marginTop: 12, color: '#8E8E93', fontSize: 12, fontFamily: 'Inter_400Regular' },
+  subLinkBtn: { marginTop: 12, paddingVertical: 12, borderRadius: 12, borderWidth: 1, borderColor: '#2A2A2A', alignItems: 'center' },
+  subLinkText: { fontSize: 13, fontFamily: 'Inter_600SemiBold', color: '#00E676' },
+  cardNote: { marginTop: 12, fontSize: 12, fontFamily: 'Inter_400Regular', color: '#8E8E93', lineHeight: 18 },
+  destructiveRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+  },
+  destructiveText: { fontSize: 15, fontFamily: 'Inter_600SemiBold', color: '#FF4D4F' },
   subStatus: { fontSize: 12, fontFamily: 'Inter_400Regular', color: '#8E8E93', marginTop: 2 },
   upgradeBtn: {
     paddingHorizontal: 16,

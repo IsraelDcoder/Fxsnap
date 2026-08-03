@@ -32,6 +32,7 @@ loadEnvFile();
 const STATIC_ROOT = path.resolve(__dirname, '..', 'static-build');
 const TEMPLATE_PATH = path.resolve(__dirname, 'templates', 'landing-page.html');
 const PRIVACY_TEMPLATE_PATH = path.resolve(__dirname, 'templates', 'privacy-policy.html');
+const TERMS_TEMPLATE_PATH = path.resolve(__dirname, 'templates', 'terms-of-use.html');
 const basePath = (process.env.BASE_PATH || '/').replace(/\/+$/, '');
 const requestCounts = new Map();
 const recentEvents = [];
@@ -707,6 +708,7 @@ async function updateSignalOutcome(req, res) {
 
 const landingPageTemplate = fs.readFileSync(TEMPLATE_PATH, 'utf-8');
 const privacyTemplate = fs.existsSync(PRIVACY_TEMPLATE_PATH) ? fs.readFileSync(PRIVACY_TEMPLATE_PATH, 'utf-8') : null;
+const termsTemplate = fs.existsSync(TERMS_TEMPLATE_PATH) ? fs.readFileSync(TERMS_TEMPLATE_PATH, 'utf-8') : null;
 const appName = getAppName();
 
 function createRequestHandler() {
@@ -745,6 +747,17 @@ function createRequestHandler() {
       }
       res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
       res.end('Privacy policy not found.');
+      return;
+    }
+
+    if (pathname === '/terms') {
+      if (termsTemplate) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        res.end(termsTemplate);
+        return;
+      }
+      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+      res.end('Terms of use not found.');
       return;
     }
 
