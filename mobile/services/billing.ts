@@ -3,10 +3,10 @@ import Purchases, { LOG_LEVEL, type CustomerInfo, type PurchasesPackage } from '
 import { getDeviceId } from '@/services/apiAuth';
 
 export type BillingPlan = 'weekly' | 'quarterly';
-export const PREMIUM_ENTITLEMENT_ID = process.env.EXPO_PUBLIC_REVENUECAT_ENTITLEMENT_ID || 'Pro';
+export const PREMIUM_ENTITLEMENT_ID = process.env.EXPO_PUBLIC_RC_ENTITLEMENT_ID || 'Pro';
 
-const IOS_KEY = process.env.EXPO_PUBLIC_REVENUECAT_IOS_API_KEY || '';
-const ANDROID_KEY = process.env.EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY || '';
+const IOS_KEY = process.env.EXPO_PUBLIC_RC_IOS_KEY || '';
+const ANDROID_KEY = process.env.EXPO_PUBLIC_RC_ANDROID_KEY || '';
 const PRODUCT_IDS: Record<BillingPlan, string> = {
   weekly: process.env.EXPO_PUBLIC_REVENUECAT_WEEKLY_PRODUCT_ID || 'fxsnap_premium_weekly',
   quarterly: process.env.EXPO_PUBLIC_REVENUECAT_QUARTERLY_PRODUCT_ID || 'fxsnap_premium_3months',
