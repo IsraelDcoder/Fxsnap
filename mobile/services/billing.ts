@@ -1,15 +1,15 @@
 import { Platform } from 'react-native';
 import Purchases, { LOG_LEVEL, type CustomerInfo, type PurchasesPackage } from 'react-native-purchases';
-import { getDeviceId, getServerPremiumStatus } from '@/services/apiAuth';
+import { getDeviceId } from '@/services/apiAuth';
 
 export type BillingPlan = 'weekly' | 'quarterly';
-export const PREMIUM_ENTITLEMENT_ID = process.env.EXPO_PUBLIC_REVENUECAT_ENTITLEMENT_ID || 'premium';
+export const PREMIUM_ENTITLEMENT_ID = process.env.EXPO_PUBLIC_REVENUECAT_ENTITLEMENT_ID || 'Pro';
 
 const IOS_KEY = process.env.EXPO_PUBLIC_REVENUECAT_IOS_API_KEY || '';
 const ANDROID_KEY = process.env.EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY || '';
 const PRODUCT_IDS: Record<BillingPlan, string> = {
-  weekly: process.env.EXPO_PUBLIC_REVENUECAT_WEEKLY_PRODUCT_ID || 'fxsnap_weekly',
-  quarterly: process.env.EXPO_PUBLIC_REVENUECAT_QUARTERLY_PRODUCT_ID || 'fxsnap_quarterly',
+  weekly: process.env.EXPO_PUBLIC_REVENUECAT_WEEKLY_PRODUCT_ID || 'fxsnap_premium_weekly',
+  quarterly: process.env.EXPO_PUBLIC_REVENUECAT_QUARTERLY_PRODUCT_ID || 'fxsnap_premium_3months',
 };
 
 let configured = false;
@@ -51,9 +51,7 @@ export async function configureBilling(): Promise<boolean> {
 export async function getPremiumStatus(): Promise<boolean> {
   if (!(await configureBilling())) return false;
   const customerInfo = await Purchases.getCustomerInfo();
-  if (hasPremium(customerInfo)) return true;
-  const serverStatus = await getServerPremiumStatus();
-  return serverStatus === true;
+  return hasPremium(customerInfo);
 }
 
 async function findPackage(plan: BillingPlan): Promise<PurchasesPackage | null> {
@@ -61,8 +59,10 @@ async function findPackage(plan: BillingPlan): Promise<PurchasesPackage | null> 
   const current = offerings.current;
   if (!current) return null;
   const productId = PRODUCT_IDS[plan];
+  console.log('Looking for package:', plan);
+  console.log('Available packages:', current.availablePackages.map((pkg) => pkg.identifier));
   return current.availablePackages.find(
-    (item) => item.product.identifier === productId || item.identifier === productId
+    (pkg) => pkg.identifier === plan || pkg.product.identifier === productId
   ) || null;
 }
 
@@ -83,7 +83,7 @@ export async function getAvailablePlans(): Promise<PlanOffering[]> {
 
   return Object.entries(PRODUCT_IDS).map(([plan, productId]) => {
     const selected = current.availablePackages.find(
-      (item) => item.product.identifier === productId || item.identifier === productId
+      (pkg) => pkg.identifier === plan || pkg.product.identifier === productId
     );
     return {
       plan: plan as BillingPlan,
@@ -102,19 +102,13 @@ export async function purchasePlan(plan: BillingPlan): Promise<boolean> {
   if (!selectedPackage) throw new Error(`RevenueCat package is not configured for the ${plan} plan.`);
   const purchaseResult = await Purchases.purchasePackage(selectedPackage) as any;
   const customerInfo = purchaseResult.customerInfo ?? purchaseResult.purchaserInfo;
-  if (customerInfo && hasPremium(customerInfo)) {
-    return true;
-  }
-  const serverStatus = await getServerPremiumStatus();
-  return serverStatus === true;
+  return customerInfo ? hasPremium(customerInfo) : false;
 }
 
 export async function restorePurchases(): Promise<boolean> {
   if (!(await configureBilling())) return false;
   const purchaserInfo = await Purchases.restorePurchases();
-  if (hasPremium(purchaserInfo)) return true;
-  const serverStatus = await getServerPremiumStatus();
-  return serverStatus === true;
+  return hasPremium(purchaserInfo);
 }
 
 export function addBillingListener(listener: (active: boolean) => void) {

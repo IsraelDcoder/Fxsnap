@@ -1,10 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Alert,
-  Dimensions,
   Image,
   Platform,
-  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -24,14 +22,14 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import ScreenWrapper from '@/components/ScreenWrapper';
+import { hp } from '@/styles/responsive';
 import { Feather } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import * as Haptics from '@/services/haptics';
 import { useApp } from '@/context/AppContext';
 import { useColors } from '@/hooks/useColors';
 
-const { width, height } = Dimensions.get('window');
 
 type Screen = 'hook' | 'value' | 'trust' | 'social' | 'paywall';
 const SCREENS: Screen[] = ['hook', 'value', 'trust', 'social', 'paywall'];
@@ -45,10 +43,10 @@ const OB_IMAGES: Record<string, any> = {
 };
 
 const IMAGE_HEIGHTS: Record<string, number> = {
-  hook:   height * 0.50,
-  value:  height * 0.40,
-  trust:  height * 0.42,
-  social: height * 0.30,
+  hook:   hp(50),
+  value:  hp(40),
+  trust:  hp(42),
+  social: hp(30),
 };
 
 const BULLETS = [
@@ -196,15 +194,13 @@ function NextButton({ label, onPress, style: extraStyle }: { label: string; onPr
 
 // ─── Main component ───────────────────────────────────────────────────────────
 export default function OnboardingScreen() {
-  const insets = useSafeAreaInsets();
   const colors = useColors();
   const [currentIndex, setCurrentIndex] = useState(0);
   const [selectedPlan, setSelectedPlan] = useState('quarterly');
   const [loading, setLoading] = useState(false);
   const { completeOnboarding, purchasePlan } = useApp();
 
-  const topPad = Platform.OS === 'web' ? 67 : insets.top;
-  const botPad = Platform.OS === 'web' ? 34 : insets.bottom;
+  const botPad = Platform.OS === 'web' ? 34 : 0;
 
   const currentScreen = SCREENS[currentIndex];
   const progressIndex = PROGRESS_SCREENS.indexOf(currentScreen as any);
@@ -233,10 +229,10 @@ export default function OnboardingScreen() {
   // ── SCREEN 0: Hook ──────────────────────────────────────────────────────────
   if (currentScreen === 'hook') {
     return (
-      <View style={[styles.container, { paddingTop: topPad, backgroundColor: colors.background }]}>
+      <ScreenWrapper style={[styles.container, { backgroundColor: colors.background }]} contentContainerStyle={[styles.textSection, { paddingBottom: botPad + 24 }]}>
         <HeroImage source={OB_IMAGES.hook} imgHeight={IMAGE_HEIGHTS.hook} screenKey="hook" />
 
-        <Animated.View entering={FadeInUp.delay(200).duration(600)} style={[styles.textSection, { paddingBottom: botPad + 24 }]}>
+        <Animated.View entering={FadeInUp.delay(200).duration(600)}>
           <View style={[styles.brandBadge, { backgroundColor: colors.surface, borderColor: colors.cardBorder }]}>
             <Feather name="activity" size={14} color={colors.buy} />
             <Text style={[styles.brandBadgeText, { color: colors.buy }]}>FXSnap</Text>
@@ -252,17 +248,17 @@ export default function OnboardingScreen() {
             ))}
           </View>
         </Animated.View>
-      </View>
+      </ScreenWrapper>
     );
   }
 
   // ── SCREEN 1: Value ─────────────────────────────────────────────────────────
   if (currentScreen === 'value') {
     return (
-      <View style={[styles.container, { paddingTop: topPad, backgroundColor: colors.background }]}>
+      <ScreenWrapper style={[styles.container, { backgroundColor: colors.background }]} contentContainerStyle={[styles.textSection, { paddingBottom: botPad + 24 }]}>
         <HeroImage source={OB_IMAGES.value} imgHeight={IMAGE_HEIGHTS.value} screenKey="value" />
 
-          <View style={[styles.textSection, { paddingBottom: botPad + 24, backgroundColor: colors.background }]}>
+          <View style={{ backgroundColor: colors.background }}>
           <Animated.Text entering={FadeInDown.delay(100).duration(500)} style={[styles.title, { color: colors.text }]}> 
             Know What to Do —{'\n'}Instantly
           </Animated.Text>
@@ -289,17 +285,17 @@ export default function OnboardingScreen() {
             ))}
           </View>
         </View>
-      </View>
+      </ScreenWrapper>
     );
   }
 
   // ── SCREEN 2: Trust ─────────────────────────────────────────────────────────
   if (currentScreen === 'trust') {
     return (
-      <View style={[styles.container, { paddingTop: topPad, backgroundColor: colors.background }]}>
+      <ScreenWrapper style={[styles.container, { backgroundColor: colors.background }]} contentContainerStyle={[styles.textSection, { paddingBottom: botPad + 24 }]}>
         <HeroImage source={OB_IMAGES.trust} imgHeight={IMAGE_HEIGHTS.trust} screenKey="trust" />
 
-        <View style={[styles.textSection, { paddingBottom: botPad + 24 }]}>
+        <View>
           <Animated.Text entering={FadeInDown.delay(100).duration(500)} style={[styles.title, { color: colors.text }]}> 
             Built for{'\n'}Real Traders
           </Animated.Text>
@@ -328,17 +324,17 @@ export default function OnboardingScreen() {
             ))}
           </View>
         </View>
-      </View>
+      </ScreenWrapper>
     );
   }
 
   // ── SCREEN 3: Social proof ──────────────────────────────────────────────────
   if (currentScreen === 'social') {
     return (
-      <View style={[styles.container, { paddingTop: topPad, backgroundColor: colors.background }]}>
+      <ScreenWrapper style={[styles.container, { backgroundColor: colors.background }]} contentContainerStyle={[styles.textSection, styles.socialSection, { paddingBottom: botPad + 24 }]}>
         <HeroImage source={OB_IMAGES.social} imgHeight={IMAGE_HEIGHTS.social} screenKey="social" />
 
-        <View style={[styles.textSection, styles.socialSection, { paddingBottom: botPad + 24 }]}>
+        <View>
           <Animated.View entering={FadeInDown.delay(100).duration(600)} style={[styles.socialBadge, { backgroundColor: colors.surface, borderColor: colors.cardBorder }]}>
             <Feather name="users" size={14} color={colors.buy} />
             <Text style={[styles.socialBadgeText, { color: colors.buy }]}>Structured trading workflow</Text>
@@ -382,27 +378,18 @@ export default function OnboardingScreen() {
             ))}
           </View>
         </View>
-      </View>
+      </ScreenWrapper>
     );
   }
 
   // ── SCREEN 4: Paywall ───────────────────────────────────────────────────────
   return (
-    <Animated.View
-      entering={FadeIn.duration(400)}
-      style={[styles.container, { paddingTop: topPad, backgroundColor: colors.background }]}
-    >
-      <View style={[styles.paywallHeader, { paddingTop: topPad + 8 }]}>
+    <ScreenWrapper style={[styles.container, { backgroundColor: colors.background }]} contentContainerStyle={[styles.paywallContent, { paddingBottom: botPad + 24 }]}>
+      <View style={styles.paywallHeader}>
         <TouchableOpacity style={[styles.closeBtn, { backgroundColor: colors.card }]} onPress={handleClose}>
           <Feather name="x" size={20} color={colors.textSecondary} />
         </TouchableOpacity>
       </View>
-
-      <ScrollView
-        style={styles.scroll}
-        contentContainerStyle={[styles.paywallContent, { paddingBottom: botPad + 24 }]}
-        showsVerticalScrollIndicator={false}
-      >
         <Animated.View entering={FadeInDown.delay(100).duration(600)} style={styles.paywallHero}>
           <View style={[styles.crownBox, { backgroundColor: colors.surface, borderColor: colors.cardBorder }]}>
             <Feather name="zap" size={34} color={colors.gold} />
@@ -473,8 +460,7 @@ export default function OnboardingScreen() {
             Cancel anytime. Prices in USD. No hidden fees.
           </Text>
         </Animated.View>
-      </ScrollView>
-    </Animated.View>
+    </ScreenWrapper>
   );
 }
 

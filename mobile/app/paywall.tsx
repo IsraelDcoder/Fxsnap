@@ -1,18 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import {
-  Alert,
-  Platform,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from 'react-native';
+import { Alert, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import Animated, {
   FadeInDown,
   FadeInUp,
 } from 'react-native-reanimated';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import ScreenWrapper from '@/components/ScreenWrapper';
 import { Feather } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import * as Haptics from '@/services/haptics';
@@ -48,7 +40,7 @@ const FEATURES = [
 ];
 
 export default function PaywallScreen() {
-  const insets = useSafeAreaInsets();
+  // ScreenWrapper handles safe area and scrolling
   const colors = useColors();
   const { purchasePlan, restorePurchases, billingAvailable } = useApp();
   const [selectedPlan, setSelectedPlan] = useState('quarterly');
@@ -78,8 +70,7 @@ export default function PaywallScreen() {
     };
   }, []);
 
-  const topPad = Platform.OS === 'web' ? 67 : insets.top;
-  const botPad = Platform.OS === 'web' ? 34 : insets.bottom;
+  const botPad = Platform.OS === 'web' ? 34 : 0;
 
   const handleSubscribe = async () => {
     setLoading(true);
@@ -105,18 +96,12 @@ export default function PaywallScreen() {
   };
 
   return (
-    <View style={[styles.container, { paddingTop: topPad, backgroundColor: colors.background }]}>
+    <ScreenWrapper style={[styles.container, { backgroundColor: colors.background }]} contentContainerStyle={[styles.scrollContent, { paddingBottom: botPad + 24 }]}>
       <View style={styles.header}>
         <TouchableOpacity style={styles.closeBtn} onPress={() => router.back()}>
           <Feather name="x" size={20} color={colors.textSecondary} />
         </TouchableOpacity>
       </View>
-
-      <ScrollView
-        style={styles.scroll}
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: botPad + 24 }]}
-        showsVerticalScrollIndicator={false}
-      >
         <Animated.View entering={FadeInDown.delay(100).duration(600)} style={styles.hero}>
           <View style={[styles.crownBox, { backgroundColor: colors.surface, borderColor: colors.cardBorder }]}>
             <Feather name="zap" size={36} color="#FFD60A" />
@@ -197,8 +182,7 @@ export default function PaywallScreen() {
             Cancel anytime. No hidden fees. Prices in USD.
           </Text>
         </Animated.View>
-      </ScrollView>
-    </View>
+    </ScreenWrapper>
   );
 }
 
@@ -330,10 +314,12 @@ const styles = StyleSheet.create({
   actions: {
     gap: 14,
     alignItems: 'center',
+    marginTop: 'auto',
   },
   subscribeBtn: {
     width: '100%',
-    height: 58,
+    minHeight: 56,
+    paddingVertical: 12,
     backgroundColor: '#FFFFFF',
     borderRadius: 16,
     alignItems: 'center',
