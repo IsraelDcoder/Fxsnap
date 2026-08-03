@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import {
   Alert,
   KeyboardAvoidingView,
+  Linking,
   Platform,
   ScrollView,
   StyleSheet,
@@ -29,6 +30,18 @@ export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
   const colors = useColors();
   const { settings, updateSettings, isSubscribed, exportData, importData } = useApp();
+
+  const privacyPolicyUrl = process.env.EXPO_PUBLIC_PRIVACY_POLICY_URL || 'https://fxsnap.app/privacy';
+  const openPrivacyPolicy = async () => {
+    try {
+      await Linking.openURL(privacyPolicyUrl);
+    } catch {
+      Alert.alert(
+        'Unable to open privacy policy',
+        'Please visit the privacy page in your browser.'
+      );
+    }
+  };
 
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
   const botPad = Platform.OS === 'web' ? 34 : insets.bottom;
@@ -362,6 +375,21 @@ export default function SettingsScreen() {
             </View>
           </Animated.View>
 
+          <Animated.View entering={FadeInDown.delay(360).duration(500)}>
+            <SectionHeader title="Legal" />
+            <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}> 
+              <TouchableOpacity style={styles.navigationRow} onPress={openPrivacyPolicy}>
+                <View style={styles.rowLeft}>
+                  <View style={styles.rowIcon}>
+                    <Feather name="file-text" size={16} color="#8E8E93" />
+                  </View>
+                  <Text style={styles.rowLabel}>Privacy policy</Text>
+                </View>
+                <Feather name="external-link" size={18} color="#8E8E93" />
+              </TouchableOpacity>
+            </View>
+          </Animated.View>
+
           {/* ── Data Backup ── */}
           <Animated.View entering={FadeInDown.delay(380).duration(500)}>
             <SectionHeader
@@ -462,6 +490,12 @@ const styles = StyleSheet.create({
   },
   rowLabel: { fontSize: 15, fontFamily: 'Inter_500Medium', color: '#FFFFFF' },
   rowDivider: { height: 1, backgroundColor: '#2A2A2A', marginVertical: 8 },
+  navigationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+  },
   backupRow: {
     flexDirection: 'row',
     alignItems: 'center',
