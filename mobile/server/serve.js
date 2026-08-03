@@ -31,6 +31,7 @@ loadEnvFile();
 
 const STATIC_ROOT = path.resolve(__dirname, '..', 'static-build');
 const TEMPLATE_PATH = path.resolve(__dirname, 'templates', 'landing-page.html');
+const PRIVACY_TEMPLATE_PATH = path.resolve(__dirname, 'templates', 'privacy-policy.html');
 const basePath = (process.env.BASE_PATH || '/').replace(/\/+$/, '');
 const requestCounts = new Map();
 const recentEvents = [];
@@ -705,6 +706,7 @@ async function updateSignalOutcome(req, res) {
 }
 
 const landingPageTemplate = fs.readFileSync(TEMPLATE_PATH, 'utf-8');
+const privacyTemplate = fs.existsSync(PRIVACY_TEMPLATE_PATH) ? fs.readFileSync(PRIVACY_TEMPLATE_PATH, 'utf-8') : null;
 const appName = getAppName();
 
 function createRequestHandler() {
@@ -732,6 +734,18 @@ function createRequestHandler() {
 
     if (basePath && pathname.startsWith(basePath)) {
       pathname = pathname.slice(basePath.length) || '/';
+    }
+
+    // Serve the privacy policy HTML template if requested
+    if (pathname === '/privacy') {
+      if (privacyTemplate) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        res.end(privacyTemplate);
+        return;
+      }
+      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+      res.end('Privacy policy not found.');
+      return;
     }
 
     if (pathname === '/' || pathname === '/manifest') {
