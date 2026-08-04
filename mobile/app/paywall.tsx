@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Alert, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, {
   FadeInDown,
   FadeInUp,
@@ -42,12 +43,14 @@ const FEATURES = [
 export default function PaywallScreen() {
   // ScreenWrapper handles safe area and scrolling
   const colors = useColors();
+  const insets = useSafeAreaInsets();
   const { purchasePlan, restorePurchases, billingAvailable } = useApp();
   const supportEmail = process.env.EXPO_PUBLIC_SUPPORT_EMAIL || 'support@fxsnap.app';
   const [selectedPlan, setSelectedPlan] = useState('quarterly');
   const [plans, setPlans] = useState<PlanOffering[]>(FALLBACK_PLANS);
   const [loading, setLoading] = useState(false);
   const [loadingPlans, setLoadingPlans] = useState(true);
+  const botPad = Platform.OS === 'web' ? 34 : insets.bottom;
 
   useEffect(() => {
     let active = true;
@@ -70,8 +73,6 @@ export default function PaywallScreen() {
       active = false;
     };
   }, []);
-
-  const botPad = Platform.OS === 'web' ? 34 : 0;
 
   const handleSubscribe = async () => {
     setLoading(true);
