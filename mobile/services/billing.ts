@@ -63,15 +63,15 @@ export async function getPremiumStatus(): Promise<boolean> {
 function formatSubscriptionPeriod(product: any, plan: BillingPlan) {
   const period = product?.subscriptionPeriod;
   if (!period || typeof period !== 'object') {
-    return plan === 'weekly' ? '/ week' : '/ 3 months';
+    return plan === 'weekly' ? 'week' : '3 months';
   }
 
   const unit = period.unit?.toLowerCase?.();
   const numberOfUnits = period.numberOfUnits ?? 1;
-  if (unit === 'week' || unit === 'weeks') return `/ ${numberOfUnits} week${numberOfUnits === 1 ? '' : 's'}`;
-  if (unit === 'month' || unit === 'months') return `/ ${numberOfUnits} month${numberOfUnits === 1 ? '' : 's'}`;
-  if (unit === 'year' || unit === 'years') return `/ ${numberOfUnits} year${numberOfUnits === 1 ? '' : 's'}`;
-  return plan === 'weekly' ? '/ week' : '/ 3 months';
+  if (unit === 'week' || unit === 'weeks') return `${numberOfUnits} week${numberOfUnits === 1 ? '' : 's'}`;
+  if (unit === 'month' || unit === 'months') return `${numberOfUnits} month${numberOfUnits === 1 ? '' : 's'}`;
+  if (unit === 'year' || unit === 'years') return `${numberOfUnits} year${numberOfUnits === 1 ? '' : 's'}`;
+  return plan === 'weekly' ? 'week' : '3 months';
 }
 
 function planMatchesPackage(plan: BillingPlan, pkg: PurchasesPackage): boolean {
@@ -100,16 +100,8 @@ export async function getAvailablePlans(): Promise<PlanOffering[]> {
   if (!(await configureBilling())) return [];
   const offerings = await Purchases.getOfferings();
   const current = offerings.current;
-  const fallback = Object.entries(PRODUCT_IDS).map(([plan, productIds]) => ({
-    plan: plan as BillingPlan,
-    title: plan === 'weekly' ? 'Weekly' : '3 Months',
-    price: '—',
-    period: plan === 'weekly' ? '/ week' : '/ 3 months',
-    productId: productIds[0],
-    available: false,
-  }));
 
-  if (!current) return fallback;
+  if (!current) return [];
 
   return Object.entries(PRODUCT_IDS).map(([planKey, productIds]) => {
     const plan = planKey as BillingPlan;
@@ -117,7 +109,7 @@ export async function getAvailablePlans(): Promise<PlanOffering[]> {
     const product = selected?.product;
     return {
       plan,
-      title: product?.title || (plan === 'weekly' ? 'Weekly' : '3 Months'),
+      title: plan === 'weekly' ? 'Weekly' : '3 Months',
       price: product?.priceString || '—',
       period: formatSubscriptionPeriod(product, plan),
       productId: product?.identifier || productIds[0],

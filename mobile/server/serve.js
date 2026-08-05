@@ -370,7 +370,14 @@ async function generateStrategy(req, res) {
     const inputResult = StrategyInputSchema.safeParse(await readJsonBody(req));
     if (!inputResult.success) return sendJson(res, 400, { error: 'Invalid strategy profile.', details: inputResult.error.flatten() });
     const input = inputResult.data;
-    const prompt = `Create a personalized forex trading strategy from this user profile. Do not invent live prices, backtest results, or guaranteed performance. Return ONLY valid JSON matching the requested schema. Profile: ${JSON.stringify(input)}`;
+    const prompt = `Create a personalized forex trading strategy from this user profile. Keep the plan concise and actionable. Return ONLY valid JSON matching the requested schema. Profile: ${JSON.stringify({
+      style: input.style,
+      risk: input.risk,
+      pairs: input.pairs,
+      session: input.session,
+      experience: input.experience,
+      variation: input.variation,
+    })}`;
     const schema = {
       name: 'string', description: 'string', marketFocus: 'string', timeframe: 'string', confidence: 'number 0-100',
       sections: [{ title: 'string', items: ['string'] }],
@@ -385,7 +392,9 @@ async function generateStrategy(req, res) {
         'X-Title': process.env.OPENROUTER_APP_NAME || 'FXSnap',
       },
       body: JSON.stringify({
-        model: process.env.OPENROUTER_MODEL || 'openai/gpt-4o-mini', temperature: 0.7,
+        model: process.env.OPENROUTER_MODEL || 'openai/gpt-4o-mini',
+        temperature: 0.4,
+        max_tokens: 1500,
         messages: [
           { role: 'system', content: `You are a careful professional trading-plan assistant. Make the plan specific to every input. Include sections titled exactly: Entry rules, Stop loss, Take profit, Risk management, When not to trade. Keep confidence as a calibrated opinion, not a probability of profit. JSON schema: ${JSON.stringify(schema)}` },
           { role: 'user', content: prompt },

@@ -22,10 +22,18 @@ const STEPS = ['Analyzing trading preferences…', 'Matching market conditions�
 const MESSAGES = ['Backtesting against historical patterns…', 'Filtering high-probability setups…', 'Aligning with current volatility…'];
 const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3000';
 
+function getFriendlyAiError(payload: { error?: string } | undefined, fallback = 'The AI strategy service is unavailable.') {
+  const message = payload?.error || fallback;
+  if (message.toLowerCase().includes('credit') || message.toLowerCase().includes('quota') || message.toLowerCase().includes('token')) {
+    return 'AI is temporarily unavailable. Please try again in a moment.';
+  }
+  return message;
+}
+
 async function requestAIStrategy(answers: Answers, variation: number): Promise<Strategy> {
   const response = await fetch(`${API_URL}/api/strategy`, { method: 'POST', headers: await getApiHeaders(), body: JSON.stringify({ ...answers, variation }) });
   const payload = await response.json();
-  if (!response.ok) throw new Error(payload.error || 'The AI strategy service is unavailable.');
+  if (!response.ok) throw new Error(getFriendlyAiError(payload));
   return payload as Strategy;
 }
 

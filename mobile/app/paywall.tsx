@@ -13,25 +13,6 @@ import { useApp } from '@/context/AppContext';
 import { useColors } from '@/hooks/useColors';
 import { getAvailablePlans, type PlanOffering } from '@/services/billing';
 
-const FALLBACK_PLANS = [
-  {
-    plan: 'weekly' as const,
-    title: 'Weekly',
-    price: '$7.99',
-    period: '/ week',
-    productId: 'fxsnap_weekly',
-    available: false,
-  },
-  {
-    plan: 'quarterly' as const,
-    title: '3 Months',
-    price: '$29.99',
-    period: '/ 3 months',
-    productId: 'fxsnap_quarterly',
-    available: false,
-  },
-];
-
 const FEATURES = [
   'Unlimited chart analysis',
   'AI-powered trade insights',
@@ -47,7 +28,7 @@ export default function PaywallScreen() {
   const { purchasePlan, restorePurchases, billingAvailable } = useApp();
   const supportEmail = process.env.EXPO_PUBLIC_SUPPORT_EMAIL || 'support@fxsnap.app';
   const [selectedPlan, setSelectedPlan] = useState('quarterly');
-  const [plans, setPlans] = useState<PlanOffering[]>(FALLBACK_PLANS);
+  const [plans, setPlans] = useState<PlanOffering[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingPlans, setLoadingPlans] = useState(true);
   const botPad = Platform.OS === 'web' ? 34 : insets.bottom;
@@ -59,12 +40,14 @@ export default function PaywallScreen() {
         const availablePlans = await getAvailablePlans();
         if (!active) return;
         setPlans(availablePlans);
-        if (!availablePlans.find((plan) => plan.plan === selectedPlan && plan.available)) {
-          const fallback = availablePlans.find((plan) => plan.available);
+
+        if (availablePlans.length > 0) {
+          const fallback = availablePlans.find((plan) => plan.plan === selectedPlan && plan.available)
+            || availablePlans.find((plan) => plan.available);
           if (fallback) setSelectedPlan(fallback.plan);
         }
       } catch {
-        // keep fallback plans and let billing availability determine messaging.
+        setPlans([]);
       } finally {
         if (active) setLoadingPlans(false);
       }
@@ -73,6 +56,9 @@ export default function PaywallScreen() {
       active = false;
     };
   }, []);
+
+  const selectedPlanMeta = plans.find((plan) => plan.plan === selectedPlan) ?? plans[0];
+  const selectedPlanLabel = selectedPlan === 'quarterly' ? '3-Month' : 'Weekly';
 
   const handleSubscribe = async () => {
     setLoading(true);
@@ -124,34 +110,57 @@ export default function PaywallScreen() {
         </Animated.View>
 
         <Animated.View entering={FadeInUp.delay(300).duration(600)} style={styles.plans}>
-          {plans.map((plan) => (
-            <TouchableOpacity
-              key={plan.plan}
-              style={[
-                styles.planCard,
-                selectedPlan === plan.plan && styles.planCardSelected,
-                { backgroundColor: colors.card, borderColor: selectedPlan === plan.plan ? colors.text : colors.cardBorder },
-              ]}
-              onPress={() => {
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                setSelectedPlan(plan.plan);
-              }}
-            >
-              {plan.plan === 'quarterly' && (
-                <View style={styles.planTag}>
-                  <Text style={styles.planTagText}>MOST POPULAR</Text>
-                </View>
-              )}
-              <View>
-                <Text style={[styles.planName, { color: colors.text }]}>{plan.title}</Text>
-                <Text style={[styles.planSavings, { color: colors.buy }]}>Powered by RevenueCat</Text>
-              </View>
-              <View style={{ alignItems: 'flex-end' }}>
-                <Text style={[styles.planPrice, { color: colors.text }]}>{plan.price}</Text>
-                <Text style={[styles.planPeriod, { color: colors.textSecondary }]}>{plan.period}</Text>
-              </View>
-            </TouchableOpacity>
-          ))}
+          {loadingPlans ? (
+            <View style={[styles.loadingState, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}> 
+              <Text style={[styles.loadingText, { color: colors.textSecondary }]}>Loading subscription options…</Text>
+            </View>
+          ) : plans.length > 0 ? (
+            plans.map((plan) => {
+              const isSelected = selectedPlan === plan.plan;
+
+              return (
+                <TouchableOpacity
+                  key={plan.plan}
+                  style={[
+                    styles.planCard,
+                    isSelected && styles.planCardSelected,
+                    {
+                      backgroundColor: isSelected ? colors.surface : colors.card,
+                      borderColor: isSelected ? colors.primary : colors.cardBorder,
+                      transform: [{ scale: isSelected ? 1.02 : 1 }],
+                      shadowColor: isSelected ? colors.primary : '#000000',
+                      shadowOpacity: isSelected ? 0.25 : 0,
+                      shadowRadius: isSelected ? 14 : 0,
+                      shadowOffset: { width: 0, height: 0 },
+                      elevation: isSelected ? 6 : 0,
+                    },
+                  ]}
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    setSelectedPlan(plan.plan);
+                  }}
+                  activeOpacity={0.95}
+                >
+                  {plan.plan === 'quarterly' && (
+                    <View style={styles.planTag}>
+                      <Text style={styles.planTagText}>MOST POPULAR</Text>
+                    </View>
+                  )}
+                  <View style={styles.planInfo}>
+                    <Text style={[styles.planName, { color: colors.textSecondary }]}>{plan.title}</Text>
+                    <Text style={[styles.planPrice, { color: colors.text }]}>
+                      {plan.price}
+                      <Text style={[styles.planPeriod, { color: colors.textSecondary }]}> / {plan.period}</Text>
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })
+          ) : (
+            <View style={[styles.loadingState, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}> 
+              <Text style={[styles.loadingText, { color: colors.textSecondary }]}>Billing options are not available right now.</Text>
+            </View>
+          )}
         </Animated.View>
 
         <Animated.View entering={FadeInUp.delay(400).duration(600)} style={styles.actions}>
@@ -165,7 +174,7 @@ export default function PaywallScreen() {
             disabled={loading || !billingAvailable}
           >
             <Text style={[styles.subscribeBtnText, { color: colors.primaryForeground }]}>
-              {loading ? 'Processing...' : billingAvailable ? 'Start Subscription' : 'Billing unavailable'}
+              {loading ? 'Processing...' : billingAvailable ? `Start ${selectedPlanLabel} Plan` : 'Billing unavailable'}
             </Text>
           </TouchableOpacity>
           <TouchableOpacity onPress={async () => {
@@ -265,10 +274,20 @@ const styles = StyleSheet.create({
   plans: {
     gap: 12,
   },
-  planCard: {
-    flexDirection: 'row',
+  loadingState: {
+    borderRadius: 16,
+    borderWidth: 1,
+    paddingVertical: 18,
+    paddingHorizontal: 20,
     alignItems: 'center',
-    justifyContent: 'space-between',
+  },
+  loadingText: {
+    fontSize: 14,
+    fontFamily: 'Inter_500Medium',
+    textAlign: 'center',
+  },
+  planCard: {
+    alignItems: 'flex-start',
     backgroundColor: '#1A1A1A',
     borderRadius: 16,
     padding: 18,
@@ -277,7 +296,7 @@ const styles = StyleSheet.create({
     position: 'relative',
   },
   planCardSelected: {
-    borderColor: '#FFFFFF',
+    borderColor: '#00FF9D',
   },
   planTag: {
     position: 'absolute',
@@ -293,25 +312,25 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_700Bold',
     color: '#000',
   },
-  planName: {
-    fontSize: 17,
-    fontFamily: 'Inter_600SemiBold',
-    color: '#FFFFFF',
+  planInfo: {
+    gap: 6,
   },
-  planSavings: {
-    fontSize: 13,
-    fontFamily: 'Inter_500Medium',
-    color: '#00E676',
-    marginTop: 2,
+  planName: {
+    fontSize: 14,
+    fontFamily: 'Inter_600SemiBold',
+    letterSpacing: 0.2,
+    color: '#FFFFFF',
+    textTransform: 'uppercase',
   },
   planPrice: {
-    fontSize: 22,
+    fontSize: 27,
     fontFamily: 'Inter_700Bold',
     color: '#FFFFFF',
+    lineHeight: 32,
   },
   planPeriod: {
-    fontSize: 12,
-    fontFamily: 'Inter_400Regular',
+    fontSize: 14,
+    fontFamily: 'Inter_500Medium',
     color: '#8E8E93',
   },
   actions: {
