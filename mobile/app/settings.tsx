@@ -157,8 +157,8 @@ export default function SettingsScreen() {
 
   const SectionHeader = ({ title, subtitle }: { title: string; subtitle?: string }) => (
     <View style={styles.sectionHeaderBlock}>
-      <Text style={styles.sectionHeader}>{title}</Text>
-      {subtitle && <Text style={styles.sectionSubheader}>{subtitle}</Text>}
+      <Text style={[styles.sectionHeader, { color: colors.textSecondary }]}>{title}</Text>
+      {subtitle && <Text style={[styles.sectionSubheader, { color: colors.textMuted }]}>{subtitle}</Text>}
     </View>
   );
 
@@ -173,10 +173,10 @@ export default function SettingsScreen() {
   }) => (
     <View style={styles.row}>
       <View style={styles.rowLeft}>
-        <View style={styles.rowIcon}>
-          <Feather name={icon as any} size={16} color="#8E8E93" />
+        <View style={[styles.rowIcon, { backgroundColor: colors.surface, borderColor: colors.cardBorder, borderWidth: 1 }]}>
+          <Feather name={icon as any} size={16} color={colors.textMuted} />
         </View>
-        <Text style={styles.rowLabel}>{label}</Text>
+        <Text style={[styles.rowLabel, { color: colors.text }]}>{label}</Text>
       </View>
       {children}
     </View>
@@ -189,8 +189,8 @@ export default function SettingsScreen() {
     >
       <View style={[styles.container, { paddingTop: topPad, backgroundColor: colors.background }]}> 
         <Animated.View entering={FadeIn.duration(300)} style={styles.header}>
-          <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
-            <Feather name="arrow-left" size={22} color="#FFFFFF" />
+          <TouchableOpacity style={[styles.backBtn, { backgroundColor: colors.card, borderColor: colors.cardBorder }]} onPress={() => router.back()}>
+            <Feather name="arrow-left" size={22} color={colors.text} />
           </TouchableOpacity>
           <Text style={[styles.headerTitle, { color: colors.text }]}>Settings</Text>
           <View style={{ width: 44 }} />
@@ -208,11 +208,11 @@ export default function SettingsScreen() {
               title="Account"
               subtitle="Used to calculate lot sizes automatically"
             />
-            <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+            <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>  
               <Row icon="dollar-sign" label="Account Balance">
-                <View style={styles.inputRow}>
+                <View style={[styles.inputRow, { backgroundColor: colors.surface, borderColor: colors.cardBorder, borderWidth: 1 }]}> 
                   <TextInput
-                    style={styles.input}
+                    style={[styles.input, { color: colors.text }]}
                     value={balanceInput}
                     onChangeText={(v) => {
                       setBalanceInput(v);
@@ -222,19 +222,19 @@ export default function SettingsScreen() {
                     onBlur={saveBalance}
                     onSubmitEditing={saveBalance}
                     returnKeyType="done"
-                    placeholderTextColor="#48484A"
+                    placeholderTextColor={colors.textMuted}
                   />
-                  <Text style={styles.inputSuffix}>USD</Text>
+                  <Text style={[styles.inputSuffix, { color: colors.textSecondary }]}>USD</Text>
                   {balanceSaved && (
-                    <Feather name="check-circle" size={16} color="#00E676" style={{ marginLeft: 4 }} />
+                    <Feather name="check-circle" size={16} color={colors.buy} style={{ marginLeft: 4 }} />
                   )}
                 </View>
               </Row>
 
               {!settings.balanceSet && (
-                <Animated.View entering={FadeInDown.duration(300)} style={styles.balanceTip}>
-                  <Feather name="info" size={13} color="#FFD60A" />
-                  <Text style={styles.balanceTipText}>
+                <Animated.View entering={FadeInDown.duration(300)} style={[styles.balanceTip, { backgroundColor: colors.surface, borderColor: colors.cardBorder }]}>
+                  <Feather name="info" size={13} color={colors.gold} />
+                  <Text style={[styles.balanceTipText, { color: colors.textSecondary }]}>
                     Save your balance for accurate lot size calculations in analysis.
                   </Text>
                 </Animated.View>
@@ -246,12 +246,19 @@ export default function SettingsScreen() {
           <Animated.View entering={FadeInDown.delay(140).duration(500)}>
             <SectionHeader title="Risk Management" />
             <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
-              <Text style={styles.riskLabel}>Risk per trade: <Text style={styles.riskValue}>{settings.riskPercent}%</Text></Text>
+              <Text style={[styles.riskLabel, { color: colors.textSecondary }]}>Risk per trade: <Text style={[styles.riskValue, { color: colors.text }]}>{settings.riskPercent}%</Text></Text>
               <View style={styles.riskOptions}>
                 {RISK_OPTIONS.map((r) => (
                   <TouchableOpacity
                     key={r}
-                    style={[styles.riskChip, settings.riskPercent === r && styles.riskChipActive]}
+                    style={[
+                      styles.riskChip,
+                      settings.riskPercent === r && styles.riskChipActive,
+                      {
+                        backgroundColor: settings.riskPercent === r ? colors.primary : colors.surface,
+                        borderColor: settings.riskPercent === r ? colors.primary : colors.cardBorder,
+                      },
+                    ]}
                     onPress={() => {
                       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                       updateSettings({ riskPercent: r });
@@ -262,6 +269,7 @@ export default function SettingsScreen() {
                       style={[
                         styles.riskChipText,
                         settings.riskPercent === r && styles.riskChipTextActive,
+                        { color: settings.riskPercent === r ? colors.primaryForeground : colors.textSecondary },
                       ]}
                     >
                       {r}%
@@ -269,9 +277,9 @@ export default function SettingsScreen() {
                   </TouchableOpacity>
                 ))}
               </View>
-              <View style={styles.riskInfo}>
-                <Feather name="shield" size={13} color="#8E8E93" />
-                <Text style={styles.riskInfoText}>
+              <View style={[styles.riskInfo, { backgroundColor: colors.surface, borderColor: colors.cardBorder }]}>
+                <Feather name="shield" size={13} color={colors.textMuted} />
+                <Text style={[styles.riskInfoText, { color: colors.textSecondary }]}>
                   At {settings.riskPercent}% risk on a ${settings.accountBalance.toLocaleString()} account = $
                   {(settings.accountBalance * settings.riskPercent / 100).toFixed(2)} per trade
                 </Text>
@@ -282,45 +290,45 @@ export default function SettingsScreen() {
           {/* ── Lot Size Calculator ── */}
           <Animated.View entering={FadeInDown.delay(200).duration(500)}>
             <SectionHeader title="Lot Size Calculator" />
-            <View style={[styles.card, { gap: 14 }]}>
+            <View style={[styles.card, { gap: 14, backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
               <View style={styles.calcRow}>
                 <View style={styles.calcField}>
-                  <Text style={styles.calcLabel}>Balance ($)</Text>
+                  <Text style={[styles.calcLabel, { color: colors.textSecondary }]}>Balance ($)</Text>
                   <TextInput
-                    style={styles.calcInput}
+                    style={[styles.calcInput, { backgroundColor: colors.surface, borderColor: colors.cardBorder, color: colors.text }]}
                     value={calcBalance}
                     onChangeText={setCalcBalance}
                     keyboardType="decimal-pad"
-                    placeholderTextColor="#48484A"
+                    placeholderTextColor={colors.textMuted}
                     returnKeyType="done"
                   />
                 </View>
                 <View style={styles.calcField}>
-                  <Text style={styles.calcLabel}>Risk (%)</Text>
+                  <Text style={[styles.calcLabel, { color: colors.textSecondary }]}>Risk (%)</Text>
                   <TextInput
-                    style={styles.calcInput}
+                    style={[styles.calcInput, { backgroundColor: colors.surface, borderColor: colors.cardBorder, color: colors.text }]}
                     value={calcRisk}
                     onChangeText={setCalcRisk}
                     keyboardType="decimal-pad"
-                    placeholderTextColor="#48484A"
+                    placeholderTextColor={colors.textMuted}
                     returnKeyType="done"
                   />
                 </View>
                 <View style={styles.calcField}>
-                  <Text style={styles.calcLabel}>SL (pips)</Text>
+                  <Text style={[styles.calcLabel, { color: colors.textSecondary }]}>SL (pips)</Text>
                   <TextInput
-                    style={styles.calcInput}
+                    style={[styles.calcInput, { backgroundColor: colors.surface, borderColor: colors.cardBorder, color: colors.text }]}
                     value={calcSl}
                     onChangeText={setCalcSl}
                     keyboardType="decimal-pad"
-                    placeholderTextColor="#48484A"
+                    placeholderTextColor={colors.textMuted}
                     returnKeyType="done"
                   />
                 </View>
               </View>
-              <View style={styles.calcResult}>
-                <Text style={styles.calcResultLabel}>Lot Size</Text>
-                <Text style={styles.calcResultValue}>{calcLotSize}</Text>
+              <View style={[styles.calcResult, { backgroundColor: colors.surface, borderColor: colors.cardBorder }]}>
+                <Text style={[styles.calcResultLabel, { color: colors.textSecondary }]}>Lot Size</Text>
+                <Text style={[styles.calcResultValue, { color: colors.buy }]}>{calcLotSize}</Text>
               </View>
               <TouchableOpacity
                 style={styles.syncBtn}
@@ -330,20 +338,20 @@ export default function SettingsScreen() {
                   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                 }}
               >
-                <Feather name="refresh-cw" size={13} color="#8E8E93" />
-                <Text style={styles.syncBtnText}>Sync from my account settings</Text>
+                <Feather name="refresh-cw" size={13} color={colors.textMuted} />
+                <Text style={[styles.syncBtnText, { color: colors.textSecondary }]}>Sync from my account settings</Text>
               </TouchableOpacity>
-              <Text style={styles.calcResultNote}>{
+              <Text style={[styles.calcResultNote, { color: colors.buy }]}>{
                 isSmallAccount
                   ? 'Small Account Mode Enabled — optimized for low balances.'
                   : 'Forex estimate only. Quote-currency conversion and broker contract rules may change the result.'
               }</Text>
               {isVerySmallLot && (
-                <Text style={styles.calcResultNote}>
+                <Text style={[styles.calcResultNote, { color: colors.buy }]}>
                   Calculated lot size is very small; adjusted to minimum supported lot size.
                 </Text>
               )}
-              <Text style={styles.calcFormula}>
+              <Text style={[styles.calcFormula, { color: colors.textMuted }]}>
                 Forex estimate only. Quote-currency conversion and broker contract rules may change the result.
               </Text>
             </View>
@@ -355,41 +363,41 @@ export default function SettingsScreen() {
             <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
               <View style={styles.subRow}>
                 <View style={styles.subLeft}>
-                  <View style={[styles.rowIcon, { backgroundColor: isSubscribed ? '#0D1A12' : '#2A2A2A', borderColor: isSubscribed ? '#1A3D26' : '#3A3A3A', borderWidth: 1 }]}>
-                    <Feather name="zap" size={16} color={isSubscribed ? '#00E676' : '#8E8E93'} />
+                  <View style={[styles.rowIcon, { backgroundColor: isSubscribed ? colors.surface : colors.card, borderColor: isSubscribed ? colors.buy : colors.cardBorder, borderWidth: 1 }]}>
+                    <Feather name="zap" size={16} color={isSubscribed ? colors.buy : colors.textMuted} />
                   </View>
                   <View>
-                    <Text style={styles.rowLabel}>FXSnap Premium</Text>
-                    <Text style={styles.subStatus}>
+                    <Text style={[styles.rowLabel, { color: colors.text }]}>FXSnap Premium</Text>
+                    <Text style={[styles.subStatus, { color: colors.textSecondary }]}>
                       {isSubscribed ? 'Active' : 'Not subscribed'}
                     </Text>
                   </View>
                 </View>
                 {!isSubscribed && (
                   <TouchableOpacity
-                    style={styles.upgradeBtn}
+                    style={[styles.upgradeBtn, { backgroundColor: colors.primary }]}
                     onPress={() => router.push('/paywall')}
                   >
-                    <Text style={styles.upgradeBtnText}>Upgrade</Text>
+                    <Text style={[styles.upgradeBtnText, { color: colors.primaryForeground }]}>Upgrade</Text>
                   </TouchableOpacity>
                 )}
                 {isSubscribed && (
-                  <View style={styles.activeBadge}>
-                    <Text style={styles.activeBadgeText}>Active</Text>
+                  <View style={[styles.activeBadge, { backgroundColor: colors.surface, borderColor: colors.cardBorder }]}>
+                    <Text style={[styles.activeBadgeText, { color: colors.buy }]}>Active</Text>
                   </View>
                 )}
               </View>
-              <View style={styles.rowDivider} />
+              <View style={[styles.rowDivider, { backgroundColor: colors.cardBorder }]} />
               <TouchableOpacity style={styles.navigationRow} onPress={openSubscriptionManager}>
                 <View style={styles.rowLeft}>
-                  <View style={styles.rowIcon}>
-                    <Feather name="settings" size={16} color="#8E8E93" />
+                  <View style={[styles.rowIcon, { backgroundColor: colors.surface, borderColor: colors.cardBorder, borderWidth: 1 }]}>
+                    <Feather name="settings" size={16} color={colors.textMuted} />
                   </View>
-                  <Text style={styles.rowLabel}>Manage subscription</Text>
+                  <Text style={[styles.rowLabel, { color: colors.text }]}>Manage subscription</Text>
                 </View>
-                <Feather name="external-link" size={18} color="#8E8E93" />
+                <Feather name="external-link" size={18} color={colors.textMuted} />
               </TouchableOpacity>
-              <Text style={styles.cardNote}>
+              <Text style={[styles.cardNote, { color: colors.textSecondary }]}>
                 Subscription billing is handled through Google Play. Use the manage link above to update, cancel, or restore your subscription.
               </Text>
             </View>
@@ -406,27 +414,19 @@ export default function SettingsScreen() {
                     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                     updateSettings({ hapticsEnabled: v });
                   }}
-                  trackColor={{ false: '#2A2A2A', true: '#00E676' }}
+                  trackColor={{ false: '#E6E8EC', true: '#FFD84D' }}
                   thumbColor="#FFFFFF"
                 />
               </Row>
-              <View style={styles.rowDivider} />
+              <View style={[styles.rowDivider, { backgroundColor: colors.cardBorder }]} />
               <Row icon="moon" label="Dark Mode">
                 <Switch
                   value={settings.darkMode}
                   onValueChange={(v) => {
-                    if (v === false) {
-                      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-                      Alert.alert(
-                        'Light mode coming soon',
-                        'Light mode is not available yet. Dark mode remains enforced for this release.'
-                      );
-                      updateSettings({ darkMode: true });
-                      return;
-                    }
-                    updateSettings({ darkMode: true });
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    updateSettings({ darkMode: v });
                   }}
-                  trackColor={{ false: '#2A2A2A', true: '#00E676' }}
+                  trackColor={{ false: '#E6E8EC', true: '#FFD84D' }}
                   thumbColor="#FFFFFF"
                 />
               </Row>
@@ -438,24 +438,24 @@ export default function SettingsScreen() {
             <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}> 
               <TouchableOpacity style={styles.navigationRow} onPress={openTerms}>
                 <View style={styles.rowLeft}>
-                  <View style={styles.rowIcon}>
-                    <Feather name="file-text" size={16} color="#8E8E93" />
+                  <View style={[styles.rowIcon, { backgroundColor: colors.surface, borderColor: colors.cardBorder, borderWidth: 1 }]}>
+                    <Feather name="file-text" size={16} color={colors.textMuted} />
                   </View>
-                  <Text style={styles.rowLabel}>Terms of Use</Text>
+                  <Text style={[styles.rowLabel, { color: colors.text }]}>Terms of Use</Text>
                 </View>
-                <Feather name="external-link" size={18} color="#8E8E93" />
+                <Feather name="external-link" size={18} color={colors.textMuted} />
               </TouchableOpacity>
-              <View style={styles.rowDivider} />
+              <View style={[styles.rowDivider, { backgroundColor: colors.cardBorder }]} />
               <TouchableOpacity style={styles.navigationRow} onPress={openPrivacyPolicy}>
                 <View style={styles.rowLeft}>
-                  <View style={styles.rowIcon}>
-                    <Feather name="shield" size={16} color="#8E8E93" />
+                  <View style={[styles.rowIcon, { backgroundColor: colors.surface, borderColor: colors.cardBorder, borderWidth: 1 }]}>
+                    <Feather name="shield" size={16} color={colors.textMuted} />
                   </View>
-                  <Text style={styles.rowLabel}>Privacy policy</Text>
+                  <Text style={[styles.rowLabel, { color: colors.text }]}>Privacy policy</Text>
                 </View>
-                <Feather name="external-link" size={18} color="#8E8E93" />
+                <Feather name="external-link" size={18} color={colors.textMuted} />
               </TouchableOpacity>
-              <Text style={styles.cardNote}>
+              <Text style={[styles.cardNote, { color: colors.textSecondary }]}>
                 FXSnap analyzes chart images you select. We do not provide financial advice and may not have access to your trading account.
               </Text>
             </View>
@@ -466,30 +466,30 @@ export default function SettingsScreen() {
             <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}> 
               <TouchableOpacity style={styles.navigationRow} onPress={openSupportEmail}>
                 <View style={styles.rowLeft}>
-                  <View style={styles.rowIcon}>
-                    <Feather name="mail" size={16} color="#8E8E93" />
+                  <View style={[styles.rowIcon, { backgroundColor: colors.surface, borderColor: colors.cardBorder, borderWidth: 1 }]}>
+                    <Feather name="mail" size={16} color={colors.textMuted} />
                   </View>
-                  <Text style={styles.rowLabel}>{supportEmail}</Text>
+                  <Text style={[styles.rowLabel, { color: colors.text }]}>{supportEmail}</Text>
                 </View>
-                <Feather name="external-link" size={18} color="#8E8E93" />
+                <Feather name="external-link" size={18} color={colors.textMuted} />
               </TouchableOpacity>
-              <View style={styles.rowDivider} />
+              <View style={[styles.rowDivider, { backgroundColor: colors.cardBorder }]} />
               <TouchableOpacity style={styles.navigationRow} onPress={openRateApp}>
                 <View style={styles.rowLeft}>
-                  <View style={styles.rowIcon}>
-                    <Feather name="star" size={16} color="#8E8E93" />
+                  <View style={[styles.rowIcon, { backgroundColor: colors.surface, borderColor: colors.cardBorder, borderWidth: 1 }]}>
+                    <Feather name="star" size={16} color={colors.textMuted} />
                   </View>
-                  <Text style={styles.rowLabel}>Rate FXSnap</Text>
+                  <Text style={[styles.rowLabel, { color: colors.text }]}>Rate FXSnap</Text>
                 </View>
-                <Feather name="external-link" size={18} color="#8E8E93" />
+                <Feather name="external-link" size={18} color={colors.textMuted} />
               </TouchableOpacity>
-              <View style={styles.rowDivider} />
+              <View style={[styles.rowDivider, { backgroundColor: colors.cardBorder }]} />
               <TouchableOpacity style={styles.destructiveRow} onPress={confirmDeleteAccount}>
                 <View style={styles.rowLeft}>
-                  <View style={[styles.rowIcon, { backgroundColor: '#2A0B0B' }]}> 
-                    <Feather name="trash-2" size={16} color="#FF4D4F" />
+                  <View style={[styles.rowIcon, { backgroundColor: colors.surface, borderColor: colors.destructive, borderWidth: 1 }]}> 
+                    <Feather name="trash-2" size={16} color={colors.destructive} />
                   </View>
-                  <Text style={styles.destructiveText}>Delete Account</Text>
+                  <Text style={[styles.destructiveText, { color: colors.destructive } ]}>Delete Account</Text>
                 </View>
               </TouchableOpacity>
               <Text style={styles.cardNote}>
@@ -506,31 +506,31 @@ export default function SettingsScreen() {
             />
             <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
               <TouchableOpacity style={styles.backupRow} onPress={exportBackup}>
-                <View style={styles.backupIcon}>
-                  <Feather name="upload" size={17} color="#00E676" />
+                <View style={[styles.backupIcon, { backgroundColor: colors.surface, borderColor: colors.cardBorder, borderWidth: 1 }] }>
+                  <Feather name="upload" size={17} color={colors.buy} />
                 </View>
                 <View style={styles.backupCopy}>
-                  <Text style={styles.rowLabel}>Export backup JSON</Text>
-                  <Text style={styles.backupDescription}>Copy all account data to the clipboard</Text>
+                  <Text style={[styles.rowLabel, { color: colors.text }]}>Export backup JSON</Text>
+                  <Text style={[styles.backupDescription, { color: colors.textMuted }]}>Copy all account data to the clipboard</Text>
                 </View>
-                <Feather name="chevron-right" size={18} color="#8E8E93" />
+                <Feather name="chevron-right" size={18} color={colors.textMuted} />
               </TouchableOpacity>
-              <View style={styles.rowDivider} />
+              <View style={[styles.rowDivider, { backgroundColor: colors.cardBorder }]} />
               <TouchableOpacity style={styles.backupRow} onPress={importBackup}>
-                <View style={styles.backupIcon}>
-                  <Feather name="download" size={17} color="#00E676" />
+                <View style={[styles.backupIcon, { backgroundColor: colors.surface, borderColor: colors.cardBorder, borderWidth: 1 }] }>
+                  <Feather name="download" size={17} color={colors.buy} />
                 </View>
                 <View style={styles.backupCopy}>
-                  <Text style={styles.rowLabel}>Import backup JSON</Text>
-                  <Text style={styles.backupDescription}>Restore from copied backup data</Text>
+                  <Text style={[styles.rowLabel, { color: colors.text }]}>Import backup JSON</Text>
+                  <Text style={[styles.backupDescription, { color: colors.textMuted }]}>Restore from copied backup data</Text>
                 </View>
-                <Feather name="chevron-right" size={18} color="#8E8E93" />
+                <Feather name="chevron-right" size={18} color={colors.textMuted} />
               </TouchableOpacity>
             </View>
           </Animated.View>
 
-          <Text style={styles.versionText}>FXSnap v1.0.0</Text>
-          <Text style={styles.disclaimer}>
+          <Text style={[styles.versionText, { color: colors.textSecondary }]}>FXSnap v1.0.0</Text>
+          <Text style={[styles.disclaimer, { color: colors.textSecondary }]}> 
             This app does not provide financial advice. Trade at your own risk.
           </Text>
         </ScrollView>
@@ -540,7 +540,7 @@ export default function SettingsScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#000000' },
+  container: { flex: 1 },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -552,11 +552,9 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 12,
-    backgroundColor: '#1A1A1A',
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
-    borderColor: '#2A2A2A',
   },
   headerTitle: { fontSize: 17, fontFamily: 'Inter_600SemiBold', color: '#FFFFFF' },
   scroll: { flex: 1 },
@@ -575,11 +573,9 @@ const styles = StyleSheet.create({
     color: '#48484A',
   },
   card: {
-    backgroundColor: '#1A1A1A',
     borderRadius: 16,
     padding: 16,
     borderWidth: 1,
-    borderColor: '#2A2A2A',
   },
   row: {
     flexDirection: 'row',
@@ -592,12 +588,11 @@ const styles = StyleSheet.create({
     width: 32,
     height: 32,
     borderRadius: 8,
-    backgroundColor: '#2A2A2A',
     alignItems: 'center',
     justifyContent: 'center',
   },
   rowLabel: { fontSize: 15, fontFamily: 'Inter_500Medium', color: '#FFFFFF' },
-  rowDivider: { height: 1, backgroundColor: '#2A2A2A', marginVertical: 8 },
+  rowDivider: { height: 1, marginVertical: 8 },
   navigationRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -614,7 +609,6 @@ const styles = StyleSheet.create({
     width: 34,
     height: 34,
     borderRadius: 9,
-    backgroundColor: '#0D1A12',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -622,7 +616,6 @@ const styles = StyleSheet.create({
   backupDescription: {
     fontSize: 12,
     fontFamily: 'Inter_400Regular',
-    color: '#8E8E93',
   },
   inputRow: {
     flexDirection: 'row',
@@ -702,11 +695,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#0D1A12',
     borderRadius: 12,
     padding: 16,
     borderWidth: 1,
-    borderColor: '#1A3D26',
   },
   calcResultLabel: { fontSize: 15, fontFamily: 'Inter_500Medium', color: '#8E8E93' },
   calcResultValue: { fontSize: 28, fontFamily: 'Inter_700Bold', color: '#00E676' },
@@ -766,7 +757,6 @@ const styles = StyleSheet.create({
   disclaimer: {
     fontSize: 12,
     fontFamily: 'Inter_400Regular',
-    color: '#48484A',
     textAlign: 'center',
     lineHeight: 18,
   },

@@ -86,7 +86,7 @@ export default function PaywallScreen() {
   return (
     <ScreenWrapper style={[styles.container, { backgroundColor: colors.background }]} contentContainerStyle={[styles.scrollContent, { paddingBottom: botPad + 24 }]}>
       <View style={styles.header}>
-        <TouchableOpacity style={styles.closeBtn} onPress={() => router.back()}>
+        <TouchableOpacity style={[styles.closeBtn, { backgroundColor: colors.card }]} onPress={() => router.back()}>
           <Feather name="x" size={20} color={colors.textSecondary} />
         </TouchableOpacity>
       </View>
@@ -98,11 +98,11 @@ export default function PaywallScreen() {
           <Text style={[styles.subtitle, { color: colors.textSecondary }]}>Unlock full access to all features</Text>
         </Animated.View>
 
-        <Animated.View entering={FadeInUp.delay(200).duration(600)} style={styles.featuresList}>
+        <Animated.View entering={FadeInUp.delay(200).duration(600)} style={[styles.featuresList, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
           {FEATURES.map((f) => (
             <View key={f} style={styles.featureRow}>
               <View style={[styles.featureCheck, { backgroundColor: colors.buy }]}>
-                <Feather name="check" size={14} color="#000" />
+                <Feather name="check" size={14} color={colors.primaryForeground} />
               </View>
               <Text style={[styles.featureText, { color: colors.text }]}>{f}</Text>
             </View>
@@ -212,7 +212,6 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: '#1C1C1E',
     alignItems: 'center',
     justifyContent: 'center',
   },

@@ -438,7 +438,7 @@ export default function OnboardingScreen() {
           <Text style={[styles.paywallSub, { color: colors.textSecondary }]}>Unlock full access to all features</Text>
         </Animated.View>
 
-        <Animated.View entering={FadeInUp.delay(200).duration(600)} style={styles.featureList}>
+        <Animated.View entering={FadeInUp.delay(200).duration(600)} style={[styles.featureList, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
           {[
             'Unlimited chart analysis',
             'AI-powered trade insights',
@@ -459,7 +459,7 @@ export default function OnboardingScreen() {
           {PLANS.map((plan) => (
             <TouchableOpacity
               key={plan.id}
-              style={[styles.planCard, selectedPlan === plan.id && styles.planCardSelected, { backgroundColor: colors.card, borderColor: selectedPlan === plan.id ? colors.primary : colors.cardBorder }]}
+              style={[styles.planCard, selectedPlan === plan.id && styles.planCardSelected, { backgroundColor: colors.surface, borderColor: selectedPlan === plan.id ? colors.primary : colors.cardBorder }]}
               onPress={() => {
                 Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                 setSelectedPlan(plan.id);

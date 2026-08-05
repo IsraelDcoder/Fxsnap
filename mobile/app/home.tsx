@@ -40,6 +40,7 @@ function getMarketSessions(): Session[] {
 }
 
 function SessionPill({ session }: { session: Session }) {
+  const colors = useColors();
   const pulse = useSharedValue(1);
 
   useEffect(() => {
@@ -62,9 +63,9 @@ function SessionPill({ session }: { session: Session }) {
   }));
 
   return (
-    <View style={[styles.sessionPill, !session.open && styles.sessionPillClosed]}>
-      <Animated.View style={[styles.sessionDot, { backgroundColor: session.open ? session.color : '#48484A' }, dotStyle]} />
-      <Text style={[styles.sessionText, { color: session.open ? '#FFFFFF' : '#48484A' }]}>
+    <View style={[styles.sessionPill, !session.open && styles.sessionPillClosed, { backgroundColor: session.open ? colors.surface : colors.card, borderColor: colors.cardBorder }]}>
+      <Animated.View style={[styles.sessionDot, { backgroundColor: session.open ? session.color : colors.textMuted }, dotStyle]} />
+      <Text style={[styles.sessionText, { color: session.open ? colors.text : colors.textSecondary }]}>
         {session.name}
       </Text>
     </View>
@@ -72,6 +73,7 @@ function SessionPill({ session }: { session: Session }) {
 }
 
 function MarketBar() {
+  const colors = useColors();
   const [sessions, setSessions] = useState<Session[]>(getMarketSessions());
 
   useEffect(() => {
@@ -86,10 +88,10 @@ function MarketBar() {
   const openCount = sessions.filter((s) => s.open).length;
 
   return (
-    <Animated.View entering={FadeInDown.delay(320).duration(600)} style={styles.marketBar}>
+    <Animated.View entering={FadeInDown.delay(320).duration(600)} style={[styles.marketBar, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
       <View style={styles.marketBarLeft}>
-        <View style={[styles.liveDot, { backgroundColor: openCount > 0 ? '#00E676' : '#3A3A3A' }]} />
-        <Text style={styles.marketBarLabel}>{openCount > 0 ? `${openCount} open` : 'Closed'}</Text>
+        <View style={[styles.liveDot, { backgroundColor: openCount > 0 ? colors.buy : colors.textMuted }]} />
+        <Text style={[styles.marketBarLabel, { color: colors.textSecondary }]}>{openCount > 0 ? `${openCount} open` : 'Closed'}</Text>
       </View>
       <View style={styles.sessionRow}>
         {sessions.map((s) => (
@@ -111,6 +113,7 @@ const INSIGHTS = [
 ];
 
 function InsightCard() {
+  const colors = useColors();
   const [index, setIndex] = useState(0);
   const [visible, setVisible] = useState(true);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -144,25 +147,25 @@ function InsightCard() {
   const insight = INSIGHTS[index];
 
   return (
-    <Animated.View entering={FadeInDown.delay(400).duration(600)} style={styles.insightCard}>
+    <Animated.View entering={FadeInDown.delay(400).duration(600)} style={[styles.insightCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
       <TouchableOpacity style={styles.insightInner} onPress={handleTap} activeOpacity={0.85}>
-        <View style={styles.insightIcon}>
-          <Feather name={insight.icon as any} size={18} color="#00E676" />
+        <View style={[styles.insightIcon, { backgroundColor: colors.surface, borderColor: colors.cardBorder }]}>
+          <Feather name={insight.icon as any} size={18} color={colors.buy} />
         </View>
         <View style={styles.insightBody}>
-          <Text style={styles.insightLabel}>Daily Insight</Text>
+          <Text style={[styles.insightLabel, { color: colors.buy }]}>Daily Insight</Text>
           {visible ? (
-            <Animated.Text entering={FadeIn.duration(300)} exiting={FadeOut.duration(200)} style={styles.insightText}>
+            <Animated.Text entering={FadeIn.duration(300)} exiting={FadeOut.duration(200)} style={[styles.insightText, { color: colors.textSecondary }]}>
               {insight.text}
             </Animated.Text>
           ) : null}
         </View>
-        <Feather name="chevron-right" size={16} color="#48484A" />
+        <Feather name="chevron-right" size={16} color={colors.textMuted} />
       </TouchableOpacity>
       {/* Progress dots */}
       <View style={styles.insightDots}>
         {INSIGHTS.map((_, i) => (
-          <View key={i} style={[styles.insightDot, i === index && styles.insightDotActive]} />
+          <View key={i} style={[styles.insightDot, i === index && styles.insightDotActive, { backgroundColor: i === index ? colors.buy : colors.cardBorder }]} />
         ))}
       </View>
     </Animated.View>
@@ -171,6 +174,7 @@ function InsightCard() {
 
 // ─── Account snapshot ─────────────────────────────────────────────────────────
 function AccountSnapshot() {
+  const colors = useColors();
   const { settings } = useApp();
   const estimatedLot = Math.max(
     0.01,
@@ -178,23 +182,23 @@ function AccountSnapshot() {
   ).toFixed(2);
 
   return (
-    <Animated.View entering={FadeInUp.delay(460).duration(600)} style={styles.snapshotCard}>
+    <Animated.View entering={FadeInUp.delay(460).duration(600)} style={[styles.snapshotCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
       <View style={styles.snapItem}>
-        <Text style={styles.snapLabel}>Balance</Text>
-        <Text style={styles.snapValue}>${settings.accountBalance.toLocaleString()}</Text>
+        <Text style={[styles.snapLabel, { color: colors.textSecondary }]}>Balance</Text>
+        <Text style={[styles.snapValue, { color: colors.text }]}>{`$${settings.accountBalance.toLocaleString()}`}</Text>
       </View>
-      <View style={styles.snapDivider} />
+      <View style={[styles.snapDivider, { backgroundColor: colors.cardBorder }]} />
       <View style={styles.snapItem}>
-        <Text style={styles.snapLabel}>Risk / trade</Text>
-        <Text style={styles.snapValue}>{settings.riskPercent}%</Text>
+        <Text style={[styles.snapLabel, { color: colors.textSecondary }]}>Risk / trade</Text>
+        <Text style={[styles.snapValue, { color: colors.text }]}>{settings.riskPercent}%</Text>
       </View>
-      <View style={styles.snapDivider} />
+      <View style={[styles.snapDivider, { backgroundColor: colors.cardBorder }]} />
       <View style={styles.snapItem}>
-        <Text style={styles.snapLabel}>Est. lot (20 pip)</Text>
-        <Text style={[styles.snapValue, { color: '#00E676' }]}>{estimatedLot}</Text>
+        <Text style={[styles.snapLabel, { color: colors.textSecondary }]}>Est. lot (20 pip)</Text>
+        <Text style={[styles.snapValue, { color: colors.buy }]}>{estimatedLot}</Text>
       </View>
-      <TouchableOpacity style={styles.snapEdit} onPress={() => router.push('/settings')}>
-        <Feather name="edit-2" size={13} color="#8E8E93" />
+      <TouchableOpacity style={[styles.snapEdit, { backgroundColor: colors.surface, borderColor: colors.cardBorder }]} onPress={() => router.push('/settings')}>
+        <Feather name="edit-2" size={13} color={colors.textMuted} />
       </TouchableOpacity>
     </Animated.View>
   );
@@ -216,13 +220,20 @@ function ActionButton({
   primary?: boolean;
   badge?: number;
 }) {
+  const colors = useColors();
   const scale = useSharedValue(1);
   const animStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
 
   return (
     <Animated.View style={[animStyle, { width: '100%' }]}>
       <TouchableOpacity
-        style={[styles.actionBtn, primary && styles.actionBtnPrimary]}
+        style={[
+          styles.actionBtn,
+          {
+            backgroundColor: primary ? colors.primary : colors.card,
+            borderColor: primary ? colors.primary : colors.cardBorder,
+          },
+        ]}
         onPress={() => {
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
           scale.value = withSpring(0.97, { damping: 12, stiffness: 400 }, () => {
@@ -232,21 +243,21 @@ function ActionButton({
         }}
         activeOpacity={0.9}
       >
-        <View style={[styles.actionIconBox, primary && styles.actionIconBoxPrimary]}>
-          <Feather name={icon as any} size={20} color={primary ? '#000' : '#FFFFFF'} />
+        <View style={[styles.actionIconBox, { backgroundColor: primary ? colors.primaryForeground : colors.surface, borderColor: primary ? colors.primaryForeground : colors.cardBorder }]}>
+          <Feather name={icon as any} size={20} color={primary ? colors.primaryForeground : colors.text} />
         </View>
         <View style={styles.actionLabels}>
-          <Text style={[styles.actionLabel, primary && styles.actionLabelPrimary]}>{label}</Text>
+          <Text style={[styles.actionLabel, { color: primary ? colors.primaryForeground : colors.text }]}>{label}</Text>
           {sublabel && (
-            <Text style={[styles.actionSub, primary && styles.actionSubPrimary]}>{sublabel}</Text>
+            <Text style={[styles.actionSub, { color: primary ? colors.primaryForeground : colors.textSecondary }]}>{sublabel}</Text>
           )}
         </View>
         {badge != null && badge > 0 && (
-          <View style={styles.badge}>
-            <Text style={styles.badgeText}>{badge}</Text>
+          <View style={[styles.badge, { backgroundColor: colors.surface, borderColor: colors.cardBorder }]}>
+            <Text style={[styles.badgeText, { color: colors.buy }]}>{badge}</Text>
           </View>
         )}
-        <Feather name="chevron-right" size={18} color={primary ? '#00000060' : '#48484A'} />
+        <Feather name="chevron-right" size={18} color={primary ? colors.primaryForeground : colors.textMuted} />
       </TouchableOpacity>
     </Animated.View>
   );
