@@ -57,72 +57,614 @@ const StrategyResponseSchema = z.object({
   const titles = value.sections.map((section) => section.title);
   if (new Set(titles).size !== required.length || required.some((title) => !titles.includes(title))) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'AI response must contain the five required strategy sections.' });
 });
-const ANALYSIS_STATUS = ['success', 'no_trade', 'invalid_image'];
-// Lenient schema: the AI may return minimal fields when it concludes
-// "invalid_image". Post-parse normalization fills safe defaults, and the
-// validation layer enforces the trade rules on "success" verdicts.
+const ANALYSIS_STATUS = ['success', 'no_trade', 'invalid_image', 'ai_unavailable', 'ai_invalid_response'];
+const DEFAULT_CHART = {
+  is_chart: false,
+  pair: '',
+  timeframe: '',
+  chart_quality: 'poor',
+  price_scale_visible: false,
+  candles_visible: false,
+  has_enough_candles: false,
+};
+const DEFAULT_ANALYSIS = {
+  trend: 'neutral',
+  market_structure: '',
+  structure_bias: 'neutral',
+  volatility: 'low',
+  volume: 'not_visible',
+  indicators_detected: [],
+  price_action: [],
+  structure: '',
+  sentiment: 'neutral',
+  indicators: 'none',
+  notes: '',
+};
+const DEFAULT_ZONES = {
+  support: 'not_clear',
+  resistance: 'not_clear',
+  demand: [],
+  supply: [],
+  liquidity: [],
+};
+const DEFAULT_STRATEGY = {
+  daily_trend: 'unavailable',
+  higher_timeframe_confirmation: 'unavailable',
+  zone_status: 'unavailable',
+  liquidity_sweep: 'unavailable',
+  bos: 'none',
+  rsi_confirmation: 'unavailable',
+};
+const DEFAULT_TRADE_SETUP = {
+  type: 'none',
+  entry_zone: 'none',
+  stop_loss: 'none',
+  take_profit: 'none',
+  risk_reward: null,
+};
+const DEFAULT_REASONS = [];
+
 const TradeAnalysisSchema = z.object({
   status: z.enum(ANALYSIS_STATUS),
+  message: z.string().trim().optional(),
+  detectedPair: z.string().trim().optional().nullable(),
+  timeframe: z.string().trim().optional().nullable(),
+  chart: z.object({
+    is_chart: z.boolean(),
+    pair: z.string().trim().optional(),
+    timeframe: z.string().trim().optional(),
+    chart_quality: z.enum(['good', 'acceptable', 'poor']),
+    price_scale_visible: z.boolean(),
+    candles_visible: z.boolean(),
+    has_enough_candles: z.boolean(),
+  }),
   analysis: z.object({
-    trend: z.enum(['bullish', 'bearish', 'neutral']).optional(),
-    structure: z.string().trim().max(300).optional(),
-    volatility: z.enum(['low', 'moderate', 'high']).optional(),
-    volume: z.enum(['low', 'moderate', 'high', 'not_visible']).optional(),
-    sentiment: z.enum(['bullish', 'bearish', 'neutral']).optional(),
-    indicators: z.string().trim().max(200).optional(),
-    notes: z.string().trim().max(400).optional(),
-  }).optional(),
+    trend: z.enum(['bullish', 'bearish', 'neutral']),
+    market_structure: z.string().trim().max(400),
+    structure_bias: z.enum(['bullish', 'bearish', 'neutral']),
+    volatility: z.enum(['low', 'moderate', 'high']),
+    volume: z.enum(['visible', 'not_visible']),
+    indicators_detected: z.array(z.object({
+      name: z.string().trim().max(50),
+      visible: z.boolean(),
+      interpretation: z.string().trim().max(200).optional(),
+    })).optional(),
+    price_action: z.array(z.string().trim().max(100)),
+    structure: z.string().trim().max(300),
+    sentiment: z.enum(['bullish', 'bearish', 'neutral']),
+    indicators: z.string().trim().max(200),
+    notes: z.string().trim().max(400),
+  }),
   zones: z.object({
-    support: z.string().trim().max(200).optional(),
-    resistance: z.string().trim().max(200).optional(),
-    liquidity: z.string().trim().max(200).optional(),
-  }).optional(),
+    support: z.string().trim().max(200),
+    resistance: z.string().trim().max(200),
+    demand: z.array(z.string().trim().max(200)),
+    supply: z.array(z.string().trim().max(200)),
+    liquidity: z.array(z.string().trim().max(200)),
+  }),
+  strategy: z.object({
+    daily_trend: z.enum(['bullish', 'bearish', 'neutral', 'unavailable']),
+    higher_timeframe_confirmation: z.enum(['confirmed', 'unavailable', 'conflicting']),
+    zone_status: z.enum(['inside_zone', 'near_zone', 'outside_zone', 'unavailable']),
+    liquidity_sweep: z.enum(['bullish', 'bearish', 'none', 'unavailable']),
+    bos: z.enum(['bullish', 'bearish', 'none', 'unavailable']),
+    rsi_confirmation: z.enum(['bullish', 'bearish', 'neutral', 'unavailable']),
+  }),
   trade_setup: z.object({
-    type: z.enum(['buy', 'sell', 'none']).optional(),
-    entry_zone: z.string().trim().max(200).optional(),
-    stop_loss: z.string().trim().max(200).optional(),
-    take_profit: z.string().trim().max(200).optional(),
-    risk_reward: z.union([z.number(), z.string().trim().max(20)]).optional(),
-  }).optional(),
-  confidence: z.number().min(0).max(100).optional(),
+    type: z.enum(['buy', 'sell', 'none']),
+    entry_zone: z.string().trim().max(200),
+    stop_loss: z.string().trim().max(200),
+    take_profit: z.string().trim().max(200),
+    risk_reward: z.number().nullable(),
+  }),
+  confidence: z.number().min(0).max(100),
+  reasons: z.array(z.string().trim().max(300)),
+  market_data_timestamp: z.string().optional().nullable(),
+  market_data_source: z.string().trim().optional().nullable(),
 });
 
-/** Fill safe defaults so every state returns the same complete JSON shape. */
-function normalizeAnalysis(raw) {
-  const analysis = raw.analysis || {};
-  const zones = raw.zones || {};
-  const trade = raw.trade_setup || {};
-  const normalized = {
-    status: raw.status,
+function truncateText(value, maxLength = 2000) {
+  if (typeof value !== 'string') return '';
+  if (value.length <= maxLength) return value;
+  return `${value.slice(0, maxLength - 3)}...`;
+}
+
+function normalizeGeminiModelName(model) {
+  return String(model || '')
+    .replace(/^models\//i, '')
+    .trim();
+}
+
+function parseBoolean(value, fallback = false) {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'true') return true;
+    if (normalized === 'false') return false;
+  }
+  return fallback;
+}
+
+function parseStringArray(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => String(item || '').trim())
+      .filter((item) => item.length > 0);
+  }
+  if (typeof value === 'string') {
+    return value
+      .split(/[\n,;]+/)
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0);
+  }
+  return [];
+}
+
+function parseIndicatorList(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => typeof item === 'object' && item !== null
+        ? { name: String(item.name || '').trim(), visible: Boolean(item.visible), interpretation: item.interpretation ? String(item.interpretation).trim() : undefined }
+        : { name: String(item || '').trim(), visible: true })
+      .filter((item) => item.name.length > 0);
+  }
+  return [];
+}
+
+function parseRiskReward(value) {
+  if (typeof value === 'number') return value;
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  const ratioMatch = trimmed.match(/^(\d+(?:\.\d+)?)\s*[:x]\s*(\d+(?:\.\d+)?)$/i);
+  if (ratioMatch) {
+    const numerator = Number(ratioMatch[1]);
+    const denominator = Number(ratioMatch[2]);
+    if (denominator > 0) return numerator / denominator;
+  }
+  const numberMatch = trimmed.match(/-?\d+(?:\.\d+)?/);
+  if (numberMatch) {
+    const numeric = Number(numberMatch[0]);
+    if (!Number.isNaN(numeric)) return numeric;
+  }
+  return null;
+}
+
+function parseConfidence(value) {
+  if (typeof value === 'number' && !Number.isNaN(value)) return Math.max(0, Math.min(100, value));
+  if (typeof value === 'string') {
+    const parsed = Number(value.trim());
+    if (!Number.isNaN(parsed)) return Math.max(0, Math.min(100, parsed));
+  }
+  return 0;
+}
+
+function ensureString(value, fallback = '') {
+  return typeof value === 'string' ? value.trim() : fallback;
+}
+
+function ensureNullableString(value) {
+  if (typeof value === 'string') return value.trim();
+  return null;
+}
+
+function parseJsonPayload(rawContent) {
+  if (rawContent == null) return null;
+  if (typeof rawContent === 'object') return rawContent;
+  const trimmed = String(rawContent).trim();
+  if (!trimmed) return null;
+  try { return JSON.parse(trimmed); } catch {
+    const match = trimmed.match(/\{[\s\S]*\}/);
+    if (match) {
+      try { return JSON.parse(match[0]); } catch {}
+    }
+  }
+  return null;
+}
+
+function parseJsonField(value) {
+  if (typeof value !== 'string') return value;
+  const parsed = parseJsonPayload(value);
+  return parsed === null ? value.trim() : parsed;
+}
+
+function canonicalizeEnum(value, mapping) {
+  if (typeof value !== 'string') return value;
+  const key = value.trim().toLowerCase().replace(/[\s\-]+/g, '_');
+  return mapping[key] ?? value.trim();
+}
+
+function canonicalizeRawAnalysis(raw) {
+  if (typeof raw === 'string') raw = parseJsonPayload(raw);
+  if (!raw || typeof raw !== 'object') return null;
+
+  const status = canonicalizeEnum(raw.status, {
+    success: 'success',
+    no_trade: 'no_trade',
+    'no trade': 'no_trade',
+    invalid_image: 'invalid_image',
+    'invalid image': 'invalid_image',
+    ai_unavailable: 'ai_unavailable',
+    'ai unavailable': 'ai_unavailable',
+    unavailable: 'ai_unavailable',
+    ai_invalid_response: 'ai_invalid_response',
+    'ai invalid response': 'ai_invalid_response',
+  });
+
+  if (!status) return null;
+
+  const chartRaw = parseJsonField(raw.chart) || {};
+  const analysisRaw = parseJsonField(raw.analysis) || {};
+  const zonesRaw = parseJsonField(raw.zones) || {};
+  const strategyRaw = parseJsonField(raw.strategy) || {};
+  const tradeRaw = parseJsonField(raw.trade_setup) || {};
+
+  const chartQuality = canonicalizeEnum(chartRaw.chart_quality, {
+    good: 'good',
+    acceptable: 'acceptable',
+    poor: 'poor',
+  }) || (status === 'invalid_image' ? 'poor' : 'acceptable');
+
+  const marketStructure = ensureString(analysisRaw.market_structure, ensureString(analysisRaw.structure, ''));
+  const structureBias = canonicalizeEnum(analysisRaw.structure_bias, {
+    bullish: 'bullish',
+    bearish: 'bearish',
+    neutral: 'neutral',
+  }) || canonicalizeEnum(analysisRaw.trend, {
+    bullish: 'bullish',
+    bearish: 'bearish',
+    neutral: 'neutral',
+  }) || 'neutral';
+
+  return {
+    status,
+    message: ensureString(raw.message),
+    detectedPair: ensureNullableString(raw.detectedPair || raw.pair),
+    timeframe: ensureNullableString(raw.timeframe),
+    chart: {
+      ...DEFAULT_CHART,
+      is_chart: parseBoolean(chartRaw.is_chart, status !== 'invalid_image'),
+      pair: ensureString(chartRaw.pair, ensureString(raw.pair)),
+      timeframe: ensureString(chartRaw.timeframe, ensureString(raw.timeframe)),
+      chart_quality: chartQuality,
+      price_scale_visible: parseBoolean(chartRaw.price_scale_visible, true),
+      candles_visible: parseBoolean(chartRaw.candles_visible, true),
+      has_enough_candles: parseBoolean(chartRaw.has_enough_candles, true),
+    },
     analysis: {
-      trend: analysis.trend || 'neutral',
-      structure: analysis.structure || '',
-      volatility: analysis.volatility || 'low',
-      volume: analysis.volume || 'not_visible',
-      sentiment: analysis.sentiment || 'neutral',
-      indicators: analysis.indicators || 'none',
-      notes: analysis.notes || '',
+      ...DEFAULT_ANALYSIS,
+      trend: canonicalizeEnum(analysisRaw.trend, {
+        bullish: 'bullish',
+        bearish: 'bearish',
+        neutral: 'neutral',
+      }) || 'neutral',
+      market_structure: marketStructure,
+      structure_bias: structureBias,
+      volatility: canonicalizeEnum(analysisRaw.volatility, {
+        low: 'low',
+        moderate: 'moderate',
+        high: 'high',
+      }) || 'low',
+      volume: canonicalizeEnum(analysisRaw.volume, {
+        visible: 'visible',
+        not_visible: 'not_visible',
+        'not visible': 'not_visible',
+      }) || 'not_visible',
+      indicators_detected: parseIndicatorList(analysisRaw.indicators_detected),
+      price_action: parseStringArray(analysisRaw.price_action),
+      structure: ensureString(analysisRaw.structure, marketStructure),
+      sentiment: canonicalizeEnum(analysisRaw.sentiment, {
+        bullish: 'bullish',
+        bearish: 'bearish',
+        neutral: 'neutral',
+      }) || 'neutral',
+      indicators: ensureString(analysisRaw.indicators, 'none'),
+      notes: ensureString(analysisRaw.notes),
     },
     zones: {
-      support: zones.support || 'not_clear',
-      resistance: zones.resistance || 'not_clear',
-      liquidity: zones.liquidity || 'not_clear',
+      ...DEFAULT_ZONES,
+      support: ensureString(zonesRaw.support, ensureString(raw.support, DEFAULT_ZONES.support)),
+      resistance: ensureString(zonesRaw.resistance, ensureString(raw.resistance, DEFAULT_ZONES.resistance)),
+      demand: parseStringArray(zonesRaw.demand),
+      supply: parseStringArray(zonesRaw.supply),
+      liquidity: parseStringArray(zonesRaw.liquidity),
+    },
+    strategy: {
+      ...DEFAULT_STRATEGY,
+      daily_trend: canonicalizeEnum(strategyRaw.daily_trend, {
+        bullish: 'bullish',
+        bearish: 'bearish',
+        neutral: 'neutral',
+        unavailable: 'unavailable',
+      }) || 'unavailable',
+      higher_timeframe_confirmation: canonicalizeEnum(strategyRaw.higher_timeframe_confirmation, {
+        confirmed: 'confirmed',
+        unavailable: 'unavailable',
+        conflicting: 'conflicting',
+      }) || 'unavailable',
+      zone_status: canonicalizeEnum(strategyRaw.zone_status, {
+        inside_zone: 'inside_zone',
+        near_zone: 'near_zone',
+        outside_zone: 'outside_zone',
+        unavailable: 'unavailable',
+      }) || 'unavailable',
+      liquidity_sweep: canonicalizeEnum(strategyRaw.liquidity_sweep, {
+        bullish: 'bullish',
+        bearish: 'bearish',
+        none: 'none',
+        unavailable: 'unavailable',
+      }) || 'unavailable',
+      bos: canonicalizeEnum(strategyRaw.bos, {
+        bullish: 'bullish',
+        bearish: 'bearish',
+        none: 'none',
+        unavailable: 'unavailable',
+      }) || 'none',
+      rsi_confirmation: canonicalizeEnum(strategyRaw.rsi_confirmation, {
+        bullish: 'bullish',
+        bearish: 'bearish',
+        neutral: 'neutral',
+        unavailable: 'unavailable',
+      }) || 'unavailable',
     },
     trade_setup: {
-      type: trade.type || 'none',
-      entry_zone: trade.entry_zone || 'none',
-      stop_loss: trade.stop_loss || 'none',
-      take_profit: trade.take_profit || 'none',
-      risk_reward: trade.risk_reward != null ? trade.risk_reward : 'none',
+      ...DEFAULT_TRADE_SETUP,
+      type: canonicalizeEnum(tradeRaw.type, {
+        buy: 'buy',
+        sell: 'sell',
+        none: 'none',
+        long: 'buy',
+        short: 'sell',
+      }) || 'none',
+      entry_zone: ensureString(tradeRaw.entry_zone, 'none'),
+      stop_loss: ensureString(tradeRaw.stop_loss, 'none'),
+      take_profit: ensureString(tradeRaw.take_profit, 'none'),
+      risk_reward: parseRiskReward(tradeRaw.risk_reward),
     },
-    confidence: typeof raw.confidence === 'number' ? raw.confidence : 0,
+    confidence: parseConfidence(raw.confidence),
+    reasons: parseStringArray(raw.reasons),
+    market_data_timestamp: ensureNullableString(raw.market_data_timestamp),
+    market_data_source: ensureNullableString(raw.market_data_source),
   };
-  // The disciplined output contract requires "no_trade" to always carry
-  // trade_setup.type === "none".
-  if (normalized.status === 'no_trade') {
-    normalized.trade_setup.type = 'none';
+}
+
+function normalizeAnalysis(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const analysis = raw.analysis || DEFAULT_ANALYSIS;
+  const zones = raw.zones || DEFAULT_ZONES;
+  const strategy = raw.strategy || DEFAULT_STRATEGY;
+  const trade = raw.trade_setup || DEFAULT_TRADE_SETUP;
+
+  return {
+    status: raw.status,
+    message: typeof raw.message === 'string' ? raw.message.trim() : undefined,
+    detectedPair: typeof raw.detectedPair === 'string' ? raw.detectedPair.trim() : null,
+    timeframe: typeof raw.timeframe === 'string' ? raw.timeframe.trim() : null,
+    chart: {
+      ...DEFAULT_CHART,
+      ...(raw.chart || {}),
+    },
+    analysis: {
+      ...DEFAULT_ANALYSIS,
+      ...(analysis || {}),
+    },
+    zones: {
+      ...DEFAULT_ZONES,
+      ...(zones || {}),
+    },
+    strategy: {
+      ...DEFAULT_STRATEGY,
+      ...(strategy || {}),
+    },
+    trade_setup: {
+      ...DEFAULT_TRADE_SETUP,
+      ...(trade || {}),
+    },
+    confidence: parseConfidence(raw.confidence),
+    reasons: Array.isArray(raw.reasons) ? parseStringArray(raw.reasons) : [],
+    market_data_timestamp: typeof raw.market_data_timestamp === 'string' ? raw.market_data_timestamp.trim() : null,
+    market_data_source: typeof raw.market_data_source === 'string' ? raw.market_data_source.trim() : null,
+  };
+}
+
+/** Build structured observations from normalized AI output without inventing missing info. */
+function buildStructuredObservations(norm) {
+  const obs = {
+    pair: norm.detectedPair || norm.chart?.pair || null,
+    chart_layout: 'single_timeframe',
+    timeframes_detected: [],
+    zones: norm.zones || {},
+    m15: norm.m15 || null,
+    raw: norm,
+  };
+
+  // If the AI returned an explicit timeframes_detected field, trust it.
+  if (Array.isArray(norm.timeframes_detected) && norm.timeframes_detected.length > 0) {
+    obs.chart_layout = norm.timeframes_detected.length > 1 ? 'multi_timeframe' : 'single_timeframe';
+    obs.timeframes_detected = norm.timeframes_detected.map((tf) => ({ timeframe: String(tf.timeframe || '').toUpperCase(), observations: tf.observations || {} }));
+    return obs;
   }
-  return normalized;
+
+  // Fallback: use chart.timeframe as a single detected panel.
+  const tf = (norm.timeframe || norm.chart?.timeframe || '').toString().toUpperCase();
+  const structureText = String(norm.analysis?.market_structure || norm.analysis?.structure || '').toLowerCase();
+  const hh = /higher\s*high/.test(structureText) || /higher\s*highs/.test(structureText) || /higher\s*highs?\b/.test(structureText);
+  const hl = /higher\s*low/.test(structureText) || /higher\s*lows?\b/.test(structureText);
+  const lh = /lower\s*high/.test(structureText) || /lower\s*highs?\b/.test(structureText);
+  const ll = /lower\s*low/.test(structureText) || /lower\s*lows?\b/.test(structureText);
+
+  const indicators = Array.isArray(norm.analysis?.indicators_detected) ? norm.analysis.indicators_detected.map((i) => ({ name: String(i.name || '').toLowerCase(), visible: Boolean(i.visible) })) : parseStringArray(norm.analysis?.indicators || '');
+
+  const tfEntry = {
+    timeframe: tf || 'UNKNOWN',
+    observations: {
+      trend: norm.analysis?.trend || 'neutral',
+      structure: {
+        higher_highs: !!hh,
+        higher_lows: !!hl,
+        lower_highs: !!lh,
+        lower_lows: !!ll,
+      },
+      indicators: Array.isArray(indicators) ? indicators : [],
+      price_action: Array.isArray(norm.analysis?.price_action) ? norm.analysis.price_action : [],
+      has_rsi: Boolean((norm.analysis && norm.analysis.indicators_detected && norm.analysis.indicators_detected.find((x) => /rsi/i.test(x.name))) || /rsi/i.test(String(norm.analysis?.indicators || ''))),
+      candles_visible: Boolean(norm.chart?.candles_visible),
+      price_scale_visible: Boolean(norm.chart?.price_scale_visible),
+      has_enough_candles: Boolean(norm.chart?.has_enough_candles),
+    },
+  };
+
+  obs.timeframes_detected.push(tfEntry);
+  return obs;
+}
+
+/** Deterministic mentor-rule evaluation. Returns validation, score, failed conditions and a candidate trade_setup (or none). */
+function evaluateDecisionEngine(obs) {
+  const norm = obs.raw;
+  const validations = {
+    daily_trend: false,
+    valid_zone: false,
+    price_return: false,
+    liquidity_sweep: false,
+    confirmation: false,
+    bos: false,
+    rsi: false,
+    all_required_conditions_met: false,
+  };
+  const failed = [];
+  let score = 0;
+  const weights = { daily_trend: 20, zone: 20, price_return: 10, liquidity: 15, confirmation: 10, bos: 15, rsi: 10 };
+
+  // Find D1 evidence
+  const d1 = obs.timeframes_detected.find((t) => /(^D1$|^1D$|DAILY)/i.test(String(t.timeframe)));
+  if (!d1) {
+    failed.push('Daily timeframe (D1) not visible or not detectable');
+    // mandatory -> no trade
+  } else {
+    const s = d1.observations.structure || {};
+    if (s.higher_highs && s.higher_lows) { validations.daily_trend = 'bullish'; score += weights.daily_trend; }
+    else if (s.lower_highs && s.lower_lows) { validations.daily_trend = 'bearish'; score += weights.daily_trend; }
+    else { failed.push('D1 structure unclear'); }
+  }
+
+  // Zones detection: prefer H1 then H4
+  const h1 = (norm.zones && norm.zones.h1) || null;
+  const h4 = (norm.zones && norm.zones.h4) || null;
+  if (h1 || h4) {
+    validations.valid_zone = true; score += weights.zone;
+  } else {
+    failed.push('No H1/H4 supply or demand zones detected');
+  }
+
+  // Price return: require explicit m15.inside_zone or normalized.trade_setup.entry_zone evidence
+  const m15 = norm.m15 || norm.raw_m15 || obs.m15 || null;
+  const priceReturned = Boolean((m15 && m15.inside_zone) || (norm.trade_setup && norm.trade_setup.entry_zone && norm.trade_setup.entry_zone !== 'none'));
+  if (priceReturned) { validations.price_return = true; score += weights.price_return; }
+  else { failed.push('Price did not return to the identified entry zone'); }
+
+  // Liquidity sweep detection
+  const liquidityOk = Boolean((m15 && m15.liquidity && m15.liquidity.swept) || (norm.strategy && norm.strategy.liquidity_sweep && norm.strategy.liquidity_sweep !== 'unavailable' && norm.strategy.liquidity_sweep !== 'none'));
+  if (liquidityOk) { validations.liquidity_sweep = true; score += weights.liquidity; }
+  else { failed.push('No liquidity sweep detected'); }
+
+  // M15 confirmation
+  const confirmationOk = Boolean(m15 && m15.confirmation && typeof m15.confirmation === 'string');
+  if (confirmationOk) { validations.confirmation = true; score += weights.confirmation; }
+  else { failed.push('No M15 confirmation pattern detected (engulfing, pin bar, rejection)'); }
+
+  // BOS
+  const bosOk = Boolean(m15 && m15.bos && m15.bos.detected === true);
+  if (bosOk) { validations.bos = true; score += weights.bos; }
+  else { failed.push('No break of structure (BOS) confirmed'); }
+
+  // RSI
+  const rsiOk = Boolean(m15 && m15.rsi && m15.rsi.visible && m15.rsi.confirms === true);
+  if (rsiOk) { validations.rsi = true; score += weights.rsi; }
+  else { failed.push('RSI confirmation missing or not visible'); }
+
+  // All required conditions
+  validations.all_required_conditions_met = validations.daily_trend && validations.valid_zone && validations.price_return && validations.liquidity_sweep && validations.confirmation && validations.bos && validations.rsi;
+
+  // Candidate trade_setup from AI if present (must be validated numerically)
+  let trade_setup = { ...DEFAULT_TRADE_SETUP };
+  if (validations.all_required_conditions_met && norm.trade_setup && norm.trade_setup.type && norm.trade_setup.type !== 'none') {
+    // Validate numeric levels
+    const entry = Number(norm.trade_setup.entry_zone) || null;
+    const sl = Number(norm.trade_setup.stop_loss) || null;
+    const tp = Number(norm.trade_setup.take_profit) || null;
+    const rr = typeof norm.trade_setup.risk_reward === 'number' ? norm.trade_setup.risk_reward : parseRiskReward(norm.trade_setup.risk_reward);
+    const dir = norm.trade_setup.type;
+    // Basic numeric validation: must be numbers and satisfy direction
+    if (entry != null && sl != null && tp != null && !Number.isNaN(entry) && !Number.isNaN(sl) && !Number.isNaN(tp) && rr != null && !Number.isNaN(rr)) {
+      const rrComputed = Math.abs((tp - entry) / (entry - sl));
+      const rrValue = Number.isFinite(rrComputed) ? rrComputed : rr;
+      const rrFinal = typeof rr === 'number' && rr >= 0 ? rr : rrValue;
+      const validLevels = (dir === 'buy' && sl < entry && tp > entry) || (dir === 'sell' && sl > entry && tp < entry);
+      if (validLevels && rrFinal >= 2.0) {
+        trade_setup = { type: dir, entry_zone: String(entry), stop_loss: String(sl), take_profit: String(tp), risk_reward: rrFinal };
+      } else {
+        failed.push('Trade numeric validation failed (levels or RR insufficient)');
+        validations.all_required_conditions_met = false;
+      }
+    } else {
+      failed.push('Numeric trade levels not visible or invalid');
+      validations.all_required_conditions_met = false;
+    }
+  } else {
+    // No full candidate — ensure no trade returned
+    trade_setup = { ...DEFAULT_TRADE_SETUP };
+  }
+
+  // Cap score to 100
+  score = Math.max(0, Math.min(100, Math.round(score)));
+
+  const result = {
+    strategy_validation: validations,
+    strategy_score: score,
+    failed_conditions: Array.from(new Set(failed)),
+    trade_setup,
+  };
+
+  // Determine final status
+  if (!obs.raw || !obs.raw.chart || !obs.raw.chart.is_chart) {
+    result.status = 'invalid_image';
+  } else if (!validations.all_required_conditions_met) {
+    result.status = 'no_trade';
+  } else {
+    result.status = 'success';
+  }
+
+  return result;
+}
+
+/** Apply mentor decision engine to normalized analysis and produce final response. */
+function applyMentorStrategy(normalized) {
+  if (!normalized || typeof normalized !== 'object') return normalized;
+  const obs = buildStructuredObservations(normalized);
+  const evalRes = evaluateDecisionEngine(obs);
+
+  // Start from normalized object and override with deterministic outputs
+  const response = { ...normalized };
+  response.status = evalRes.status || normalized.status || 'no_trade';
+  response.trade_setup = evalRes.trade_setup || { ...DEFAULT_TRADE_SETUP };
+  response.confidence = typeof evalRes.strategy_score === 'number' ? evalRes.strategy_score : (normalized.confidence || 0);
+  response.reasons = Array.isArray(normalized.reasons) ? Array.from(new Set([...normalized.reasons, ...(evalRes.failed_conditions || [])])) : Array.from(new Set([...(evalRes.failed_conditions || [])]));
+
+  // Copy back high-level strategy flags
+  response.strategy = {
+    ...normalized.strategy,
+    // map validations back to user-friendly values where possible
+    liquidity_sweep: evalRes.strategy_validation && evalRes.strategy_validation.liquidity_sweep ? (evalRes.strategy_validation.liquidity_sweep === true ? 'confirmed' : normalized.strategy.liquidity_sweep) : normalized.strategy.liquidity_sweep,
+    bos: evalRes.strategy_validation && evalRes.strategy_validation.bos ? (evalRes.strategy_validation.bos === true ? 'confirmed' : normalized.strategy.bos) : normalized.strategy.bos,
+  };
+
+  // If evaluation failed mandatory conditions, ensure trade_setup is none
+  if (response.status !== 'success') {
+    response.trade_setup = { ...DEFAULT_TRADE_SETUP };
+  }
+
+  // Enforce additional server-side rules
+  const enforced = enforceValidationRules(response) || response;
+  return enforced;
 }
 
 function getTraderSystemPrompt() {
@@ -435,22 +977,9 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 12_000) {
   finally { clearTimeout(timer); }
 }
 
-function parseJsonPayload(rawContent) {
-  if (!rawContent) return null;
-  const trimmed = String(rawContent).trim();
-  if (!trimmed) return null;
-  try { return JSON.parse(trimmed); } catch {
-    const match = trimmed.match(/\{[\s\S]*\}/);
-    if (!match) return null;
-    try { return JSON.parse(match[0]); } catch { return null; }
-  }
-}
 
 async function callVisionModel(messages, timeoutMs = 30000) {
   const baseUrl = (process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/$/, '');
-  // Vision tasks MUST use a vision-capable model. Do not fall back to
-  // OPENROUTER_MODEL here — that is typically a text-only model used for
-  // strategy generation and will reject image_url payloads.
   const model = process.env.OPENROUTER_VISION_MODEL || 'openai/gpt-4o-mini';
   const response = await fetchWithTimeout(`${baseUrl}/chat/completions`, {
     method: 'POST',
@@ -467,8 +996,21 @@ async function callVisionModel(messages, timeoutMs = 30000) {
       response_format: { type: 'json_object' },
     }),
   }, timeoutMs);
-  const payload = await response.json();
-  if (!response.ok) throw new Error(payload.error?.message || 'Chart AI request failed.');
+
+  const rawText = await response.text();
+  let payload = null;
+  try { payload = JSON.parse(rawText); } catch {}
+  logProviderResponse('openrouter', model, {
+    httpStatus: response.status,
+    rawText,
+    parsedJson: payload,
+    error: response.ok ? null : payload?.error?.message || 'OpenRouter vision failed',
+  });
+
+  if (!response.ok) {
+    throw new Error(payload?.error?.message || 'Chart AI request failed.');
+  }
+
   return parseJsonPayload(payload.choices?.[0]?.message?.content);
 }
 
@@ -479,16 +1021,27 @@ async function callVisionModel(messages, timeoutMs = 30000) {
  * the existing fetchWithTimeout helper. Primary/fallback Gemini models are
  * defined by GEMINI_VISION_MODEL_PRIMARY and GEMINI_VISION_MODEL_FALLBACK.
  */
-const DEFAULT_GEMINI_PRIMARY_MODEL = 'models/gemini-2.0-flash-001';
-const DEFAULT_GEMINI_FALLBACK_MODEL = 'models/gemini-1.5-pro-latest';
+const DEFAULT_GEMINI_PRIMARY_MODEL = 'gemini-3.5-flash';
+const DEFAULT_GEMINI_FALLBACK_MODEL = 'gemini-3.5';
 
 async function callGeminiTrader(imageBase64, mimeType, pair, model, timeoutMs = 30000) {
   const apiKey = process.env.GEMINI_API_KEY;
-  const modelName = model || process.env.GEMINI_VISION_MODEL_PRIMARY || DEFAULT_GEMINI_PRIMARY_MODEL;
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelName)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  if (!apiKey || apiKey.startsWith('replace_')) {
+    throw new Error('Gemini API key is not configured.');
+  }
+
+  const modelName = normalizeGeminiModelName(model || process.env.GEMINI_VISION_MODEL_PRIMARY || DEFAULT_GEMINI_PRIMARY_MODEL);
+  if (!modelName) {
+    throw new Error('Gemini model name is not configured.');
+  }
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent`;
   const response = await fetchWithTimeout(url, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: {
+      'content-type': 'application/json',
+      'x-goog-api-key': apiKey,
+    },
     body: JSON.stringify({
       contents: [{
         parts: [
@@ -500,7 +1053,15 @@ async function callGeminiTrader(imageBase64, mimeType, pair, model, timeoutMs = 
     }),
   }, timeoutMs);
 
-  const payload = await response.json();
+  const rawText = await response.text();
+  const payload = parseJsonPayload(rawText);
+  logProviderResponse('gemini', modelName, {
+    httpStatus: response.status,
+    rawText,
+    parsedJson: payload,
+    error: response.ok ? null : payload?.error?.message || `Gemini HTTP ${response.status}`,
+  });
+
   if (!response.ok) {
     throw new Error(payload?.error?.message || `Gemini HTTP ${response.status}`);
   }
@@ -509,7 +1070,16 @@ async function callGeminiTrader(imageBase64, mimeType, pair, model, timeoutMs = 
     payload?.candidates?.[0]?.content?.parts?.map((part) => part.text || '').filter(Boolean).join('') || ''
   ).trim();
   if (!text) throw new Error('Gemini returned an empty response.');
-  return parseJsonPayload(text);
+
+  const parsed = parseJsonPayload(text);
+  if (!parsed) {
+    logProviderResponse('gemini', modelName, {
+      httpStatus: response.status,
+      rawText: text,
+      error: 'Could not parse Gemini JSON from text response.',
+    });
+  }
+  return parsed;
 }
 
 async function callGeminiTraderWithFallback(imageBase64, mimeType, pair, timeoutMs = 30000) {
@@ -562,28 +1132,37 @@ function aiUnavailableResponse(input, message) {
     message: message || 'Chart AI is unavailable right now. Please try again shortly.',
     detectedPair: input?.pair || null,
     timeframe: input?.timeframe || null,
-    analysis: {
-      trend: 'neutral',
-      structure: '',
-      volatility: 'low',
-      volume: 'not_visible',
-      sentiment: 'neutral',
-      indicators: 'none',
-      notes: message || 'Chart AI is unavailable right now. Please try again shortly.',
+    chart: {
+      ...DEFAULT_CHART,
+      is_chart: false,
+      chart_quality: 'poor',
     },
-    zones: {
-      support: 'not_clear',
-      resistance: 'not_clear',
-      liquidity: 'not_clear',
-    },
-    trade_setup: {
-      type: 'none',
-      entry_zone: 'none',
-      stop_loss: 'none',
-      take_profit: 'none',
-      risk_reward: 'none',
-    },
+    analysis: DEFAULT_ANALYSIS,
+    zones: DEFAULT_ZONES,
+    strategy: DEFAULT_STRATEGY,
+    trade_setup: DEFAULT_TRADE_SETUP,
     confidence: 0,
+    reasons: [message || 'Chart AI is unavailable right now. Please try again shortly.'],
+  };
+}
+
+function aiInvalidResponse(input, message) {
+  return {
+    status: 'ai_invalid_response',
+    message: message || 'The analysis engine returned an invalid response. Please try again.',
+    detectedPair: input?.pair || null,
+    timeframe: input?.timeframe || null,
+    chart: {
+      ...DEFAULT_CHART,
+      is_chart: false,
+      chart_quality: 'poor',
+    },
+    analysis: DEFAULT_ANALYSIS,
+    zones: DEFAULT_ZONES,
+    strategy: DEFAULT_STRATEGY,
+    trade_setup: DEFAULT_TRADE_SETUP,
+    confidence: 0,
+    reasons: [message || 'The analysis engine returned an invalid response. Please try again.'],
   };
 }
 
@@ -650,15 +1229,55 @@ async function analyzeChart(req, res) {
       return sendJson(res, 200, aiUnavailableResponse(input, message));
     }
 
-    const parsed = TradeAnalysisSchema.safeParse(raw);
-    if (!parsed.success) {
-      console.error('[Chart AI] Invalid AI shape:', parsed.error.flatten());
-      return sendJson(res, 200, aiUnavailableResponse(input, 'Chart AI returned an invalid analysis shape.'));
+    const canonical = canonicalizeRawAnalysis(raw);
+    if (!canonical) {
+      console.error('[Chart AI] Invalid raw AI payload:', raw);
+      return sendJson(res, 200, aiInvalidResponse(input, 'The analysis engine returned an invalid response. Please try again.'));
     }
 
-    // Normalize + enforce the backend validation layer.
-    const normalized = enforceValidationRules(normalizeAnalysis(parsed.data));
-    return sendJson(res, 200, normalized);
+    const parsed = TradeAnalysisSchema.safeParse(canonical);
+    if (!parsed.success) {
+      console.error('[Chart AI] Invalid AI shape:', parsed.error.flatten(), 'canonical:', canonical);
+      return sendJson(res, 200, aiInvalidResponse(input, 'The analysis engine returned an invalid response. Please try again.'));
+    }
+
+    const normalized = normalizeAnalysis(parsed.data);
+    if (!normalized) {
+      console.error('[Chart AI] Normalization failed:', parsed.data);
+      return sendJson(res, 200, aiInvalidResponse(input, 'The analysis engine returned an invalid response. Please try again.'));
+    }
+
+    const finalResult = applyMentorStrategy(normalized);
+    if (finalResult.status === 'success' && finalResult.trade_setup.type === 'none') {
+      finalResult.status = 'no_trade';
+    }
+
+    if (finalResult.status === 'success' && finalResult.trade_setup.type !== 'none') {
+      try {
+        const generatedSignal = {
+          deviceId,
+          pair: finalResult.detectedPair || input.pair || '',
+          timeframe: finalResult.timeframe || finalResult.chart?.timeframe || '',
+          direction: finalResult.trade_setup.type === 'buy' ? 'BUY' : 'SELL',
+          entry: finalResult.trade_setup.entry_zone,
+          sl: finalResult.trade_setup.stop_loss,
+          tp: finalResult.trade_setup.take_profit,
+          rr: finalResult.trade_setup.risk_reward,
+          confidence: finalResult.confidence,
+          strategyVersion: 'mentor-sd-ms-rsi-v1',
+          provider: raw.provider || 'unknown',
+          generatedAt: new Date().toISOString(),
+          market_data_timestamp: finalResult.market_data_timestamp || null,
+          market_data_source: finalResult.market_data_source || null,
+        };
+        const id = crypto.randomBytes(10).toString('hex');
+        await persistentStore.setJson(`fxsnap:generatedSignal:${deviceId}:${id}`, generatedSignal, 60 * 60 * 24 * 365);
+      } catch (error) {
+        console.error('[Chart AI] Failed to persist generated signal:', error);
+      }
+    }
+
+    return sendJson(res, 200, finalResult);
   } catch (error) {
     console.error('[Chart AI] Error:', error);
     return sendJson(res, 200, aiUnavailableResponse(input, `Chart AI failed: ${(error instanceof Error ? error.message : 'unknown error')}`));
@@ -797,4 +1416,9 @@ if (require.main === module) {
 
 module.exports = requestHandler;
 module.exports.createRequestHandler = createRequestHandler;
+// Expose internals for unit testing
+module.exports.buildStructuredObservations = buildStructuredObservations;
+module.exports.evaluateDecisionEngine = evaluateDecisionEngine;
+module.exports.applyMentorStrategy = applyMentorStrategy;
+module.exports.enforceValidationRules = enforceValidationRules;
 

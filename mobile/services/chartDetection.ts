@@ -2,7 +2,7 @@ import { getApiHeaders, resolveApiBaseUrl } from '@/services/apiAuth';
 
 const API_URL = resolveApiBaseUrl();
 
-export type AnalysisStatus = 'success' | 'no_trade' | 'invalid_image' | 'ai_unavailable';
+export type AnalysisStatus = 'success' | 'no_trade' | 'invalid_image' | 'ai_unavailable' | 'ai_invalid_response';
 
 export interface ChartAnalysisResult {
   status: AnalysisStatus;
@@ -84,7 +84,7 @@ export async function analyzeChartImage(
       return emptyAnalysis('ai_unavailable', payload.error || 'Chart AI is unavailable.');
     }
 
-    const status: AnalysisStatus = ['success', 'no_trade', 'invalid_image', 'ai_unavailable'].includes(payload.status)
+    const status: AnalysisStatus = ['success', 'no_trade', 'invalid_image', 'ai_unavailable', 'ai_invalid_response'].includes(payload.status)
       ? payload.status
       : 'ai_unavailable';
 
