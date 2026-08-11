@@ -7,7 +7,7 @@ export const APP_DATA_VERSION = 2;
 const DATA_VERSION_KEY = 'fxsnap:dataVersion';
 const BACKUP_VERSION = 1;
 
-export type AnalysisStatus = 'success' | 'no_trade' | 'invalid_image' | 'ai_unavailable';
+export type AnalysisStatus = 'success' | 'no_trade' | 'invalid_image' | 'ai_unavailable' | 'ai_invalid_response';
 
 export interface AnalysisResult {
   id: string;

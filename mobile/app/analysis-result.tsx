@@ -24,8 +24,24 @@ import * as Haptics from '@/services/haptics';
 import * as Clipboard from 'expo-clipboard';
 import { shareAsync } from 'expo-sharing';
 import { captureRef } from 'react-native-view-shot';
+// Import expo-file-system dynamically to avoid static TS resolution errors in environments
+// where the native module is not available (editor/tooling). Fall back to a no-op shim.
+let FileSystem: any;
+try {
+  // @ts-ignore
+  FileSystem = require('expo-file-system');
+} catch (err) {
+  // Fallback shim used in web/editor environments to avoid crashes while still
+  // allowing development of the share flow. getInfoAsync returns a non-existing file.
+  // Real devices with Expo will have the real module available at runtime.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  FileSystem = {
+    getInfoAsync: async (_uri: string) => ({ exists: false, size: 0 }),
+  };
+}
 import { useApp } from '@/context/AppContext';
 import type { AnalysisResult } from '@/context/AppContext';
+import AnalysisShareCard from '../components/AnalysisShareCard';
 import { useColors } from '@/hooks/useColors';
 
 // ─── Staggered data row ───────────────────────────────────────────────────────
@@ -86,6 +102,7 @@ export default function AnalysisResultScreen() {
   const [toastMessage, setToastMessage] = useState('');
   const [shareDisabled, setShareDisabled] = useState(false);
   const shareCardRef = useRef<View | null>(null);
+  const shareReadyRef = React.useRef(false);
 
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
   const botPad = Platform.OS === 'web' ? 34 : insets.bottom;
@@ -100,7 +117,7 @@ export default function AnalysisResultScreen() {
   // Legacy saved analyses store entry/sl/tp directly; new shape stores
   // tradeSetup + analysis + zones.
   const hasTradeLevels = Boolean(currentAnalysis?.entry && currentAnalysis?.sl && currentAnalysis?.tp);
-  const hasTradeSetup = Boolean(currentAnalysis?.tradeSetup);
+  const hasTradeSetup = Boolean(currentAnalysis?.tradeSetup?.type && currentAnalysis.tradeSetup.type !== 'none');
   const hasPriceAction = Boolean(currentAnalysis?.analysis);
   const hasZones = Boolean(currentAnalysis?.zones);
 
@@ -135,17 +152,62 @@ export default function AnalysisResultScreen() {
 
     try {
       setShareDisabled(true);
+      // Ensure the share card has time to layout and fonts to load
+      console.log('[AnalysisShare] Mounting share card and waiting for render');
+      // Wait for the share card onReady signal (polled), timeout after 2s
+      const waitForReady = async (timeout = 2000) => {
+        const start = Date.now();
+        while (!shareReadyRef.current && Date.now() - start < timeout) {
+          // small sleep
+          // eslint-disable-next-line no-await-in-loop
+          await new Promise((r) => setTimeout(r, 50));
+        }
+        return shareReadyRef.current;
+      };
+      const ready = await waitForReady(2000);
+      console.log('[AnalysisShare] share card ready flag:', ready);
+
+      console.log('[AnalysisShare] Capturing share card');
       const uri = await captureRef(shareCardRef.current, {
         format: 'png',
         quality: 0.95,
         result: 'tmpfile',
       });
-      await shareAsync(uri, { mimeType: 'image/png' });
+      console.log('[AnalysisShare] capture uri:', uri);
+
+      // Verify file exists and has size > 0
+      try {
+        const info = await FileSystem.getInfoAsync(uri);
+        console.log('[AnalysisShare] file info:', info);
+        if (!info.exists || !(info.size && info.size > 0)) {
+          throw new Error('Captured file missing or empty');
+        }
+      } catch (fsErr) {
+        console.error('[AnalysisShare] File verification failed', fsErr);
+        throw fsErr;
+      }
+
+      // Android may require file:// prefix for shareAsync
+      let shareUri = uri;
+      if (Platform.OS === 'android' && typeof uri === 'string' && !uri.startsWith('file://')) {
+        shareUri = `file://${uri}`;
+        console.log('[AnalysisShare] Adjusted android uri to', shareUri);
+      }
+      await shareAsync(shareUri, { mimeType: 'image/png' });
       showToast('Share card ready to share');
     } catch (error) {
-      console.warn('Share card failed', error);
+      // Detailed logging for debugging
+      console.error('[AnalysisShare] Image generation failed', error);
+      try {
+        // verify ref and presence
+        console.error('[AnalysisShare] shareCardRef.current:', shareCardRef.current);
+      } catch (inner) {
+        console.error('[AnalysisShare] shareCardRef.inspect failed', inner);
+      }
+
+      // Fallback: copy to clipboard but inform user this is a fallback
       await handleCopy();
-      showToast('Could not create image. Analysis copied instead.');
+      showToast('Could not create share image. Analysis copied to clipboard as a fallback.');
     } finally {
       setShareDisabled(false);
     }
@@ -411,61 +473,17 @@ export default function AnalysisResultScreen() {
         </Animated.View>
       </ScrollView>
 
-      <View ref={shareCardRef} collapsable={false} style={styles.hiddenShareContainer}>
-        <View style={[styles.shareCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
-          <View style={styles.shareHeaderRow}>
-            <Text style={[styles.shareLogo, { color: colors.text }]}>FXSnap</Text>
-            <View style={[styles.shareDirectionBadge, { backgroundColor: isBuy ? '#023315' : isSell ? '#3F0A0A' : '#1A1A1A' }]}>
-              <Text style={[styles.shareDirectionText, { color: directionColor }]}>
-                {isNoTrade ? 'NO TRADE' : isInvalid ? 'INVALID' : currentAnalysis.direction || '—'}
-              </Text>
-            </View>
-          </View>
-          <Text style={[styles.sharePair, { color: colors.text }]}>{currentAnalysis.pair}</Text>
-          <Text style={[styles.shareConfidenceLabel, { color: colors.textSecondary }]}>Confidence</Text>
-          <View style={styles.shareConfidenceRow}>
-            <Text style={[styles.shareConfidenceValue, { color: colors.text }]}>{currentAnalysis.confidence}%</Text>
-            <View style={styles.shareProgressBar}>
-              <View style={[styles.shareProgressFill, { width: `${currentAnalysis.confidence}%`, backgroundColor: directionColor }]} />
-            </View>
-          </View>
-          <View style={styles.shareDivider} />
-          {hasTradeSetup && currentAnalysis.tradeSetup ? (
-            <>
-              <View style={styles.shareLevelRow}>
-                <Text style={styles.shareLabel}>Entry</Text>
-                <Text style={styles.shareValue}>{currentAnalysis.tradeSetup.entryZone}</Text>
-              </View>
-              <View style={styles.shareLevelRow}>
-                <Text style={styles.shareLabel}>Stop Loss</Text>
-                <Text style={[styles.shareValue, { color: '#FF5252' }]}>{currentAnalysis.tradeSetup.stopLoss}</Text>
-              </View>
-              <View style={styles.shareLevelRow}>
-                <Text style={styles.shareLabel}>Take Profit</Text>
-                <Text style={[styles.shareValue, { color: '#00E676' }]}>{currentAnalysis.tradeSetup.takeProfit}</Text>
-              </View>
-            </>
-          ) : (
-            <>
-              <View style={styles.shareLevelRow}>
-                <Text style={styles.shareLabel}>Entry</Text>
-                <Text style={styles.shareValue}>{currentAnalysis.entry ?? '—'}</Text>
-              </View>
-              <View style={styles.shareLevelRow}>
-                <Text style={styles.shareLabel}>Stop Loss</Text>
-                <Text style={[styles.shareValue, { color: '#FF5252' }]}>{currentAnalysis.sl ?? '—'}</Text>
-              </View>
-              <View style={styles.shareLevelRow}>
-                <Text style={styles.shareLabel}>Take Profit</Text>
-                <Text style={[styles.shareValue, { color: '#00E676' }]}>{currentAnalysis.tp ?? '—'}</Text>
-              </View>
-            </>
-          )}
-          <View style={styles.shareFooter}>
-            <Text style={[styles.shareFooterText, { color: colors.textSecondary }]}>Disciplined, rule-based chart analysis</Text>
-            <Text style={[styles.shareWatermark, { color: colors.textMuted }]}>FXSnap</Text>
-          </View>
-        </View>
+      {/* Share card is placed off-screen but visible to view-shot. We set opacity: 0 and position far off-screen to avoid capture of UI chrome. */}
+      <View style={styles.hiddenShareContainer}>
+        <AnalysisShareCard
+          ref={shareCardRef}
+          analysis={currentAnalysis}
+          colors={colors}
+          onReady={() => {
+            console.log('[AnalysisShare] share card signalled ready');
+            shareReadyRef.current = true;
+          }}
+        />
       </View>
 
       <Toast visible={toastVisible} message={toastMessage} />

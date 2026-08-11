@@ -95,6 +95,26 @@ const DEFAULT_STRATEGY = {
   bos: 'none',
   rsi_confirmation: 'unavailable',
 };
+const DEFAULT_STRATEGY_METRICS = {
+  market_bias: 'neutral',
+  market_structure: 'consolidation',
+  short_term_momentum: 'neutral',
+  price_location: 'unknown',
+  setup_direction: 'none',
+  setup_status: 'invalidated',
+  setup_quality: 0,
+  entry_quality: 0,
+  confirmation_status: 'awaiting_confirmation',
+  setup_confidence: 0,
+  decision: 'NO_TRADE',
+  why_not_now: [],
+  confidence_boosts: [],
+  confidence_reductions: [],
+  data_limitations: [],
+  potential_bullish_scenario: '',
+  potential_bearish_scenario: '',
+  invalidation_conditions: [],
+};
 const DEFAULT_TRADE_SETUP = {
   type: 'none',
   entry_zone: 'none',
@@ -211,6 +231,16 @@ function parseIndicatorList(value) {
   return [];
 }
 
+function computeEntryQuality(rr) {
+  if (typeof rr !== 'number' || Number.isNaN(rr) || rr <= 0) return 0;
+  const capped = Math.min(rr, 3);
+  return Math.round(Math.min(100, (capped / 3) * 100));
+}
+
+function mergeUniqueStrings(items) {
+  return Array.from(new Set(items.filter((item) => typeof item === 'string' && item.trim().length > 0)));
+}
+
 function parseRiskReward(value) {
   if (typeof value === 'number') return value;
   if (typeof value !== 'string') return null;
@@ -225,6 +255,31 @@ function parseRiskReward(value) {
   if (numberMatch) {
     const numeric = Number(numberMatch[0]);
     if (!Number.isNaN(numeric)) return numeric;
+  }
+  return null;
+}
+
+function parsePriceOrRange(value) {
+  if (value == null) return null;
+  if (typeof value === 'number') return { min: value, max: value, mid: value };
+  const s = String(value).trim();
+  if (!s) return null;
+  // Accept ranges like '158.60-158.75', '158.60 – 158.75', '158.60–158.75', '158.60 to 158.75'
+  const rangeMatch = s.match(/(\d+(?:\.\d+)?)[\s]*[-–—to]+[\s]*(\d+(?:\.\d+)?)/i);
+  if (rangeMatch) {
+    const a = Number(rangeMatch[1]);
+    const b = Number(rangeMatch[2]);
+    if (!Number.isNaN(a) && !Number.isNaN(b)) {
+      const min = Math.min(a, b);
+      const max = Math.max(a, b);
+      return { min, max, mid: (min + max) / 2 };
+    }
+  }
+  // Single number
+  const numMatch = s.match(/-?\d+(?:\.\d+)?/);
+  if (numMatch) {
+    const n = Number(numMatch[0]);
+    if (!Number.isNaN(n)) return { min: n, max: n, mid: n };
   }
   return null;
 }
@@ -486,14 +541,12 @@ function buildStructuredObservations(norm) {
     raw: norm,
   };
 
-  // If the AI returned an explicit timeframes_detected field, trust it.
   if (Array.isArray(norm.timeframes_detected) && norm.timeframes_detected.length > 0) {
     obs.chart_layout = norm.timeframes_detected.length > 1 ? 'multi_timeframe' : 'single_timeframe';
     obs.timeframes_detected = norm.timeframes_detected.map((tf) => ({ timeframe: String(tf.timeframe || '').toUpperCase(), observations: tf.observations || {} }));
     return obs;
   }
 
-  // Fallback: use chart.timeframe as a single detected panel.
   const tf = (norm.timeframe || norm.chart?.timeframe || '').toString().toUpperCase();
   const structureText = String(norm.analysis?.market_structure || norm.analysis?.structure || '').toLowerCase();
   const hh = /higher\s*high/.test(structureText) || /higher\s*highs/.test(structureText) || /higher\s*highs?\b/.test(structureText);
@@ -501,7 +554,9 @@ function buildStructuredObservations(norm) {
   const lh = /lower\s*high/.test(structureText) || /lower\s*highs?\b/.test(structureText);
   const ll = /lower\s*low/.test(structureText) || /lower\s*lows?\b/.test(structureText);
 
-  const indicators = Array.isArray(norm.analysis?.indicators_detected) ? norm.analysis.indicators_detected.map((i) => ({ name: String(i.name || '').toLowerCase(), visible: Boolean(i.visible) })) : parseStringArray(norm.analysis?.indicators || '');
+  const indicators = Array.isArray(norm.analysis?.indicators_detected)
+    ? norm.analysis.indicators_detected.map((i) => ({ name: String(i.name || '').toLowerCase(), visible: Boolean(i.visible) }))
+    : parseStringArray(norm.analysis?.indicators || '');
 
   const tfEntry = {
     timeframe: tf || 'UNKNOWN',
@@ -524,6 +579,106 @@ function buildStructuredObservations(norm) {
 
   obs.timeframes_detected.push(tfEntry);
   return obs;
+}
+
+function normalizeText(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function deriveMarketBias(norm) {
+  const trend = normalizeText(norm.analysis?.trend);
+  const structureBias = normalizeText(norm.analysis?.structure_bias);
+  const bullish = trend === 'bullish' || structureBias === 'bullish';
+  const bearish = trend === 'bearish' || structureBias === 'bearish';
+  if (bullish && bearish) return 'mixed';
+  if (bullish) return 'bullish';
+  if (bearish) return 'bearish';
+  return 'neutral';
+}
+
+function deriveMarketStructure(norm) {
+  const structureText = normalizeText(norm.analysis?.market_structure || norm.analysis?.structure);
+  if (/range|consolidat|channel/.test(structureText)) return 'range';
+  if (/breakout/.test(structureText)) return 'breakout';
+  if (/breakdown/.test(structureText)) return 'breakdown';
+  if (/higher\s*highs?.*higher\s*lows?|uptrend|bullish/.test(structureText)) return 'uptrend';
+  if (/lower\s*highs?.*lower\s*lows?|downtrend|bearish/.test(structureText)) return 'downtrend';
+  if (/transition|pullback|correction/.test(structureText)) return 'transition';
+  return 'consolidation';
+}
+
+function deriveShortTermMomentum(norm) {
+  const marketStructure = normalizeText(norm.analysis?.market_structure || norm.analysis?.structure);
+  const trend = normalizeText(norm.analysis?.trend);
+  if (/strong.*bullish|momentum.*bullish|rally/.test(marketStructure) || trend === 'bullish') return 'strong_bullish';
+  if (/strong.*bearish|momentum.*bearish|sell-off|dump/.test(marketStructure) || trend === 'bearish') return 'strong_bearish';
+  if (/bearish|pullback|correction|weakness/.test(marketStructure)) return 'bearish';
+  if (/bullish|recovery|bounce/.test(marketStructure)) return 'bullish';
+  return 'neutral';
+}
+
+function derivePriceLocation(norm) {
+  const status = normalizeText(norm.strategy?.zone_status);
+  const direction = normalizeText(norm.trade_setup?.type);
+  if (status === 'inside_zone') return direction === 'buy' ? 'at_support' : direction === 'sell' ? 'at_resistance' : 'at_zone';
+  if (status === 'near_zone') return direction === 'buy' ? 'near_support' : direction === 'sell' ? 'near_resistance' : 'near_zone';
+  if (status === 'outside_zone') return 'middle_of_range';
+  return 'unknown';
+}
+
+function deriveSetupDirection(norm) {
+  const type = normalizeText(norm.trade_setup?.type);
+  return type === 'buy' || type === 'sell' ? type : 'none';
+}
+
+function deriveConfirmationStatus(norm, m15) {
+  const confirmation = normalizeText(m15?.confirmation);
+  const bosDetected = Boolean(m15 && m15.bos && m15.bos.detected === true);
+  if (confirmation && bosDetected) return 'confirmed';
+  if (confirmation || bosDetected) return 'developing';
+  if (norm.trade_setup?.type && norm.trade_setup.type !== 'none') return 'awaiting_confirmation';
+  return 'invalidated';
+}
+
+function determineWhyNotNow(norm, derived) {
+  const reasons = [];
+  if (derived.priceLocation === 'middle_of_range') reasons.push('Price is in the middle of the range rather than near a high-probability zone.');
+  if (derived.confirmationStatus === 'awaiting_confirmation') reasons.push('The setup has not yet generated a clear confirmation signal.');
+  if (derived.confirmationStatus === 'developing') reasons.push('Confirmation is still developing and the setup is not yet fully validated.');
+  if (derived.priceLocation === 'near_resistance' && derived.setupDirection === 'buy') reasons.push('Entry is too close to resistance.');
+  if (derived.priceLocation === 'near_support' && derived.setupDirection === 'sell') reasons.push('Entry is too close to support.');
+  if (norm.trade_setup?.risk_reward != null && Number(norm.trade_setup.risk_reward) < 1.5) reasons.push('Risk/reward is below the minimum tolerance.');
+  if (!norm.zones || (!norm.zones.support && !norm.zones.resistance)) reasons.push('Key levels are not clearly defined on the chart.');
+  return mergeUniqueStrings(reasons);
+}
+
+function deriveDataLimitations(norm) {
+  const limits = [];
+  if (!norm.analysis?.volume || normalizeText(norm.analysis.volume) === 'not_visible') limits.push('Volume data is not available.');
+  if (!norm.analysis?.indicators || normalizeText(norm.analysis.indicators) === 'none') limits.push('Indicator data is not available.');
+  if (!norm.timeframe && !norm.chart?.timeframe) limits.push('Timeframe could not be identified.');
+  return mergeUniqueStrings(limits);
+}
+
+function computeSetupScores(norm, derived, m15) {
+  const confirmationWeight = derived.confirmationStatus === 'confirmed' ? 25 : derived.confirmationStatus === 'developing' ? 12 : 0;
+  const locationWeight = derived.priceLocation === 'at_support' || derived.priceLocation === 'at_resistance' ? 20 : derived.priceLocation === 'near_support' || derived.priceLocation === 'near_resistance' ? 12 : derived.priceLocation === 'middle_of_range' ? 2 : 8;
+  const momentumWeight = derived.shortTermMomentum === 'strong_bullish' || derived.shortTermMomentum === 'strong_bearish' ? 15 : derived.shortTermMomentum === 'bullish' || derived.shortTermMomentum === 'bearish' ? 10 : 5;
+  const structureWeight = derived.marketStructure === 'uptrend' || derived.marketStructure === 'downtrend' ? 18 : derived.marketStructure === 'range' ? 12 : 8;
+
+  const rr = typeof norm.trade_setup?.risk_reward === 'number' ? norm.trade_setup.risk_reward : parseRiskReward(norm.trade_setup?.risk_reward);
+  const rrWeight = rr >= 2 ? 20 : rr >= 1.5 ? 10 : rr > 0 ? 2 : 0;
+  const rrPenalty = rr > 0 && rr < 1.5 ? -12 : 0;
+
+  const dataPenalty = deriveDataLimitations(norm).length > 0 ? -8 : 0;
+  const poorSetupPenalty = derived.confirmationStatus === 'invalidated' ? -15 : 0;
+
+  const rawScore = 10 + confirmationWeight + locationWeight + momentumWeight + structureWeight + rrWeight + dataPenalty + rrPenalty + poorSetupPenalty;
+  const score = Math.max(0, Math.min(100, Math.round(rawScore)));
+  const entryQuality = computeEntryQuality(rr);
+  const setupQuality = Math.max(0, Math.min(100, score + (derived.priceLocation === 'at_support' || derived.priceLocation === 'at_resistance' ? 5 : 0)));
+
+  return { score, setupQuality, entryQuality, rr: rr || 0 };
 }
 
 /** Deterministic mentor-rule evaluation. Returns validation, score, failed conditions and a candidate trade_setup (or none). */
@@ -623,6 +778,48 @@ function evaluateDecisionEngine(obs) {
     trade_setup = { ...DEFAULT_TRADE_SETUP };
   }
 
+  // Fallback: attempt to parse a candidate trade setup even when strict validations fail.
+  // This supports AI returning ranges like "158.60-158.75" and allows DEVELOPING setups to be surfaced.
+  if ((trade_setup.type === 'none' || !trade_setup) && norm.trade_setup && norm.trade_setup.type && norm.trade_setup.type !== 'none') {
+    try {
+      const dir = normalizeText(norm.trade_setup.type);
+      const entryRange = parsePriceOrRange(norm.trade_setup.entry_zone);
+      const slRange = parsePriceOrRange(norm.trade_setup.stop_loss);
+      const tpRange = parsePriceOrRange(norm.trade_setup.take_profit);
+      if (entryRange && slRange && tpRange) {
+        const entry = entryRange.mid;
+        const sl = slRange.mid;
+        const tp = tpRange.mid;
+        const validLevels = (dir === 'buy' && sl < entry && tp > entry) || (dir === 'sell' && sl > entry && tp < entry);
+        if (validLevels) {
+          const rrComputed = Math.abs((tp - entry) / (entry - sl));
+          // Accept as a candidate if RR positive; stricter filtering happens later in enforceValidationRules
+          if (Number.isFinite(rrComputed) && rrComputed > 0) {
+            trade_setup = {
+              type: dir === 'buy' ? 'buy' : dir === 'sell' ? 'sell' : 'none',
+              entry_zone: String(norm.trade_setup.entry_zone),
+              stop_loss: String(norm.trade_setup.stop_loss),
+              take_profit: String(norm.trade_setup.take_profit),
+              risk_reward: rrComputed,
+            };
+            result.candidate = true;
+            console.log('[DecisionEngine] Fallback candidate created', trade_setup);
+            // give a small score boost for candidate setups so explainable outcome reflects potential
+            score = Math.max(0, Math.min(100, Math.round(score + (rrComputed >= 1.5 ? 6 : 2))));
+          } else {
+            failed.push('Fallback candidate: computed RR invalid');
+          }
+        } else {
+          failed.push('Fallback candidate: level geometry invalid for direction');
+        }
+      } else {
+        failed.push('Fallback candidate: could not parse numeric levels from AI trade_setup');
+      }
+    } catch (e) {
+      failed.push('Fallback candidate parsing error');
+    }
+  }
+
   // Cap score to 100
   score = Math.max(0, Math.min(100, Math.round(score)));
 
@@ -631,6 +828,7 @@ function evaluateDecisionEngine(obs) {
     strategy_score: score,
     failed_conditions: Array.from(new Set(failed)),
     trade_setup,
+    candidate: false,
   };
 
   // Determine final status
@@ -643,6 +841,61 @@ function evaluateDecisionEngine(obs) {
   }
 
   return result;
+}
+
+// Produce a componentized, explainable scoring breakdown and final decision
+function buildExplainableOutcome(obs, evalRes) {
+  const norm = obs.raw || {};
+  // Components
+  const trendComp = evalRes.strategy_validation.daily_trend ? 20 : 0;
+  const zoneComp = evalRes.strategy_validation.valid_zone ? 20 : 0;
+  const priceLocationComp = evalRes.strategy_validation.price_return ? 15 : 0;
+  const liquidityComp = evalRes.strategy_validation.liquidity_sweep ? 10 : 0;
+  const confirmationComp = evalRes.strategy_validation.confirmation ? 15 : 0;
+  const bosComp = evalRes.strategy_validation.bos ? 10 : 0;
+  const rsiComp = evalRes.strategy_validation.rsi ? 10 : 0;
+
+  const rawScore = trendComp + zoneComp + priceLocationComp + liquidityComp + confirmationComp + bosComp + rsiComp;
+  const setupQuality = Math.max(0, Math.min(100, Math.round(rawScore)));
+
+  const entryQuality = (evalRes.trade_setup && evalRes.trade_setup.type !== 'none') ? (setupQuality - 5) : 0;
+
+  const confirmationStatus = (evalRes.strategy_validation.confirmation && evalRes.strategy_validation.bos) ? 'Confirmed' : (evalRes.strategy_validation.confirmation ? 'Developing' : 'Awaiting Confirmation');
+
+  // Decision mapping
+  let decision = 'NO_TRADE';
+  if (evalRes.status === 'success' && evalRes.trade_setup && evalRes.trade_setup.type !== 'none') {
+    decision = evalRes.trade_setup.type === 'buy' ? 'BUY' : 'SELL';
+  } else if (evalRes.status === 'no_trade') {
+    decision = setupQuality >= 30 ? 'WAIT' : 'NO_TRADE';
+  } else if (evalRes.status === 'invalid_image' || evalRes.status === 'ai_unavailable' || evalRes.status === 'ai_invalid_response') {
+    decision = 'NO_TRADE';
+  }
+
+  const whyNotNow = Array.isArray(evalRes.failed_conditions) ? evalRes.failed_conditions : [];
+  const dataLimitations = [];
+  if (!obs.timeframes_detected || obs.timeframes_detected.length === 0) dataLimitations.push('Single timeframe or timeframe not detected');
+  if (!(norm.analysis && norm.analysis.volume) || norm.analysis.volume === 'not_visible') dataLimitations.push('Volume not available');
+
+  return {
+    breakdown: {
+      trend: trendComp,
+      zone: zoneComp,
+      priceLocation: priceLocationComp,
+      liquidity: liquidityComp,
+      confirmation: confirmationComp,
+      bos: bosComp,
+      rsi: rsiComp,
+      rawScore,
+    },
+    setupQuality,
+    entryQuality: Math.max(0, Math.min(100, Math.round(entryQuality))),
+    confirmationStatus,
+    setupConfidence: setupQuality,
+    decision,
+    whyNotNow,
+    dataLimitations,
+  };
 }
 
 /** Apply mentor decision engine to normalized analysis and produce final response. */
@@ -661,13 +914,31 @@ function applyMentorStrategy(normalized) {
   // Copy back high-level strategy flags
   response.strategy = {
     ...normalized.strategy,
-    // map validations back to user-friendly values where possible
     liquidity_sweep: evalRes.strategy_validation && evalRes.strategy_validation.liquidity_sweep ? (evalRes.strategy_validation.liquidity_sweep === true ? 'confirmed' : normalized.strategy.liquidity_sweep) : normalized.strategy.liquidity_sweep,
     bos: evalRes.strategy_validation && evalRes.strategy_validation.bos ? (evalRes.strategy_validation.bos === true ? 'confirmed' : normalized.strategy.bos) : normalized.strategy.bos,
   };
 
+  // Attach explainable outcome components
+  const explain = buildExplainableOutcome(obs, { ...evalRes, status: response.status, trade_setup: response.trade_setup });
+  response.analysis = response.analysis || {};
+  response.analysis.marketBias = evalRes.strategy_validation && evalRes.strategy_validation.daily_trend ? (evalRes.strategy_validation.daily_trend === 'bullish' ? 'bullish' : (evalRes.strategy_validation.daily_trend === 'bearish' ? 'bearish' : 'neutral')) : (normalized.analysis && normalized.analysis.trend) || 'neutral';
+  response.analysis.marketStructure = normalized.analysis?.structure || normalized.analysis?.market_structure || 'unknown';
+  response.analysis.shortTermMomentum = obs.timeframes_detected && obs.timeframes_detected[0] ? obs.timeframes_detected[0].observations.trend || 'neutral' : 'neutral';
+  response.analysis.priceLocation = (normalized.zones && ((normalized.zones.demand && normalized.zones.demand.length) || (normalized.zones.supply && normalized.zones.supply.length))) ? (normalized.trade_setup && normalized.trade_setup.entry_zone && normalized.trade_setup.entry_zone !== 'none' ? 'at_entry_zone' : 'near_zone') : 'middle_of_range';
+
+  response.setupDirection = response.trade_setup.type || 'none';
+  response.setupStatus = explain.confirmationStatus || 'Awaiting Confirmation';
+  response.setupQuality = explain.setupQuality;
+  response.entryQuality = explain.entryQuality;
+  response.confirmationStatus = explain.confirmationStatus;
+  response.setupConfidence = explain.setupConfidence;
+  response.decision = explain.decision;
+  response.whyNotNow = explain.whyNotNow;
+  response.dataLimitations = explain.dataLimitations;
+
   // If evaluation failed mandatory conditions, ensure trade_setup is none
-  if (response.status !== 'success') {
+  // If evaluation failed mandatory conditions, only clear trade_setup when no candidate was provided.
+  if (response.status !== 'success' && (!evalRes.trade_setup || !evalRes.trade_setup.type || evalRes.trade_setup.type === 'none') && !evalRes.candidate) {
     response.trade_setup = { ...DEFAULT_TRADE_SETUP };
   }
 

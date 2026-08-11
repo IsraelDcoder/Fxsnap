@@ -75,8 +75,9 @@ test('insufficient RR should block trade', () => {
   };
 
   const res = applyMentorStrategy(normalized);
+  // With strict RR enforcement the final status should be no_trade, but a fallback candidate may be preserved for DEVELOPING workflows
   assert.equal(res.status, 'no_trade');
-  assert.equal(res.trade_setup.type, 'none');
+  assert.equal(res.trade_setup.type, 'buy');
   assert.ok(res.reasons.some((r) => /risk-reward/i.test(r) || /Numeric trade levels/i || /RR/i) || res.failed_conditions);
 });
 
@@ -93,4 +94,50 @@ test('buildStructuredObservations returns expected shape for explicit timeframes
   assert.equal(obs.chart_layout, 'multi_timeframe');
   assert.equal(obs.timeframes_detected.length, 2);
   assert.equal(obs.timeframes_detected[0].timeframe, 'D1');
+});
+
+test('applyMentorStrategy attaches explainable metrics and decision fields', () => {
+  const normalized = {
+    status: 'no_trade',
+    detectedPair: 'XAUUSD',
+    timeframe: 'M15',
+    chart: { is_chart: true, timeframe: 'M15', candles_visible: true, price_scale_visible: true, has_enough_candles: true },
+    analysis: { market_structure: 'higher highs', trend: 'bullish' },
+    zones: { demand: ['4320-4325'], supply: ['4373-4380'] },
+    m15: { inside_zone: false, liquidity: { swept: false }, confirmation: null, bos: { detected: false }, rsi: { visible: false, confirms: false } },
+    strategy: {},
+    trade_setup: { type: 'none' },
+    confidence: 10,
+    reasons: [],
+  };
+
+  const res = applyMentorStrategy(normalized);
+  assert.ok(typeof res.setupConfidence === 'number');
+  assert.ok(['BUY', 'SELL', 'WAIT', 'NO_TRADE'].includes(res.decision));
+  assert.ok(Array.isArray(res.whyNotNow));
+  assert.ok(Array.isArray(res.dataLimitations));
+});
+
+test('fallback candidate created from range strings when full validations missing', () => {
+  const normalized = {
+    status: 'no_trade',
+    detectedPair: 'USDJPY',
+    timeframe: 'M15',
+    chart: { is_chart: true, timeframe: 'M15', candles_visible: true, price_scale_visible: true, has_enough_candles: true },
+    analysis: { market_structure: 'sharp bearish impulse breaking support', trend: 'bearish', volatility: 'high', sentiment: 'bearish' },
+    zones: { support: '148.20-148.30', resistance: '149.00-149.20' },
+    m15: { inside_zone: false, liquidity: { swept: false }, confirmation: null, bos: { detected: false }, rsi: { visible: false, confirms: false } },
+    strategy: {},
+    trade_setup: { type: 'sell', entry_zone: '148.95-149.05', stop_loss: '149.30', take_profit: '148.20-148.30', risk_reward: '1.8' },
+    confidence: 40,
+    reasons: [],
+  };
+
+  const res = applyMentorStrategy(normalized);
+  // Candidate should be preserved even if status is no_trade
+  assert.equal(res.trade_setup.type, 'sell');
+  assert.ok(res.trade_setup.entry_zone && res.trade_setup.entry_zone !== 'none');
+  assert.ok(typeof res.setupQuality === 'number');
+  // The decision should be WAIT or NO_TRADE depending on score; ensure not silently empty
+  assert.ok(['BUY', 'SELL', 'WAIT', 'NO_TRADE'].includes(res.decision));
 });
