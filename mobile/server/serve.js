@@ -267,6 +267,15 @@ function parseJsonField(value) {
   return parsed === null ? value.trim() : parsed;
 }
 
+function logProviderResponse(provider, model, details) {
+  try {
+    const safeDetails = typeof details === 'object' && details !== null ? details : { message: String(details) };
+    console.log(`[Chart AI] ${provider} ${model}`, JSON.stringify(safeDetails));
+  } catch (error) {
+    console.error('[Chart AI] Failed to log provider response.', error);
+  }
+}
+
 function canonicalizeEnum(value, mapping) {
   if (typeof value !== 'string') return value;
   const key = value.trim().toLowerCase().replace(/[\s\-]+/g, '_');
