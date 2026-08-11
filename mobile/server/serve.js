@@ -101,7 +101,7 @@ const DEFAULT_STRATEGY_METRICS = {
   short_term_momentum: 'neutral',
   price_location: 'unknown',
   setup_direction: 'none',
-  setup_status: 'invalidated',
+  setup_status: 'NO_SETUP',
   setup_quality: 0,
   entry_quality: 0,
   confirmation_status: 'awaiting_confirmation',
@@ -115,6 +115,7 @@ const DEFAULT_STRATEGY_METRICS = {
   potential_bearish_scenario: '',
   invalidation_conditions: [],
 };
+const SETUP_STATUSES = ['NO_SETUP', 'DEVELOPING', 'READY', 'CONFIRMED', 'INVALIDATED'];
 const DEFAULT_TRADE_SETUP = {
   type: 'none',
   entry_zone: 'none',
@@ -634,17 +635,17 @@ function deriveSetupDirection(norm) {
 function deriveConfirmationStatus(norm, m15) {
   const confirmation = normalizeText(m15?.confirmation);
   const bosDetected = Boolean(m15 && m15.bos && m15.bos.detected === true);
-  if (confirmation && bosDetected) return 'confirmed';
-  if (confirmation || bosDetected) return 'developing';
-  if (norm.trade_setup?.type && norm.trade_setup.type !== 'none') return 'awaiting_confirmation';
-  return 'invalidated';
+  if (confirmation && bosDetected) return 'CONFIRMED';
+  if (confirmation || bosDetected) return 'DEVELOPING';
+  if (norm.trade_setup?.type && norm.trade_setup.type !== 'none') return 'DEVELOPING';
+  return 'INVALIDATED';
 }
 
 function determineWhyNotNow(norm, derived) {
   const reasons = [];
   if (derived.priceLocation === 'middle_of_range') reasons.push('Price is in the middle of the range rather than near a high-probability zone.');
-  if (derived.confirmationStatus === 'awaiting_confirmation') reasons.push('The setup has not yet generated a clear confirmation signal.');
-  if (derived.confirmationStatus === 'developing') reasons.push('Confirmation is still developing and the setup is not yet fully validated.');
+  if (derived.confirmationStatus === 'DEVELOPING') reasons.push('A setup exists but confirmation is still developing.');
+  if (derived.confirmationStatus === 'INVALIDATED') reasons.push('The setup has been invalidated by the current structure or momentum.');
   if (derived.priceLocation === 'near_resistance' && derived.setupDirection === 'buy') reasons.push('Entry is too close to resistance.');
   if (derived.priceLocation === 'near_support' && derived.setupDirection === 'sell') reasons.push('Entry is too close to support.');
   if (norm.trade_setup?.risk_reward != null && Number(norm.trade_setup.risk_reward) < 1.5) reasons.push('Risk/reward is below the minimum tolerance.');
@@ -661,7 +662,7 @@ function deriveDataLimitations(norm) {
 }
 
 function computeSetupScores(norm, derived, m15) {
-  const confirmationWeight = derived.confirmationStatus === 'confirmed' ? 25 : derived.confirmationStatus === 'developing' ? 12 : 0;
+  const confirmationWeight = derived.confirmationStatus === 'CONFIRMED' ? 25 : derived.confirmationStatus === 'DEVELOPING' ? 12 : 0;
   const locationWeight = derived.priceLocation === 'at_support' || derived.priceLocation === 'at_resistance' ? 20 : derived.priceLocation === 'near_support' || derived.priceLocation === 'near_resistance' ? 12 : derived.priceLocation === 'middle_of_range' ? 2 : 8;
   const momentumWeight = derived.shortTermMomentum === 'strong_bullish' || derived.shortTermMomentum === 'strong_bearish' ? 15 : derived.shortTermMomentum === 'bullish' || derived.shortTermMomentum === 'bearish' ? 10 : 5;
   const structureWeight = derived.marketStructure === 'uptrend' || derived.marketStructure === 'downtrend' ? 18 : derived.marketStructure === 'range' ? 12 : 8;
@@ -671,7 +672,7 @@ function computeSetupScores(norm, derived, m15) {
   const rrPenalty = rr > 0 && rr < 1.5 ? -12 : 0;
 
   const dataPenalty = deriveDataLimitations(norm).length > 0 ? -8 : 0;
-  const poorSetupPenalty = derived.confirmationStatus === 'invalidated' ? -15 : 0;
+  const poorSetupPenalty = derived.confirmationStatus === 'INVALIDATED' ? -15 : 0;
 
   const rawScore = 10 + confirmationWeight + locationWeight + momentumWeight + structureWeight + rrWeight + dataPenalty + rrPenalty + poorSetupPenalty;
   const score = Math.max(0, Math.min(100, Math.round(rawScore)));
@@ -843,6 +844,14 @@ function evaluateDecisionEngine(obs) {
   return result;
 }
 
+function determineSetupStatus(evalRes, derived) {
+  if (!evalRes.trade_setup || evalRes.trade_setup.type === 'none') return 'NO_SETUP';
+  if (derived.confirmationStatus === 'CONFIRMED') return 'CONFIRMED';
+  if (evalRes.status === 'success') return 'READY';
+  if (evalRes.trade_setup && evalRes.trade_setup.type !== 'none') return 'DEVELOPING';
+  return 'INVALIDATED';
+}
+
 // Produce a componentized, explainable scoring breakdown and final decision
 function buildExplainableOutcome(obs, evalRes) {
   const norm = obs.raw || {};
@@ -860,15 +869,17 @@ function buildExplainableOutcome(obs, evalRes) {
 
   const entryQuality = (evalRes.trade_setup && evalRes.trade_setup.type !== 'none') ? (setupQuality - 5) : 0;
 
-  const confirmationStatus = (evalRes.strategy_validation.confirmation && evalRes.strategy_validation.bos) ? 'Confirmed' : (evalRes.strategy_validation.confirmation ? 'Developing' : 'Awaiting Confirmation');
+  const confirmationStatus = (evalRes.strategy_validation.confirmation && evalRes.strategy_validation.bos) ? 'CONFIRMED' : 'DEVELOPING';
+  const setupStatus = determineSetupStatus(evalRes, { confirmationStatus });
 
   // Decision mapping
   let decision = 'NO_TRADE';
-  if (evalRes.status === 'success' && evalRes.trade_setup && evalRes.trade_setup.type !== 'none') {
+  if (setupStatus === 'CONFIRMED') {
     decision = evalRes.trade_setup.type === 'buy' ? 'BUY' : 'SELL';
-  } else if (evalRes.status === 'no_trade') {
-    decision = setupQuality >= 30 ? 'WAIT' : 'NO_TRADE';
-  } else if (evalRes.status === 'invalid_image' || evalRes.status === 'ai_unavailable' || evalRes.status === 'ai_invalid_response') {
+  } else if (setupStatus === 'READY' || setupStatus === 'DEVELOPING') {
+    decision = 'WAIT';
+  }
+  if (setupStatus === 'INVALIDATED') {
     decision = 'NO_TRADE';
   }
 
@@ -891,6 +902,7 @@ function buildExplainableOutcome(obs, evalRes) {
     setupQuality,
     entryQuality: Math.max(0, Math.min(100, Math.round(entryQuality))),
     confirmationStatus,
+    setupStatus,
     setupConfidence: setupQuality,
     decision,
     whyNotNow,
@@ -927,7 +939,7 @@ function applyMentorStrategy(normalized) {
   response.analysis.priceLocation = (normalized.zones && ((normalized.zones.demand && normalized.zones.demand.length) || (normalized.zones.supply && normalized.zones.supply.length))) ? (normalized.trade_setup && normalized.trade_setup.entry_zone && normalized.trade_setup.entry_zone !== 'none' ? 'at_entry_zone' : 'near_zone') : 'middle_of_range';
 
   response.setupDirection = response.trade_setup.type || 'none';
-  response.setupStatus = explain.confirmationStatus || 'Awaiting Confirmation';
+  response.setupStatus = explain.setupStatus || 'NO_SETUP';
   response.setupQuality = explain.setupQuality;
   response.entryQuality = explain.entryQuality;
   response.confirmationStatus = explain.confirmationStatus;
