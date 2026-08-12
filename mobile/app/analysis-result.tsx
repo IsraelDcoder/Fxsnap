@@ -162,6 +162,13 @@ export default function AnalysisResultScreen() {
     setTimeout(() => setToastVisible(false), 3000);
   };
 
+  const formatRiskReward = (v: any) => {
+    const n = Number(v);
+    if (!isFinite(n)) return String(v ?? '—');
+    // round to 2 decimal places and trim trailing zeros
+    return Number(Math.round(n * 100) / 100).toString();
+  };
+
   const handleSave = () => {
     if (!currentAnalysis || alreadySaved) return;
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -279,11 +286,18 @@ export default function AnalysisResultScreen() {
       lines.push(`Market Bias: ${currentAnalysis.marketBias || 'neutral'}`);
       lines.push(`Setup Status: ${currentAnalysis.setupStatus || 'NO_SETUP'}`);
       lines.push('');
+      const formatRR = (v: any) => {
+        const n = Number(v);
+        if (!isFinite(n)) return String(v ?? '—');
+        // round to 2 decimal places and trim trailing zeros
+        return Number(Math.round(n * 100) / 100).toString();
+      };
+
       if (hasTradeSetup && currentAnalysis.tradeSetup) {
         lines.push(`Entry:       ${currentAnalysis.tradeSetup.entryZone}`);
         lines.push(`Stop Loss:   ${currentAnalysis.tradeSetup.stopLoss}`);
         lines.push(`Take Profit: ${currentAnalysis.tradeSetup.takeProfit}`);
-        lines.push(`Risk/Reward: ${currentAnalysis.tradeSetup.riskReward}`);
+        lines.push(`Risk/Reward: ${formatRR(currentAnalysis.tradeSetup.riskReward)}`);
       } else {
         lines.push(`Entry:       ${currentAnalysis.entry ?? '—'}`);
         lines.push(`Stop Loss:   ${currentAnalysis.sl ?? '—'}`);
@@ -407,7 +421,7 @@ export default function AnalysisResultScreen() {
             <View style={styles.divider} />
             <DataRow label="Take Profit" value={currentAnalysis.tradeSetup.takeProfit} valueColor="#00E676" delay={760} />
             <View style={styles.divider} />
-            <DataRow label="Risk/Reward" value={String(currentAnalysis.tradeSetup.riskReward)} valueColor={Number(currentAnalysis.tradeSetup.riskReward) >= 1.5 ? '#00E676' : '#FF9F0A'} delay={830} />
+            <DataRow label="Risk/Reward" value={formatRiskReward(currentAnalysis.tradeSetup.riskReward)} valueColor={Number(currentAnalysis.tradeSetup.riskReward) >= 1.5 ? '#00E676' : '#FF9F0A'} delay={830} />
           </Animated.View>
         )}
 
