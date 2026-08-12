@@ -306,17 +306,34 @@ function ensureNullableString(value) {
   return null;
 }
 
+function parseJsonField(value, fallback = null) {
+  if (value == null) return fallback;
+  if (typeof value === 'object') return value;
+  if (typeof value !== 'string') return fallback;
+
+  const trimmed = value.trim();
+  if (!trimmed) return fallback;
+
+  const stripped = trimmed.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
+  if (!stripped) return fallback;
+
+  try {
+    return JSON.parse(stripped);
+  } catch {
+    const match = stripped.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
+    if (match) {
+      try { return JSON.parse(match[0]); } catch {
+        return fallback;
+      }
+    }
+    return fallback;
+  }
+}
+
 function parseJsonPayload(rawContent) {
   if (rawContent == null) return null;
   if (typeof rawContent === 'object') return rawContent;
-  const trimmed = String(rawContent).trim();
-  if (!trimmed) return null;
-  try { return JSON.parse(trimmed); } catch {
-    const match = trimmed.match(/\{[\s\S]*\}/);
-    if (match) {
-      try { return JSON.parse(match[0]); } catch {}
-    }
-  }
+  return parseJsonField(rawContent, null);
 }
 
 function canonicalizeEnum(value, mapping) {
@@ -1778,6 +1795,10 @@ if (require.main === module) {
 module.exports = requestHandler;
 module.exports.createRequestHandler = createRequestHandler;
 // Expose internals for unit testing
+module.exports.parseJsonField = parseJsonField;
+module.exports.parseJsonPayload = parseJsonPayload;
+module.exports.canonicalizeRawAnalysis = canonicalizeRawAnalysis;
+module.exports.normalizeAnalysis = normalizeAnalysis;
 module.exports.buildStructuredObservations = buildStructuredObservations;
 module.exports.evaluateDecisionEngine = evaluateDecisionEngine;
 module.exports.applyMentorStrategy = applyMentorStrategy;

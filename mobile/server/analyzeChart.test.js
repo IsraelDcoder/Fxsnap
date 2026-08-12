@@ -7,6 +7,22 @@ const {
   enforceValidationRules,
 } = require('./serve');
 
+test('canonical JSON parsing accepts object, string, and fenced JSON payloads', () => {
+  const { canonicalizeRawAnalysis } = require('./serve');
+  const objectPayload = { status: 'success', analysis: { trend: 'bullish' }, zones: { support: '1.1000' }, strategy: { daily_trend: 'bullish' }, trade_setup: { type: 'buy', risk_reward: 2.0 } };
+  const jsonStringPayload = '{"status":"success","analysis":{"trend":"bearish"},"zones":{"support":"1.1000"},"strategy":{"daily_trend":"bearish"},"trade_setup":{"type":"sell","risk_reward":1.8}}';
+  const fencedPayload = '```json\n{"status":"success","analysis":{"trend":"bullish"},"zones":{"support":"1.1000"},"strategy":{"daily_trend":"bullish"},"trade_setup":{"type":"buy","risk_reward":2.2}}\n```';
+
+  const a = canonicalizeRawAnalysis(objectPayload);
+  const b = canonicalizeRawAnalysis(jsonStringPayload);
+  const c = canonicalizeRawAnalysis(fencedPayload);
+
+  assert.equal(a.status, 'success');
+  assert.equal(b.analysis.trend, 'bearish');
+  assert.equal(c.trade_setup.type, 'buy');
+  assert.equal(c.trade_setup.risk_reward, 2.2);
+});
+
 test('invalid image yields invalid_image status and no trade', () => {
   const normalized = {
     status: 'no_trade',
