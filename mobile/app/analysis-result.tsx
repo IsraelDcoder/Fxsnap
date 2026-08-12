@@ -339,7 +339,7 @@ export default function AnalysisResultScreen() {
               <View style={{ flex: 1 }}>
                 <Text style={[styles.confidenceLabel, { color: colors.textSecondary }]}>Market Confidence</Text>
                 <Text style={[styles.confidenceValue, { color: directionColor }]}>
-                  {currentAnalysis.marketConfidence ?? currentAnalysis.confidence}%
+                  {typeof currentAnalysis.marketConfidence === 'number' ? `${currentAnalysis.marketConfidence}%` : `${currentAnalysis.confidence}%`}
                 </Text>
                 <View style={styles.progressBar}>
                   <Animated.View

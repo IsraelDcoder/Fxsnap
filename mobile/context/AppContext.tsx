@@ -51,6 +51,7 @@ export interface AnalysisResult {
   // Canonical analysis scores exposed by the server
   marketConfidence?: number;
   entryReadiness?: number;
+  tradeDecision?: 'BUY' | 'SELL' | 'WAIT' | 'NONE';
   tradeStatus?: string;
   setupStatus?: string;
   setupConfidence?: number;
