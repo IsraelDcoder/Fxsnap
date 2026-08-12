@@ -748,6 +748,7 @@ function evaluateDecisionEngine(obs) {
     validations.structure = true;
   }
 
+  const liquidityVisible = Boolean(m15 && m15.liquidity && typeof m15.liquidity.swept === 'boolean');
   const liquidityOk = Boolean(
     (m15 && m15.liquidity && m15.liquidity.swept) ||
     (norm.strategy && norm.strategy.liquidity_sweep && norm.strategy.liquidity_sweep !== 'unavailable' && norm.strategy.liquidity_sweep !== 'none')
@@ -805,8 +806,8 @@ function evaluateDecisionEngine(obs) {
   if (m15 && m15.bos && m15.bos.detected === false && rawTrade.type && rawTrade.type !== 'none') {
     failed.push('Break of structure is not confirmed on the visible chart.');
   }
-  if (!liquidityOk && rawTrade.type && rawTrade.type !== 'none') {
-    failed.push('Liquidity confirmation is not visible on the current chart.');
+  if (liquidityVisible && !liquidityOk && rawTrade.type && rawTrade.type !== 'none') {
+    failed.push('Liquidity confirmation is visible and contradicts the setup.');
   }
 
   if (!hasChart) {
@@ -869,20 +870,19 @@ function evaluateDecisionEngine(obs) {
 function determineSetupStatus(evalRes, derived) {
   if (!evalRes.trade_setup || evalRes.trade_setup.type === 'none') return 'NO_SETUP';
   if (derived.confirmationStatus === 'CONFIRMED') return 'CONFIRMED';
-  if (evalRes.status === 'success') return 'READY';
   if (evalRes.trade_setup && evalRes.trade_setup.type !== 'none') return 'DEVELOPING';
   return 'INVALIDATED';
 }
 
 function deriveTradeStatus(setupStatus, derived) {
   if (setupStatus === 'CONFIRMED') return 'actionable';
-  if (setupStatus === 'READY') return 'waiting_for_confirmation';
   if (setupStatus === 'DEVELOPING') {
     if (derived.priceLocation === 'at_support' && derived.setupDirection === 'sell') return 'waiting_for_pullback';
     if (derived.priceLocation === 'at_resistance' && derived.setupDirection === 'buy') return 'waiting_for_pullback';
     if (derived.priceLocation === 'near_support' && derived.setupDirection === 'sell') return 'waiting_for_pullback';
     if (derived.priceLocation === 'near_resistance' && derived.setupDirection === 'buy') return 'waiting_for_pullback';
     if (derived.priceLocation === 'middle_of_range') return 'waiting_for_breakout';
+    if (derived.confirmationStatus === 'DEVELOPING') return 'waiting_for_confirmation';
     return 'waiting_for_confirmation';
   }
   if (setupStatus === 'INVALIDATED') return 'invalid';
@@ -995,17 +995,20 @@ function buildExplainableOutcome(obs, evalRes) {
   if (!obs.timeframes_detected || obs.timeframes_detected.length === 0) dataLimitations.push('Single timeframe or timeframe not detected');
   if (!(norm.analysis && norm.analysis.volume) || norm.analysis.volume === 'not_visible') dataLimitations.push('Volume not available');
 
+  const evidenceScores = {
+    trend: trendComp,
+    zone: zoneComp,
+    priceLocation: priceLocationComp,
+    liquidity: liquidityComp,
+    confirmation: confirmationComp,
+    bos: bosComp,
+    rsi: rsiComp,
+    rawScore,
+  };
+
   return {
-    breakdown: {
-      trend: trendComp,
-      zone: zoneComp,
-      priceLocation: priceLocationComp,
-      liquidity: liquidityComp,
-      confirmation: confirmationComp,
-      bos: bosComp,
-      rsi: rsiComp,
-      rawScore,
-    },
+    breakdown: evidenceScores,
+    evidenceScores,
     setupQuality,
     entryQuality: Math.max(0, Math.min(100, entryQuality)),
     confirmationStatus,
