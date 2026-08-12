@@ -167,34 +167,34 @@ export default function AnalysisResultScreen() {
       const ready = await waitForReady(2000);
       console.log('[AnalysisShare] share card ready flag:', ready);
 
-      console.log('[AnalysisShare] Capturing share card');
-      const uri = await captureRef(shareCardRef.current, {
+      console.log('[AnalysisShare] Capturing share card via base64 fallback');
+      // Use base64 capture as it is more reliable across platforms and avoids tmpfile path issues
+      const base64 = await captureRef(shareCardRef.current, {
         format: 'png',
         quality: 0.95,
-        result: 'tmpfile',
+        result: 'base64',
       });
-      console.log('[AnalysisShare] capture uri:', uri);
+      console.log('[AnalysisShare] capture base64 length:', base64 ? base64.length : 0);
 
-      // Verify file exists and has size > 0
+      if (!base64) throw new Error('No base64 returned from captureRef');
+      const tmpUri = FileSystem.cacheDirectory + `fxsnap-share-${Date.now()}.png`;
+      await FileSystem.writeAsStringAsync(tmpUri, base64, { encoding: FileSystem.EncodingType.Base64 });
       try {
-        const info = await FileSystem.getInfoAsync(uri);
-        console.log('[AnalysisShare] file info:', info);
-        if (!info.exists || !(info.size && info.size > 0)) {
-          throw new Error('Captured file missing or empty');
-        }
+        const info = await FileSystem.getInfoAsync(tmpUri);
+        console.log('[AnalysisShare] written file info:', info);
+        if (!info.exists || !(info.size && info.size > 0)) throw new Error('Written tmp file missing');
       } catch (fsErr) {
-        console.error('[AnalysisShare] File verification failed', fsErr);
+        console.error('[AnalysisShare] File verification failed after write', fsErr);
         throw fsErr;
       }
 
-      // Android may require file:// prefix for shareAsync
-      let shareUri = uri;
-      if (Platform.OS === 'android' && typeof uri === 'string' && !uri.startsWith('file://')) {
-        shareUri = `file://${uri}`;
-        console.log('[AnalysisShare] Adjusted android uri to', shareUri);
+      let shareUri = tmpUri;
+      if (Platform.OS === 'android' && typeof tmpUri === 'string' && !tmpUri.startsWith('file://')) {
+        shareUri = `file://${tmpUri}`;
       }
       await shareAsync(shareUri, { mimeType: 'image/png' });
       showToast('Share card ready to share');
+      try { await FileSystem.deleteAsync(tmpUri, { idempotent: true }); } catch (e) { /* ignore cleanup errors */ }
     } catch (error) {
       // Detailed logging for debugging
       console.error('[AnalysisShare] Image generation failed', error);
@@ -336,19 +336,28 @@ export default function AnalysisResultScreen() {
 
           <Animated.View entering={FadeInDown.delay(350).duration(500)}>
             <View style={styles.confidenceRow}>
-              <Text style={[styles.confidenceLabel, { color: colors.textSecondary }]}>Confidence</Text>
-              <Text style={[styles.confidenceValue, { color: directionColor }]}>
-                {currentAnalysis.confidence}%
-              </Text>
-            </View>
-            <View style={styles.progressBar}>
-              <Animated.View
-                entering={FadeIn.delay(500).duration(900)}
-                style={[
-                  styles.progressFill,
-                  { width: `${currentAnalysis.confidence}%` as any, backgroundColor: directionColor },
-                ]}
-              />
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.confidenceLabel, { color: colors.textSecondary }]}>Market Confidence</Text>
+                <Text style={[styles.confidenceValue, { color: directionColor }]}>
+                  {currentAnalysis.marketConfidence ?? currentAnalysis.confidence}%
+                </Text>
+                <View style={styles.progressBar}>
+                  <Animated.View
+                    entering={FadeIn.delay(500).duration(900)}
+                    style={[
+                      styles.progressFill,
+                      { width: `${currentAnalysis.marketConfidence ?? currentAnalysis.confidence}%` as any, backgroundColor: directionColor },
+                    ]}
+                  />
+                </View>
+              </View>
+
+              <View style={{ width: 140, marginLeft: 12 }}>
+                <Text style={[styles.confidenceLabel, { color: colors.textSecondary }]}>Setup / Entry</Text>
+                <Text style={[styles.confidenceValue, { color: directionColor }]}>
+                  {currentAnalysis.setupConfidence ?? 0}% / {currentAnalysis.entryReadiness ?? 0}%
+                </Text>
+              </View>
             </View>
           </Animated.View>
         </Animated.View>

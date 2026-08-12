@@ -229,12 +229,13 @@ function AnalyzingView() {
 function buildAnalysisResult(chart: ChartAnalysisResult, pair: string, imageUri?: string): AnalysisResult {
   const isBuy = chart.trade_setup.type === 'buy';
   const isSell = chart.trade_setup.type === 'sell';
-  return {
+    return {
     id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
     pair,
     status: chart.status,
     direction: isBuy ? 'BUY' : isSell ? 'SELL' : undefined,
-    confidence: chart.confidence,
+    // Primary market confidence (preferred). Fall back to legacy composite confidence when missing.
+    confidence: typeof chart.marketConfidence === 'number' ? chart.marketConfidence : chart.confidence,
     confidenceType: 'composite_score',
     imageUri,
     createdAt: new Date().toISOString(),
@@ -261,9 +262,11 @@ function buildAnalysisResult(chart: ChartAnalysisResult, pair: string, imageUri?
     },
     marketBias: chart.marketBias,
     marketBiasConfidence: chart.marketBiasConfidence,
+    marketConfidence: chart.marketConfidence ?? chart.marketBiasConfidence ?? chart.confidence,
+    setupConfidence: chart.setupConfidence ?? chart.confidence,
+    entryReadiness: chart.entryReadiness ?? 0,
     tradeStatus: chart.tradeStatus,
     setupStatus: chart.setupStatus,
-    setupConfidence: chart.setupConfidence,
     tradeTrigger: chart.tradeTrigger,
     whyNotNow: chart.whyNotNow,
     dataLimitations: chart.dataLimitations,

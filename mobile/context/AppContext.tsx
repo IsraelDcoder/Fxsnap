@@ -48,6 +48,9 @@ export interface AnalysisResult {
   };
   marketBias?: 'bullish' | 'bearish' | 'neutral' | 'mixed';
   marketBiasConfidence?: number;
+  // Canonical analysis scores exposed by the server
+  marketConfidence?: number;
+  entryReadiness?: number;
   tradeStatus?: string;
   setupStatus?: string;
   setupConfidence?: number;

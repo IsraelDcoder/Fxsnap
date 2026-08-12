@@ -315,22 +315,6 @@ function parseJsonPayload(rawContent) {
       try { return JSON.parse(match[0]); } catch {}
     }
   }
-  return null;
-}
-
-function parseJsonField(value) {
-  if (typeof value !== 'string') return value;
-  const parsed = parseJsonPayload(value);
-  return parsed === null ? value.trim() : parsed;
-}
-
-function logProviderResponse(provider, model, details) {
-  try {
-    const safeDetails = typeof details === 'object' && details !== null ? details : { message: String(details) };
-    console.log(`[Chart AI] ${provider} ${model}`, JSON.stringify(safeDetails));
-  } catch (error) {
-    console.error('[Chart AI] Failed to log provider response.', error);
-  }
 }
 
 function canonicalizeEnum(value, mapping) {
@@ -1030,6 +1014,9 @@ function applyMentorStrategy(normalized) {
   response.setupStatus = explain.setupStatus || 'NO_SETUP';
   response.setupQuality = explain.setupQuality;
   response.setupConfidence = explain.setupConfidence;
+  // Expose separate scored fields: marketConfidence, setupConfidence, entryReadiness
+  response.marketConfidence = explain.marketBiasConfidence;
+  response.entryReadiness = explain.entryQuality;
   response.entryQuality = explain.entryQuality;
   response.confirmationStatus = explain.confirmationStatus;
   response.decision = explain.decision;
@@ -1042,7 +1029,7 @@ function applyMentorStrategy(normalized) {
     response.trade_setup = { ...DEFAULT_TRADE_SETUP };
   }
 
-  // Enforce additional server-side rules
+  // Enforce additional server-side rules (should not wipe out valid analysis)
   const enforced = enforceValidationRules(response) || response;
   return enforced;
 }
@@ -1135,25 +1122,28 @@ FINAL RULES:
 function enforceValidationRules(response) {
   if (!response) return null;
 
+  // Previously this function forcibly converted responses with low single-value confidence
+  // into `no_trade` and cleared trade setups. That conflates market analysis with entry
+  // readiness and hides valid directional information. Updated behavior:
+  // - Do NOT clear or wipe valid trade_setup or marketBias when a score is low.
+  // - Attach explanatory notes and set tradeStatus/tradeTrigger to reflect reasons to wait.
+  // - Keep response.status intact (success/no_trade) as determined by the evaluation engine.
   if (response.status === 'success') {
-    if (response.confidence < 70) {
-      response.status = 'no_trade';
-      if (!response.trade_setup || !response.trade_setup.type || response.trade_setup.type === 'none' || !response.tradeStatus || response.tradeStatus === 'invalid' || response.tradeStatus === 'no_setup') {
-        response.trade_setup = { ...DEFAULT_TRADE_SETUP };
-      } else if (response.tradeStatus === 'actionable') {
-        response.tradeStatus = 'waiting_for_confirmation';
-        response.tradeTrigger = 'Signal confidence is below threshold; wait for clearer confirmation before entering.';
+    try {
+      const rr = Number(response.trade_setup && response.trade_setup.risk_reward) || 0;
+      if (rr > 0 && rr < 1.5) {
+        // Preserve analysis; mark setup as waiting for a better entry
+        if (!response.tradeStatus || response.tradeStatus === 'actionable') response.tradeStatus = 'waiting_for_pullback';
+        response.tradeTrigger = response.tradeTrigger || 'Entry quality is below the minimum risk-reward threshold; wait for a better setup.';
+        response.analysis = response.analysis || {};
+        response.analysis.notes = mergeUniqueStrings([response.analysis.notes || '', 'Signal held back: risk-reward is below the 1.5 minimum.']).join(' ').trim();
       }
-      response.analysis.notes = 'Signal held back: confidence is below the 70% validation threshold.';
-    } else if (Number(response.trade_setup.risk_reward) < 1.5) {
-      response.status = 'no_trade';
-      if (!response.trade_setup || !response.trade_setup.type || response.trade_setup.type === 'none' || !response.tradeStatus || response.tradeStatus === 'invalid' || response.tradeStatus === 'no_setup') {
-        response.trade_setup = { ...DEFAULT_TRADE_SETUP };
-      } else if (response.tradeStatus !== 'waiting_for_pullback') {
-        response.tradeStatus = 'waiting_for_pullback';
-        response.tradeTrigger = 'Entry quality is below the minimum risk-reward threshold; wait for a better setup.';
+      if (typeof response.marketConfidence === 'number' && response.marketConfidence < 40) {
+        response.analysis = response.analysis || {};
+        response.analysis.notes = mergeUniqueStrings([response.analysis.notes || '', 'Market clarity is low; consider waiting for additional confirmation.']).join(' ').trim();
       }
-      response.analysis.notes = 'Signal held back: risk-reward is below the 1.5 minimum.';
+    } catch (err) {
+      console.error('[Validation] enforceValidationRules error', err);
     }
   }
 

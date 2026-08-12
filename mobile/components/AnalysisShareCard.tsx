@@ -26,7 +26,7 @@ const AnalysisShareCard = React.forwardRef(function AnalysisShareCard(props: Pro
   const directionColor = isBuy ? '#00E676' : isSell ? '#FF5252' : '#8E8E93';
 
   return (
-    <View ref={ref} onLayout={handleLayout} style={[styles.shareCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}> 
+    <View ref={ref} collapsable={false} pointerEvents="none" onLayout={handleLayout} style={[styles.shareCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}> 
       <View style={styles.shareHeaderRow}>
         <Text style={[styles.shareLogo, { color: colors.text }]}>FXSnap</Text>
         <View style={[styles.shareDirectionBadge, { backgroundColor: isBuy ? '#023315' : isSell ? '#3F0A0A' : '#1A1A1A' }]}>

@@ -32,6 +32,10 @@ export interface ChartAnalysisResult {
   };
   marketBias?: 'bullish' | 'bearish' | 'neutral' | 'mixed';
   marketBiasConfidence?: number;
+  // Canonical analysis scores
+  marketConfidence?: number;
+  entryReadiness?: number;
+  tradeDecision?: 'BUY' | 'SELL' | 'WAIT' | 'NONE';
   tradeStatus?: string;
   setupStatus?: string;
   setupConfidence?: number;
