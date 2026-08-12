@@ -484,33 +484,16 @@ export default function AnalysisResultScreen() {
           </Animated.View>
         )}
 
-        {/* ── Explainable breakdown & diagnostics ── */}
-        {(currentAnalysis.breakdown || (currentAnalysis.whyNotNow && currentAnalysis.whyNotNow.length) || (currentAnalysis.dataLimitations && currentAnalysis.dataLimitations.length)) && (
+        {/* ── Market context & diagnostics (simplified) ── */}
+        {(currentAnalysis.marketBias || currentAnalysis.analysis?.notes || (currentAnalysis.whyNotNow && currentAnalysis.whyNotNow.length) || (currentAnalysis.dataLimitations && currentAnalysis.dataLimitations.length)) && (
           <Animated.View entering={FadeInUp.delay(1220).duration(500)} style={styles.levelsCard}>
-            <Text style={[styles.cardTitle, { color: colors.text }]}>Explainable Breakdown</Text>
-            {/* Bars for each factor */}
-            {currentAnalysis.breakdown ? (
-              <>
-                <View style={{ marginTop: 6 }} />
-                {(() => {
-                  const map = [
-                    { key: 'trend', label: 'Trend', icon: 'trending-up', color: '#7C4DFF' },
-                    { key: 'zone', label: 'Zone', icon: 'map-pin', color: '#00E676' },
-                    { key: 'priceLocation', label: 'Price Location', icon: 'layers', color: '#FFD60A' },
-                    { key: 'liquidity', label: 'Liquidity', icon: 'wind', color: '#00BCD4' },
-                    { key: 'confirmation', label: 'Confirmation', icon: 'check-circle', color: '#4CAF50' },
-                    { key: 'bos', label: 'Break of Structure', icon: 'zap', color: '#FF5252' },
-                    { key: 'rsi', label: 'RSI', icon: 'bar-chart-2', color: '#FF9F0A' },
-                  ];
-                  return map.map((m, i) => {
-                    const val = (currentAnalysis.breakdown as any)[m.key];
-                    return <BreakdownRow key={m.key} label={m.label} value={val} color={m.color} icon={m.icon} delay={600 + i * 80} />;
-                  });
-                })()}
-              </>
-            ) : null}
+            <Text style={[styles.cardTitle, { color: colors.text }]}>Market Context</Text>
+            <View style={{ marginTop: 6 }} />
+            <DataRow label="Market Bias" value={String(currentAnalysis.marketBias || 'neutral').toUpperCase()} delay={1220} />
+            <DataRow label="Market Confidence" value={typeof currentAnalysis.marketConfidence === 'number' ? `${currentAnalysis.marketConfidence}%` : `${currentAnalysis.confidence}%`} delay={1240} />
+            {currentAnalysis.analysis?.notes ? <Text style={styles.chartNotes}>{currentAnalysis.analysis.notes}</Text> : null}
 
-            {/* Why not now */}
+            {/* Why not now (concise) */}
             {currentAnalysis.whyNotNow && currentAnalysis.whyNotNow.length ? (
               <>
                 <View style={styles.divider} />
