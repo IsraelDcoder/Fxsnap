@@ -65,11 +65,12 @@ function DataRow({
 }
 
 // Breakdown row with icon and animated bar
-function BreakdownRow({ label, value, color, icon, delay }: { label: string; value: number; color?: string; icon?: string; delay: number }) {
+function BreakdownRow({ label, value, color, icon, delay }: { label: string; value: number | null | undefined; color?: string; icon?: string; delay: number }) {
   const progress = useSharedValue(0);
   React.useEffect(() => {
+    const numericValue = typeof value === 'number' && !Number.isNaN(value) ? Math.max(0, Math.min(100, value)) : 0;
     const t = setTimeout(() => {
-      progress.value = withTiming(Math.max(0, Math.min(100, value)), { duration: 800 });
+      progress.value = withTiming(numericValue, { duration: 800 });
     }, delay);
     return () => clearTimeout(t);
   }, [value, delay]);
@@ -78,6 +79,8 @@ function BreakdownRow({ label, value, color, icon, delay }: { label: string; val
     width: `${progress.value}%`,
   }));
 
+  const displayText = typeof value === 'number' && !Number.isNaN(value) ? `${Math.round(value)}%` : 'N/A';
+
   return (
     <Animated.View entering={FadeInLeft.delay(delay).duration(450)} style={{ marginTop: 8 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -85,7 +88,7 @@ function BreakdownRow({ label, value, color, icon, delay }: { label: string; val
           {icon ? <Feather name={icon as any} size={14} color={color || '#00E676'} /> : null}
           <Text style={[styles.dataLabel, { color: '#8E8E93' }]}>{label}</Text>
         </View>
-        <Text style={[styles.dataValue, { color: color || '#00E676', fontSize: 13 }]}>{`${Math.round(value)}%`}</Text>
+        <Text style={[styles.dataValue, { color: color || '#00E676', fontSize: 13 }]}>{displayText}</Text>
       </View>
       <View style={[styles.progressBar, { marginTop: 8 }]}>
         <Animated.View style={[styles.progressFill, barStyle, { backgroundColor: color || '#00E676' }]} />
@@ -500,7 +503,7 @@ export default function AnalysisResultScreen() {
                     { key: 'rsi', label: 'RSI', icon: 'bar-chart-2', color: '#FF9F0A' },
                   ];
                   return map.map((m, i) => {
-                    const val = (currentAnalysis.breakdown as any)[m.key] ?? 0;
+                    const val = (currentAnalysis.breakdown as any)[m.key];
                     return <BreakdownRow key={m.key} label={m.label} value={val} color={m.color} icon={m.icon} delay={600 + i * 80} />;
                   });
                 })()}

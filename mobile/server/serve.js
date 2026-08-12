@@ -922,15 +922,43 @@ function buildExplainableOutcome(obs, evalRes) {
   const tradeStatus = deriveTradeStatus(setupStatus, { priceLocation, setupDirection, confirmationStatus });
   const tradeTrigger = buildTradeTrigger(tradeStatus, { priceLocation, setupDirection, confirmationStatus });
 
-  const trendComp = evalRes.strategy_validation.daily_trend ? 20 : 10;
-  const zoneComp = evalRes.strategy_validation.valid_zone ? 20 : 10;
-  const priceLocationComp = evalRes.strategy_validation.price_return ? 15 : 8;
-  const liquidityComp = evalRes.strategy_validation.liquidity_sweep ? 10 : 6;
-  const confirmationComp = evalRes.strategy_validation.confirmation ? 15 : 8;
-  const bosComp = evalRes.strategy_validation.bos ? 10 : 6;
-  const rsiComp = evalRes.strategy_validation.rsi ? 10 : 4;
+  const trendComp = evalRes.strategy_validation.trend ? 20 : 10;
+  const zoneComp = evalRes.strategy_validation.meaningful_level ? 20 : 10;
+  const priceLocationComp = priceLocation === 'at_support' || priceLocation === 'at_resistance'
+    ? 15
+    : priceLocation === 'near_support' || priceLocation === 'near_resistance'
+      ? 12
+      : priceLocation === 'middle_of_range'
+        ? 6
+        : 8;
 
-  const rawScore = trendComp + zoneComp + priceLocationComp + liquidityComp + confirmationComp + bosComp + rsiComp;
+  const isLiquidityVisible = Boolean(
+    (norm.m15 && norm.m15.liquidity && norm.m15.liquidity.swept === true) ||
+    (norm.strategy && norm.strategy.liquidity_sweep === 'confirmed')
+  );
+  const liquidityComp = isLiquidityVisible
+    ? 10
+    : null;
+
+  const confirmationComp = confirmationStatus === 'CONFIRMED'
+    ? 15
+    : confirmationStatus === 'DEVELOPING'
+      ? 12
+      : confirmationStatus === 'INVALIDATED'
+        ? 8
+        : null;
+
+  const isBosVisible = Boolean(norm.m15 && typeof norm.m15.bos?.detected === 'boolean');
+  const bosComp = isBosVisible ? (norm.m15.bos.detected ? 10 : 6) : null;
+
+  const isRsiVisible = Boolean(norm.m15 && norm.m15.rsi && norm.m15.rsi.visible === true);
+  const rsiComp = isRsiVisible ? (norm.m15.rsi.confirms ? 10 : 4) : null;
+
+  const rawScore = trendComp + zoneComp + priceLocationComp +
+    (liquidityComp != null ? liquidityComp : 0) +
+    (confirmationComp != null ? confirmationComp : 0) +
+    (bosComp != null ? bosComp : 0) +
+    (rsiComp != null ? rsiComp : 0);
   const setupQuality = Math.max(0, Math.min(100, Math.round(rawScore)));
   const entryQuality = (evalRes.trade_setup && evalRes.trade_setup.type !== 'none') ? Math.round(Math.max(0, Math.min(100, setupQuality - 12))) : 0;
 

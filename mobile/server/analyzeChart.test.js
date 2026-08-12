@@ -157,3 +157,76 @@ test('fallback candidate created from range strings when full validations missin
   // The decision should be WAIT or NO_TRADE depending on score; ensure not silently empty
   assert.ok(['BUY', 'SELL', 'WAIT', 'NO_TRADE'].includes(res.decision));
 });
+
+test('strong bearish directional bias keeps a conditional setup and treats unavailable evidence as N/A', () => {
+  const normalized = {
+    status: 'success',
+    detectedPair: 'XAUUSD',
+    timeframe: 'M15',
+    chart: { is_chart: true, timeframe: 'M15', candles_visible: true, price_scale_visible: true, has_enough_candles: true },
+    analysis: {
+      trend: 'bearish',
+      market_structure: 'lower highs and lower lows with bearish continuation',
+      structure: 'lower highs lower lows',
+      volatility: 'high',
+      sentiment: 'bearish',
+      volume: 'not_visible',
+      indicators: 'none',
+      notes: 'Strong bearish continuation on the current chart.'
+    },
+    zones: { support: '2348-2352', resistance: '2368-2375' },
+    m15: { inside_zone: false, liquidity: { swept: false }, confirmation: 'bearish continuation', bos: { detected: false }, rsi: { visible: false, confirms: false } },
+    strategy: { zone_status: 'near_zone', liquidity_sweep: 'unavailable', bos: 'unavailable', rsi_confirmation: 'unavailable' },
+    trade_setup: {
+      type: 'sell',
+      entry_zone: '2358-2362',
+      stop_loss: '2368',
+      take_profit: '2342-2348',
+      risk_reward: '1.8',
+    },
+    confidence: 64,
+    reasons: [],
+  };
+
+  const res = applyMentorStrategy(normalized);
+  assert.equal(res.marketBias, 'bearish');
+  assert.ok(res.marketConfidence > 0);
+  assert.ok(res.trade_setup.type === 'sell');
+  assert.ok(['SELL', 'WAIT'].includes(res.decision));
+  assert.ok(typeof res.breakdown?.trend === 'number' && res.breakdown.trend > 0);
+  assert.ok(res.breakdown?.liquidity === null || res.breakdown?.liquidity === undefined);
+  assert.ok(res.breakdown?.rsi === null || res.breakdown?.rsi === undefined);
+  assert.ok(Array.isArray(res.dataLimitations));
+  assert.ok(res.dataLimitations.some((item) => /rsi|volume|liquidity|timeframe/i.test(String(item))));
+});
+
+test('neutral market remains no_setup while preserving explainable reasons', () => {
+  const normalized = {
+    status: 'success',
+    detectedPair: 'EURUSD',
+    timeframe: 'M15',
+    chart: { is_chart: true, timeframe: 'M15', candles_visible: true, price_scale_visible: true, has_enough_candles: true },
+    analysis: {
+      trend: 'neutral',
+      market_structure: 'range bound with no clear breakout',
+      structure: 'sideways price action',
+      volatility: 'moderate',
+      sentiment: 'neutral',
+      volume: 'not_visible',
+      indicators: 'none',
+      notes: 'Price remains range-bound.'
+    },
+    zones: { support: '1.0880-1.0900', resistance: '1.0940-1.0960' },
+    m15: { inside_zone: false, liquidity: { swept: false }, confirmation: null, bos: { detected: false }, rsi: { visible: false, confirms: false } },
+    strategy: {},
+    trade_setup: { type: 'none' },
+    confidence: 35,
+    reasons: [],
+  };
+
+  const res = applyMentorStrategy(normalized);
+  assert.equal(res.marketBias, 'neutral');
+  assert.equal(res.trade_setup.type, 'none');
+  assert.ok(['NO_TRADE', 'WAIT'].includes(res.decision));
+  assert.ok(Array.isArray(res.whyNotNow));
+});
