@@ -18,6 +18,7 @@ const persistentStore = require('./persistentStore');
 const { createAuth, verifyAuth } = require('./auth');
 const { buildSessionContext } = require('./tradingSessions');
 const { buildBiasConfidence, computeSetupConfidence } = require('./scoring');
+const { parseRiskReward: rrParse, parsePriceOrRange: rrParsePriceOrRange, computeRRFromLevels } = require('./rr');
 
 function loadEnvFile() {
   const envPath = path.resolve(__dirname, '..', '.env');
@@ -745,13 +746,16 @@ function evaluateDecisionEngine(obs) {
     const rr = typeof norm.trade_setup.risk_reward === 'number' ? norm.trade_setup.risk_reward : parseRiskReward(norm.trade_setup.risk_reward);
     const dir = norm.trade_setup.type;
     // Basic numeric validation: must be numbers and satisfy direction
-    if (entry != null && sl != null && tp != null && !Number.isNaN(entry) && !Number.isNaN(sl) && !Number.isNaN(tp) && rr != null && !Number.isNaN(rr)) {
-      const rrComputed = Math.abs((tp - entry) / (entry - sl));
-      const rrValue = Number.isFinite(rrComputed) ? rrComputed : rr;
-      const rrFinal = typeof rr === 'number' && rr >= 0 ? rr : rrValue;
+    if (entry != null && sl != null && tp != null && !Number.isNaN(entry) && !Number.isNaN(sl) && !Number.isNaN(tp)) {
+      // Prefer validated RR computed from levels which handles ranges and nonstandard formats
+      const computed = computeRRFromLevels({ entry: norm.trade_setup.entry_zone, sl: norm.trade_setup.stop_loss, tp: norm.trade_setup.take_profit, direction: dir });
+      if (computed && Array.isArray(computed.issues) && computed.issues.length > 0) {
+        computed.issues.forEach((it) => failed.push(`RR issue: ${it}`));
+      }
+      const rrComputed = Number.isFinite(computed && typeof computed.rr === 'number' ? computed.rr : NaN) ? computed.rr : (typeof rr === 'number' && !Number.isNaN(rr) ? rr : null);
       const validLevels = (dir === 'buy' && sl < entry && tp > entry) || (dir === 'sell' && sl > entry && tp < entry);
-      if (validLevels && rrFinal >= 2.0) {
-        trade_setup = { type: dir, entry_zone: String(entry), stop_loss: String(sl), take_profit: String(tp), risk_reward: rrFinal };
+      if (validLevels && rrComputed != null && rrComputed >= 2.0) {
+        trade_setup = { type: dir, entry_zone: String(entry), stop_loss: String(sl), take_profit: String(tp), risk_reward: rrComputed };
       } else {
         failed.push('Trade numeric validation failed (levels or RR insufficient)');
         validations.all_required_conditions_met = false;
@@ -779,9 +783,14 @@ function evaluateDecisionEngine(obs) {
         const tp = tpRange.mid;
         const validLevels = (dir === 'buy' && sl < entry && tp > entry) || (dir === 'sell' && sl > entry && tp < entry);
         if (validLevels) {
-          const rrComputed = Math.abs((tp - entry) / (entry - sl));
+          // Prefer computeRRFromLevels to capture issues from ranges
+          const computed = computeRRFromLevels({ entry: norm.trade_setup.entry_zone, sl: norm.trade_setup.stop_loss, tp: norm.trade_setup.take_profit, direction: dir });
+          if (computed && Array.isArray(computed.issues) && computed.issues.length > 0) {
+            computed.issues.forEach((it) => failed.push(`RR issue: ${it}`));
+          }
+          const rrComputed = Number.isFinite(computed && typeof computed.rr === 'number' ? computed.rr : Math.abs((tp - entry) / (entry - sl))) ? (computed.rr || Math.abs((tp - entry) / (entry - sl))) : null;
           // Accept as a candidate if RR positive; stricter filtering happens later in enforceValidationRules
-          if (Number.isFinite(rrComputed) && rrComputed > 0) {
+          if (rrComputed != null && Number.isFinite(rrComputed) && rrComputed > 0) {
             trade_setup = {
               type: dir === 'buy' ? 'buy' : dir === 'sell' ? 'sell' : 'none',
               entry_zone: String(norm.trade_setup.entry_zone),
@@ -1002,6 +1011,7 @@ function applyMentorStrategy(normalized) {
   response.decision = explain.decision;
   response.whyNotNow = explain.whyNotNow;
   response.dataLimitations = explain.dataLimitations;
+  response.breakdown = explain.breakdown;
 
   // If evaluation failed mandatory conditions, ensure trade_setup is none
   // If evaluation failed mandatory conditions, only clear trade_setup when no candidate was provided.

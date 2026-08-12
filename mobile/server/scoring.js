@@ -12,17 +12,16 @@ function buildBiasConfidence(norm, derived) {
   return Math.max(0, Math.min(100, Math.round(raw)));
 }
 
-function parseRiskReward(value) {
-  if (typeof value === 'number') return value;
-  if (typeof value !== 'string') return null;
-  const m = value.match(/(\d+(?:\.\d+)?)/);
-  if (!m) return null;
-  return Number(m[1]);
-}
+const { parseRiskReward: rrParse, computeRRFromLevels } = require('./rr');
 
 function computeSetupConfidence(norm, derived, evalRes) {
   if (!evalRes.trade_setup || evalRes.trade_setup.type === 'none') return 0;
-  const rr = typeof evalRes.trade_setup.risk_reward === 'number' ? evalRes.trade_setup.risk_reward : parseRiskReward(evalRes.trade_setup.risk_reward);
+  let rr = typeof evalRes.trade_setup.risk_reward === 'number' ? evalRes.trade_setup.risk_reward : rrParse(evalRes.trade_setup.risk_reward);
+  // If explicit RR not available, try computing from numeric levels
+  if ((rr === null || typeof rr !== 'number') && evalRes.trade_setup) {
+    const computed = computeRRFromLevels({ entry: evalRes.trade_setup.entry_zone, sl: evalRes.trade_setup.stop_loss, tp: evalRes.trade_setup.take_profit, direction: evalRes.trade_setup.type });
+    if (computed && typeof computed.rr === 'number') rr = computed.rr;
+  }
   const rrScore = rr != null && rr > 0 ? Math.min(24, Math.round(Math.min(rr, 3) / 3 * 24)) : 0;
   const confirmationScore = derived.confirmationStatus === 'CONFIRMED' ? 24 : derived.confirmationStatus === 'DEVELOPING' ? 12 : 0;
   const locationScore = derived.priceLocation === 'at_support' || derived.priceLocation === 'at_resistance' ? 12 : derived.priceLocation === 'near_support' || derived.priceLocation === 'near_resistance' ? 16 : derived.priceLocation === 'middle_of_range' ? 6 : 10;
