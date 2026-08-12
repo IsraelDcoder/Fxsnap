@@ -42,6 +42,16 @@ export interface ChartAnalysisResult {
   tradeTrigger?: string;
   whyNotNow?: string[];
   dataLimitations?: string[];
+  breakdown?: {
+    trend?: number;
+    zone?: number;
+    priceLocation?: number;
+    liquidity?: number;
+    confirmation?: number;
+    bos?: number;
+    rsi?: number;
+    rawScore?: number;
+  };
   confidence: number;
 }
 

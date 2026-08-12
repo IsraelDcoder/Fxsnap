@@ -451,6 +451,52 @@ export default function AnalysisResultScreen() {
           </Animated.View>
         )}
 
+        {/* ── Explainable breakdown & diagnostics ── */}
+        {(currentAnalysis.breakdown || (currentAnalysis.whyNotNow && currentAnalysis.whyNotNow.length) || (currentAnalysis.dataLimitations && currentAnalysis.dataLimitations.length)) && (
+          <Animated.View entering={FadeInUp.delay(1220).duration(500)} style={styles.levelsCard}>
+            <Text style={[styles.cardTitle, { color: colors.text }]}>Explainable Breakdown</Text>
+            {/* Bars for each factor */}
+            {currentAnalysis.breakdown ? (
+              <>
+                <View style={{ marginTop: 6 }} />
+                {['trend', 'zone', 'priceLocation', 'liquidity', 'confirmation', 'bos', 'rsi'].map((k, i) => {
+                  const val = (currentAnalysis.breakdown as any)[k] ?? 0;
+                  return (
+                    <View key={k} style={{ marginTop: i === 0 ? 6 : 10 }}>
+                      <Text style={[styles.dataLabel, { color: colors.textSecondary, marginBottom: 6 }]}>{k.charAt(0).toUpperCase() + k.slice(1)}</Text>
+                      <View style={styles.progressBar}>
+                        <View style={[styles.progressFill, { width: `${Math.max(0, Math.min(100, val))}%`, backgroundColor: '#00E676' }]} />
+                      </View>
+                    </View>
+                  );
+                })}
+              </>
+            ) : null}
+
+            {/* Why not now */}
+            {currentAnalysis.whyNotNow && currentAnalysis.whyNotNow.length ? (
+              <>
+                <View style={styles.divider} />
+                <Text style={[styles.cardTitle, { color: colors.text, marginTop: 8 }]}>Why Not Now</Text>
+                {currentAnalysis.whyNotNow.map((reason, idx) => (
+                  <Text key={idx} style={[styles.chartNotes, { marginTop: 6 }]}>{`• ${reason}`}</Text>
+                ))}
+              </>
+            ) : null}
+
+            {/* Data limitations */}
+            {currentAnalysis.dataLimitations && currentAnalysis.dataLimitations.length ? (
+              <>
+                <View style={styles.divider} />
+                <Text style={[styles.cardTitle, { color: colors.text, marginTop: 8 }]}>Data Limitations</Text>
+                {currentAnalysis.dataLimitations.map((d, i) => (
+                  <Text key={i} style={[styles.chartNotes, { marginTop: 6 }]}>{`• ${d}`}</Text>
+                ))}
+              </>
+            ) : null}
+          </Animated.View>
+        )}
+
         {/* ── Disclaimer ── */}
         <Animated.View entering={FadeInUp.delay(1200).duration(500)} style={[styles.disclaimerBox, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
           <Feather name="alert-circle" size={14} color="#48484A" />

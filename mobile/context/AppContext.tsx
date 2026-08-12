@@ -57,6 +57,16 @@ export interface AnalysisResult {
   setupConfidence?: number;
   setupQuality?: number;
   entryQuality?: number;
+  breakdown?: {
+    trend?: number;
+    zone?: number;
+    priceLocation?: number;
+    liquidity?: number;
+    confirmation?: number;
+    bos?: number;
+    rsi?: number;
+    rawScore?: number;
+  };
   shortTermMomentum?: string;
   priceLocation?: string;
   decision?: string;

@@ -265,6 +265,7 @@ function buildAnalysisResult(chart: ChartAnalysisResult, pair: string, imageUri?
     marketConfidence: chart.marketConfidence ?? chart.marketBiasConfidence ?? chart.confidence,
     setupConfidence: chart.setupConfidence ?? chart.confidence,
     entryReadiness: chart.entryReadiness ?? 0,
+    breakdown: chart.breakdown || {},
     tradeStatus: chart.tradeStatus,
     setupStatus: chart.setupStatus,
     tradeTrigger: chart.tradeTrigger,
