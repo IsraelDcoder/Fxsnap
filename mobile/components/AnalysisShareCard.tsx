@@ -47,25 +47,31 @@ const AnalysisShareCard = React.forwardRef(function AnalysisShareCard(props: Pro
 
       {/* Explainable fields */}
       <View style={styles.shareLevelRow}>
-        <Text style={[styles.shareLabel]}>Setup Quality</Text>
-        <Text style={[styles.shareValue]}>{analysis.setupQuality ?? '—'}</Text>
-      </View>
-      <View style={styles.shareLevelRow}>
-        <Text style={[styles.shareLabel]}>Market Bias</Text>
+        <Text style={[styles.shareLabel]}>Bias</Text>
         <Text style={[styles.shareValue]}>{analysis.marketBias ?? '—'}</Text>
       </View>
       <View style={styles.shareLevelRow}>
-        <Text style={[styles.shareLabel]}>Momentum</Text>
-        <Text style={[styles.shareValue]}>{analysis.shortTermMomentum ?? '—'}</Text>
+        <Text style={[styles.shareLabel]}>Bias Confidence</Text>
+        <Text style={[styles.shareValue]}>{analysis.marketBiasConfidence != null ? `${analysis.marketBiasConfidence}%` : '—'}</Text>
       </View>
       <View style={styles.shareLevelRow}>
-        <Text style={[styles.shareLabel]}>Price Location</Text>
-        <Text style={[styles.shareValue]}>{analysis.priceLocation ?? '—'}</Text>
+        <Text style={[styles.shareLabel]}>Setup Status</Text>
+        <Text style={[styles.shareValue]}>{analysis.setupStatus ?? '—'}</Text>
+      </View>
+      <View style={styles.shareLevelRow}>
+        <Text style={[styles.shareLabel]}>Setup Confidence</Text>
+        <Text style={[styles.shareValue]}>{analysis.setupConfidence != null ? `${analysis.setupConfidence}%` : '—'}</Text>
       </View>
       <View style={styles.shareLevelRow}>
         <Text style={[styles.shareLabel]}>Decision</Text>
         <Text style={[styles.shareValue]}>{analysis.decision ?? '—'}</Text>
       </View>
+      {analysis.tradeTrigger ? (
+        <View style={[styles.shareLevelRow, { marginTop: 18 }]}> 
+          <Text style={[styles.shareLabel]}>Next Step</Text>
+          <Text style={[styles.shareValue]}>{analysis.tradeTrigger}</Text>
+        </View>
+      ) : null}
       {analysis.whyNotNow ? (
         <View style={[styles.shareLevelRow, { marginTop: 18 }]}> 
           <Text style={[styles.shareLabel]}>Why not now</Text>

@@ -259,6 +259,14 @@ function buildAnalysisResult(chart: ChartAnalysisResult, pair: string, imageUri?
       takeProfit: chart.trade_setup.take_profit,
       riskReward: chart.trade_setup.risk_reward,
     },
+    marketBias: chart.marketBias,
+    marketBiasConfidence: chart.marketBiasConfidence,
+    tradeStatus: chart.tradeStatus,
+    setupStatus: chart.setupStatus,
+    setupConfidence: chart.setupConfidence,
+    tradeTrigger: chart.tradeTrigger,
+    whyNotNow: chart.whyNotNow,
+    dataLimitations: chart.dataLimitations,
   };
 }
 

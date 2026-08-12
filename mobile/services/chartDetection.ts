@@ -30,6 +30,14 @@ export interface ChartAnalysisResult {
     take_profit: string;
     risk_reward: number | string;
   };
+  marketBias?: 'bullish' | 'bearish' | 'neutral' | 'mixed';
+  marketBiasConfidence?: number;
+  tradeStatus?: string;
+  setupStatus?: string;
+  setupConfidence?: number;
+  tradeTrigger?: string;
+  whyNotNow?: string[];
+  dataLimitations?: string[];
   confidence: number;
 }
 
@@ -58,6 +66,14 @@ function emptyAnalysis(status: AnalysisStatus, message: string): ChartAnalysisRe
       take_profit: 'none',
       risk_reward: 'none',
     },
+    marketBias: 'neutral',
+    marketBiasConfidence: 0,
+    tradeStatus: 'no_setup',
+    setupStatus: 'NO_SETUP',
+    setupConfidence: 0,
+    tradeTrigger: '',
+    whyNotNow: [],
+    dataLimitations: [],
     confidence: 0,
   };
 }
@@ -118,6 +134,14 @@ export async function analyzeChartImage(
         take_profit: payload.trade_setup?.take_profit || 'none',
         risk_reward: payload.trade_setup?.risk_reward ?? 'none',
       },
+      marketBias: payload.marketBias || 'neutral',
+      marketBiasConfidence: Math.max(0, Math.min(100, Number(payload.marketBiasConfidence) || 0)),
+      tradeStatus: payload.tradeStatus || 'no_setup',
+      setupStatus: payload.setupStatus || 'NO_SETUP',
+      setupConfidence: Math.max(0, Math.min(100, Number(payload.setupConfidence) || 0)),
+      tradeTrigger: payload.tradeTrigger || '',
+      whyNotNow: Array.isArray(payload.whyNotNow) ? payload.whyNotNow.map(String) : [],
+      dataLimitations: Array.isArray(payload.dataLimitations) ? payload.dataLimitations.map(String) : [],
       confidence: Math.max(0, Math.min(100, Number(payload.confidence) || 0)),
     };
   } catch (error) {

@@ -46,6 +46,19 @@ export interface AnalysisResult {
     takeProfit: string;
     riskReward: number | string;
   };
+  marketBias?: 'bullish' | 'bearish' | 'neutral' | 'mixed';
+  marketBiasConfidence?: number;
+  tradeStatus?: string;
+  setupStatus?: string;
+  setupConfidence?: number;
+  setupQuality?: number;
+  entryQuality?: number;
+  shortTermMomentum?: string;
+  priceLocation?: string;
+  decision?: string;
+  tradeTrigger?: string;
+  whyNotNow?: string[];
+  dataLimitations?: string[];
   // Legacy chart validation fields (kept for backward compatibility)
   chartAnalysis?: {
     confidence: number;
