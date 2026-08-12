@@ -1570,31 +1570,18 @@ async function analyzeChart(req, res) {
     if (!['image/jpeg', 'image/png', 'image/webp'].includes(mime)) {
       return sendJson(res, 400, { error: 'Only JPEG, PNG, and WebP chart images are supported.' });
     }
-    const hasGemini = Boolean(process.env.GEMINI_API_KEY && !process.env.GEMINI_API_KEY.startsWith('replace_'));
     const hasOpenRouter = Boolean(process.env.OPENROUTER_API_KEY && !process.env.OPENROUTER_API_KEY.startsWith('replace_'));
-    if (!hasGemini && !hasOpenRouter) {
-      return sendJson(res, 200, aiUnavailableResponse(input, 'Chart AI is not configured on the server.'));
+    if (!hasOpenRouter) {
+      return sendJson(res, 200, aiUnavailableResponse(input, 'Chart AI is not configured on the server. Set OPENROUTER_API_KEY.'));
     }
 
-    // Preferred provider: Google Gemini Vision. Fallback: OpenRouter vision.
     let raw = null;
     let lastError = null;
-    if (hasGemini) {
-      try {
-        raw = await callGeminiTraderWithFallback(imageBase64, mime, input.pair || 'unknown', 30000);
-      } catch (error) {
-        lastError = error;
-        console.error('[Chart AI] Gemini pipeline failed, falling back to OpenRouter.', error);
-      }
-    }
-
-    if (!raw && hasOpenRouter) {
-      try {
-        raw = await callOpenRouterTrader(imageBase64, mime, input.pair || 'unknown', 45000);
-      } catch (error) {
-        lastError = error;
-        console.error('[Chart AI] OpenRouter fallback failed.', error);
-      }
+    try {
+      raw = await callOpenRouterTrader(imageBase64, mime, input.pair || 'unknown', 45000);
+    } catch (error) {
+      lastError = error;
+      console.error('[Chart AI] OpenRouter analysis failed.', error);
     }
 
     if (!raw) {
