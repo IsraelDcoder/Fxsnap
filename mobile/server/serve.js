@@ -1345,6 +1345,12 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 12_000) {
   finally { clearTimeout(timer); }
 }
 
+function logProviderResponse(provider, model, details = {}) {
+  const status = details.httpStatus ?? 'n/a';
+  const error = details.error ? ` error=${String(details.error)}` : '';
+  const preview = details.rawText ? ` raw=${String(details.rawText).slice(0, 180)}` : '';
+  console.log(`[Chart AI] ${provider} model ${model} status=${status}${error}${preview}`);
+}
 
 async function callVisionModel(messages, timeoutMs = 30000) {
   const baseUrl = (process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/$/, '');
