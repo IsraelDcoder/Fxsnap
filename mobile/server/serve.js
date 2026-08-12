@@ -491,6 +491,8 @@ function canonicalizeRawAnalysis(raw) {
     },
     confidence: parseConfidence(raw.confidence),
     reasons: parseStringArray(raw.reasons),
+    whyNotNow: parseStringArray(raw.whyNotNow),
+    dataLimitations: parseStringArray(raw.dataLimitations),
     market_data_timestamp: ensureNullableString(raw.market_data_timestamp),
     market_data_source: ensureNullableString(raw.market_data_source),
   };
@@ -530,6 +532,8 @@ function normalizeAnalysis(raw) {
     },
     confidence: parseConfidence(raw.confidence),
     reasons: Array.isArray(raw.reasons) ? parseStringArray(raw.reasons) : [],
+    whyNotNow: Array.isArray(raw.whyNotNow) ? parseStringArray(raw.whyNotNow) : [],
+    dataLimitations: Array.isArray(raw.dataLimitations) ? parseStringArray(raw.dataLimitations) : [],
     market_data_timestamp: typeof raw.market_data_timestamp === 'string' ? raw.market_data_timestamp.trim() : null,
     market_data_source: typeof raw.market_data_source === 'string' ? raw.market_data_source.trim() : null,
   };
@@ -686,175 +690,177 @@ function computeSetupScores(norm, derived, m15) {
   return { score, setupQuality, entryQuality, rr: rr || 0 };
 }
 
-/** Deterministic mentor-rule evaluation. Returns validation, score, failed conditions and a candidate trade_setup (or none). */
+/** Deterministic mentor-rule evaluation.
+ *
+ * The core rule is evidence-driven: evaluate only what is actually visible in the
+ * uploaded chart and never treat unavailable higher timeframes or indicators as
+ * negative evidence. Single-chart analysis must be valid without requiring D1/H4/H1.
+ */
 function evaluateDecisionEngine(obs) {
-  const norm = obs.raw;
+  const norm = obs.raw || {};
+  const m15 = norm.m15 || norm.raw_m15 || obs.m15 || null;
+  const tfList = Array.isArray(obs.timeframes_detected) ? obs.timeframes_detected : [];
+  const hasChart = Boolean(obs.raw && obs.raw.chart && obs.raw.chart.is_chart);
+  const hasDirectionalEvidence = Boolean(
+    norm.analysis && (
+      /bullish|bearish|higher highs|lower highs|trend|breakout|breakdown|range|impulse|pullback|reversal/.test(
+        `${norm.analysis.trend || ''} ${norm.analysis.market_structure || ''} ${norm.analysis.structure || ''}`
+      )
+    )
+  );
+
   const validations = {
-    daily_trend: false,
-    valid_zone: false,
-    price_return: false,
-    liquidity_sweep: false,
-    confirmation: false,
-    bos: false,
-    rsi: false,
+    trend: false,
+    structure: false,
+    price_action: false,
+    meaningful_level: false,
+    candidate_setup: false,
     all_required_conditions_met: false,
   };
   const failed = [];
-  let score = 0;
-  const weights = { daily_trend: 20, zone: 20, price_return: 10, liquidity: 15, confirmation: 10, bos: 15, rsi: 10 };
   const rrIssues = [];
 
-  // Find D1 evidence
-  const d1 = obs.timeframes_detected.find((t) => /(^D1$|^1D$|DAILY)/i.test(String(t.timeframe)));
-  if (!d1) {
-    failed.push('Daily timeframe (D1) not visible or not detectable');
-    // mandatory -> no trade
-  } else {
-    const s = d1.observations.structure || {};
-    if (s.higher_highs && s.higher_lows) { validations.daily_trend = 'bullish'; score += weights.daily_trend; }
-    else if (s.lower_highs && s.lower_lows) { validations.daily_trend = 'bearish'; score += weights.daily_trend; }
-    else { failed.push('D1 structure unclear'); }
-  }
-
-  // Zones detection: prefer H1 then H4
-  const h1 = (norm.zones && norm.zones.h1) || null;
-  const h4 = (norm.zones && norm.zones.h4) || null;
-  if (h1 || h4) {
-    validations.valid_zone = true; score += weights.zone;
-  } else {
-    failed.push('No H1/H4 supply or demand zones detected');
-  }
-
-  // Price return: require explicit m15.inside_zone or normalized.trade_setup.entry_zone evidence
-  const m15 = norm.m15 || norm.raw_m15 || obs.m15 || null;
-  const priceReturned = Boolean((m15 && m15.inside_zone) || (norm.trade_setup && norm.trade_setup.entry_zone && norm.trade_setup.entry_zone !== 'none'));
-  if (priceReturned) { validations.price_return = true; score += weights.price_return; }
-  else { failed.push('Price did not return to the identified entry zone'); }
-
-  // Liquidity sweep detection
-  const liquidityOk = Boolean((m15 && m15.liquidity && m15.liquidity.swept) || (norm.strategy && norm.strategy.liquidity_sweep && norm.strategy.liquidity_sweep !== 'unavailable' && norm.strategy.liquidity_sweep !== 'none'));
-  if (liquidityOk) { validations.liquidity_sweep = true; score += weights.liquidity; }
-  else { failed.push('No liquidity sweep detected'); }
-
-  // M15 confirmation
-  const confirmationOk = Boolean(m15 && m15.confirmation && typeof m15.confirmation === 'string');
-  if (confirmationOk) { validations.confirmation = true; score += weights.confirmation; }
-  else { failed.push('No M15 confirmation pattern detected (engulfing, pin bar, rejection)'); }
-
-  // BOS
-  const bosOk = Boolean(m15 && m15.bos && m15.bos.detected === true);
-  if (bosOk) { validations.bos = true; score += weights.bos; }
-  else { failed.push('No break of structure (BOS) confirmed'); }
-
-  // RSI
-  const rsiOk = Boolean(m15 && m15.rsi && m15.rsi.visible && m15.rsi.confirms === true);
-  if (rsiOk) { validations.rsi = true; score += weights.rsi; }
-  else { failed.push('RSI confirmation missing or not visible'); }
-
-  // All required conditions
-  validations.all_required_conditions_met = validations.daily_trend && validations.valid_zone && validations.price_return && validations.liquidity_sweep && validations.confirmation && validations.bos && validations.rsi;
-
-  // Candidate trade_setup from AI if present (must be validated numerically)
-  let trade_setup = { ...DEFAULT_TRADE_SETUP };
-  if (validations.all_required_conditions_met && norm.trade_setup && norm.trade_setup.type && norm.trade_setup.type !== 'none') {
-    // Validate numeric levels
-    const entry = Number(norm.trade_setup.entry_zone) || null;
-    const sl = Number(norm.trade_setup.stop_loss) || null;
-    const tp = Number(norm.trade_setup.take_profit) || null;
-    const rr = typeof norm.trade_setup.risk_reward === 'number' ? norm.trade_setup.risk_reward : parseRiskReward(norm.trade_setup.risk_reward);
-    const dir = norm.trade_setup.type;
-    // Basic numeric validation: must be numbers and satisfy direction
-    if (entry != null && sl != null && tp != null && !Number.isNaN(entry) && !Number.isNaN(sl) && !Number.isNaN(tp)) {
-      // Prefer validated RR computed from levels which handles ranges and nonstandard formats
-      const computed = computeRRFromLevels({ entry: norm.trade_setup.entry_zone, sl: norm.trade_setup.stop_loss, tp: norm.trade_setup.take_profit, direction: dir });
-      if (computed && Array.isArray(computed.issues) && computed.issues.length > 0) {
-        computed.issues.forEach((it) => failed.push(`RR issue: ${it}`));
-        rrIssues.push(...computed.issues);
-      }
-      const rrComputed = Number.isFinite(computed && typeof computed.rr === 'number' ? computed.rr : NaN) ? computed.rr : (typeof rr === 'number' && !Number.isNaN(rr) ? rr : null);
-      const validLevels = (dir === 'buy' && sl < entry && tp > entry) || (dir === 'sell' && sl > entry && tp < entry);
-      if (validLevels && rrComputed != null && rrComputed >= 2.0) {
-        trade_setup = { type: dir, entry_zone: String(entry), stop_loss: String(sl), take_profit: String(tp), risk_reward: rrComputed };
-      } else {
-        failed.push('Trade numeric validation failed (levels or RR insufficient)');
-        validations.all_required_conditions_met = false;
-      }
+  const trendText = `${norm.analysis?.trend || ''} ${norm.analysis?.market_structure || ''} ${norm.analysis?.structure || ''}`.toLowerCase();
+  if (trendText) {
+    const hasTrend = /bullish|bearish|higher highs|lower highs|uptrend|downtrend|range|breakout|pullback|impulse/.test(trendText);
+    if (hasTrend) {
+      validations.trend = true;
     } else {
-      failed.push('Numeric trade levels not visible or invalid');
-      validations.all_required_conditions_met = false;
-    }
-  } else {
-    // No full candidate — ensure no trade returned
-    trade_setup = { ...DEFAULT_TRADE_SETUP };
-  }
-
-  // Fallback: attempt to parse a candidate trade setup even when strict validations fail.
-  // This supports AI returning ranges like "158.60-158.75" and allows DEVELOPING setups to be surfaced.
-  if ((trade_setup.type === 'none' || !trade_setup) && norm.trade_setup && norm.trade_setup.type && norm.trade_setup.type !== 'none') {
-    try {
-      const dir = normalizeText(norm.trade_setup.type);
-      const entryRange = parsePriceOrRange(norm.trade_setup.entry_zone);
-      const slRange = parsePriceOrRange(norm.trade_setup.stop_loss);
-      const tpRange = parsePriceOrRange(norm.trade_setup.take_profit);
-      if (entryRange && slRange && tpRange) {
-        const entry = entryRange.mid;
-        const sl = slRange.mid;
-        const tp = tpRange.mid;
-        const validLevels = (dir === 'buy' && sl < entry && tp > entry) || (dir === 'sell' && sl > entry && tp < entry);
-        if (validLevels) {
-          // Prefer computeRRFromLevels to capture issues from ranges
-          const computed = computeRRFromLevels({ entry: norm.trade_setup.entry_zone, sl: norm.trade_setup.stop_loss, tp: norm.trade_setup.take_profit, direction: dir });
-          if (computed && Array.isArray(computed.issues) && computed.issues.length > 0) {
-            computed.issues.forEach((it) => failed.push(`RR issue: ${it}`));
-            rrIssues.push(...computed.issues);
-          }
-          const rrComputed = Number.isFinite(computed && typeof computed.rr === 'number' ? computed.rr : Math.abs((tp - entry) / (entry - sl))) ? (computed.rr || Math.abs((tp - entry) / (entry - sl))) : null;
-          // Accept as a candidate if RR positive; stricter filtering happens later in enforceValidationRules
-          if (rrComputed != null && Number.isFinite(rrComputed) && rrComputed > 0) {
-            trade_setup = {
-              type: dir === 'buy' ? 'buy' : dir === 'sell' ? 'sell' : 'none',
-              entry_zone: String(norm.trade_setup.entry_zone),
-              stop_loss: String(norm.trade_setup.stop_loss),
-              take_profit: String(norm.trade_setup.take_profit),
-              risk_reward: rrComputed,
-            };
-            result.candidate = true;
-            console.log('[DecisionEngine] Fallback candidate created', trade_setup);
-            // give a small score boost for candidate setups so explainable outcome reflects potential
-            score = Math.max(0, Math.min(100, Math.round(score + (rrComputed >= 1.5 ? 6 : 2))));
-          } else {
-            failed.push('Fallback candidate: computed RR invalid');
-          }
-        } else {
-          failed.push('Fallback candidate: level geometry invalid for direction');
-        }
-      } else {
-        failed.push('Fallback candidate: could not parse numeric levels from AI trade_setup');
-      }
-    } catch (e) {
-      failed.push('Fallback candidate parsing error');
+      failed.push('Directional structure is not clearly visible in the uploaded chart.');
     }
   }
 
-  // Cap score to 100
+  const keyZoneFound = Boolean(
+    (norm.zones && (norm.zones.support || norm.zones.resistance || norm.zones.demand?.length || norm.zones.supply?.length)) ||
+    (norm.trade_setup && norm.trade_setup.entry_zone && norm.trade_setup.entry_zone !== 'none')
+  );
+  if (keyZoneFound) {
+    validations.meaningful_level = true;
+  }
+
+  const confirmationOk = Boolean(m15 && m15.confirmation && typeof m15.confirmation === 'string');
+  if (confirmationOk) {
+    validations.price_action = true;
+  }
+
+  const bosOk = Boolean(m15 && m15.bos && m15.bos.detected === true);
+  if (bosOk) {
+    validations.structure = true;
+  }
+
+  const liquidityOk = Boolean(
+    (m15 && m15.liquidity && m15.liquidity.swept) ||
+    (norm.strategy && norm.strategy.liquidity_sweep && norm.strategy.liquidity_sweep !== 'unavailable' && norm.strategy.liquidity_sweep !== 'none')
+  );
+
+  let trade_setup = { ...DEFAULT_TRADE_SETUP };
+  const rawTrade = norm.trade_setup || {};
+  if (rawTrade && rawTrade.type && rawTrade.type !== 'none') {
+    const dir = normalizeText(rawTrade.type);
+    const entryRange = parsePriceOrRange(rawTrade.entry_zone);
+    const slRange = parsePriceOrRange(rawTrade.stop_loss);
+    const tpRange = parsePriceOrRange(rawTrade.take_profit);
+    const rr = typeof rawTrade.risk_reward === 'number' ? rawTrade.risk_reward : parseRiskReward(rawTrade.risk_reward);
+    const computed = computeRRFromLevels({
+      entry: rawTrade.entry_zone,
+      sl: rawTrade.stop_loss,
+      tp: rawTrade.take_profit,
+      direction: dir,
+    });
+
+    if (computed && Array.isArray(computed.issues) && computed.issues.length > 0) {
+      rrIssues.push(...computed.issues);
+    }
+
+    const hasLevelGeometry = (dir === 'buy' && entryRange && slRange && tpRange && slRange.mid < entryRange.mid && tpRange.mid > entryRange.mid)
+      || (dir === 'sell' && entryRange && slRange && tpRange && slRange.mid > entryRange.mid && tpRange.mid < entryRange.mid);
+    const rrValue = Number.isFinite(computed && typeof computed.rr === 'number' ? computed.rr : rr) ? (computed?.rr ?? rr) : null;
+
+    if (hasLevelGeometry && rrValue != null && rrValue > 0) {
+      trade_setup = {
+        type: dir === 'buy' ? 'buy' : dir === 'sell' ? 'sell' : 'none',
+        entry_zone: String(rawTrade.entry_zone || 'none'),
+        stop_loss: String(rawTrade.stop_loss || 'none'),
+        take_profit: String(rawTrade.take_profit || 'none'),
+        risk_reward: rrValue,
+      };
+      validations.candidate_setup = true;
+    } else if (hasLevelGeometry || (entryRange && slRange && tpRange)) {
+      trade_setup = {
+        type: dir === 'buy' ? 'buy' : dir === 'sell' ? 'sell' : 'none',
+        entry_zone: String(rawTrade.entry_zone || 'none'),
+        stop_loss: String(rawTrade.stop_loss || 'none'),
+        take_profit: String(rawTrade.take_profit || 'none'),
+        risk_reward: rrValue ?? 0,
+      };
+      validations.candidate_setup = true;
+      failed.push('The setup is directional but not yet fully validated for entry quality and risk/reward.');
+    }
+  }
+
+  // Only penalize actual contradictory evidence. Missing higher timeframes or absent indicators are not failure conditions.
+  if (m15 && m15.rsi && m15.rsi.visible === true && m15.rsi.confirms === false) {
+    failed.push('RSI is visible and contradicts the setup.');
+  }
+  if (m15 && m15.bos && m15.bos.detected === false && rawTrade.type && rawTrade.type !== 'none') {
+    failed.push('Break of structure is not confirmed on the visible chart.');
+  }
+  if (!liquidityOk && rawTrade.type && rawTrade.type !== 'none') {
+    failed.push('Liquidity confirmation is not visible on the current chart.');
+  }
+
+  if (!hasChart) {
+    return {
+      status: 'invalid_image',
+      strategy_validation: validations,
+      strategy_score: 0,
+      failed_conditions: ['The uploaded image does not contain a readable chart.'],
+      trade_setup: { ...DEFAULT_TRADE_SETUP },
+      candidate: false,
+      rrIssues,
+    };
+  }
+
+  // Single-chart evidence driven scoring. Missing higher timeframes do not reduce the score.
+  let score = 0;
+  const weights = { trend: 22, structure: 18, momentum: 14, zone: 18, entry: 16, confirmation: 12 };
+
+  if (validations.trend) score += weights.trend;
+  if (validations.structure || bosOk) score += weights.structure;
+  if (hasDirectionalEvidence) score += weights.momentum;
+  if (validations.meaningful_level) score += weights.zone;
+  if (validations.candidate_setup) score += weights.entry;
+  if (confirmationOk) score += weights.confirmation;
+
+  if (trade_setup.type !== 'none' && trade_setup.risk_reward != null && Number(trade_setup.risk_reward) > 0) {
+    score += Math.min(20, Math.round((Math.min(Number(trade_setup.risk_reward), 3) / 3) * 20));
+  }
+
   score = Math.max(0, Math.min(100, Math.round(score)));
 
+  const clearDirectionalRead = Boolean(validations.trend || validations.structure || hasDirectionalEvidence);
+  const setupReady = Boolean(trade_setup.type !== 'none' && trade_setup.risk_reward != null && Number(trade_setup.risk_reward) > 0 && validations.candidate_setup);
+
+  validations.all_required_conditions_met = clearDirectionalRead && (setupReady || (!setupReady && !failed.some((f) => /invalid|not clearly visible|directional structure/i.test(f))));
+
+  const rrTooLow = trade_setup && trade_setup.type !== 'none' && (trade_setup.risk_reward == null || Number(trade_setup.risk_reward) < 1.5);
   const result = {
     strategy_validation: validations,
     strategy_score: score,
     failed_conditions: Array.from(new Set(failed)),
     trade_setup,
-    candidate: false,
+    candidate: validations.candidate_setup,
     rrIssues,
+    status: clearDirectionalRead ? 'success' : 'no_trade',
   };
 
-  // Determine final status
-  if (!obs.raw || !obs.raw.chart || !obs.raw.chart.is_chart) {
-    result.status = 'invalid_image';
-  } else if (!validations.all_required_conditions_met) {
+  if (!clearDirectionalRead && !validations.candidate_setup) {
     result.status = 'no_trade';
-  } else {
-    result.status = 'success';
+  } else if (rrTooLow) {
+    result.status = 'no_trade';
+    if (!result.failed_conditions.includes('Risk/reward does not meet the minimum threshold for a trade.')) {
+      result.failed_conditions.push('Risk/reward does not meet the minimum threshold for a trade.');
+    }
   }
 
   return result;
@@ -1517,10 +1523,11 @@ async function callOpenRouterTrader(imageBase64, mimeType, pair, timeoutMs = 450
 }
 
 function aiUnavailableResponse(input, message) {
+  const detail = message || 'Chart AI is unavailable right now. Please try again shortly.';
   return {
     status: 'ai_unavailable',
     availability: 'ai_unavailable',
-    message: message || 'Chart AI is unavailable right now. Please try again shortly.',
+    message: detail,
     detectedPair: input?.pair || null,
     timeframe: input?.timeframe || null,
     chart: {
@@ -1533,14 +1540,17 @@ function aiUnavailableResponse(input, message) {
     strategy: DEFAULT_STRATEGY,
     trade_setup: DEFAULT_TRADE_SETUP,
     confidence: 0,
-    reasons: [message || 'Chart AI is unavailable right now. Please try again shortly.'],
+    reasons: [detail],
+    whyNotNow: [],
+    dataLimitations: [detail],
   };
 }
 
 function aiInvalidResponse(input, message) {
+  const detail = message || 'The analysis engine returned an invalid response. Please try again.';
   return {
     status: 'ai_invalid_response',
-    message: message || 'The analysis engine returned an invalid response. Please try again.',
+    message: detail,
     detectedPair: input?.pair || null,
     timeframe: input?.timeframe || null,
     chart: {
@@ -1553,7 +1563,9 @@ function aiInvalidResponse(input, message) {
     strategy: DEFAULT_STRATEGY,
     trade_setup: DEFAULT_TRADE_SETUP,
     confidence: 0,
-    reasons: [message || 'The analysis engine returned an invalid response. Please try again.'],
+    reasons: [detail],
+    whyNotNow: [],
+    dataLimitations: [detail],
   };
 }
 
