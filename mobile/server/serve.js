@@ -685,6 +685,7 @@ function evaluateDecisionEngine(obs) {
   const failed = [];
   let score = 0;
   const weights = { daily_trend: 20, zone: 20, price_return: 10, liquidity: 15, confirmation: 10, bos: 15, rsi: 10 };
+  const rrIssues = [];
 
   // Find D1 evidence
   const d1 = obs.timeframes_detected.find((t) => /(^D1$|^1D$|DAILY)/i.test(String(t.timeframe)));
@@ -751,6 +752,7 @@ function evaluateDecisionEngine(obs) {
       const computed = computeRRFromLevels({ entry: norm.trade_setup.entry_zone, sl: norm.trade_setup.stop_loss, tp: norm.trade_setup.take_profit, direction: dir });
       if (computed && Array.isArray(computed.issues) && computed.issues.length > 0) {
         computed.issues.forEach((it) => failed.push(`RR issue: ${it}`));
+        rrIssues.push(...computed.issues);
       }
       const rrComputed = Number.isFinite(computed && typeof computed.rr === 'number' ? computed.rr : NaN) ? computed.rr : (typeof rr === 'number' && !Number.isNaN(rr) ? rr : null);
       const validLevels = (dir === 'buy' && sl < entry && tp > entry) || (dir === 'sell' && sl > entry && tp < entry);
@@ -787,6 +789,7 @@ function evaluateDecisionEngine(obs) {
           const computed = computeRRFromLevels({ entry: norm.trade_setup.entry_zone, sl: norm.trade_setup.stop_loss, tp: norm.trade_setup.take_profit, direction: dir });
           if (computed && Array.isArray(computed.issues) && computed.issues.length > 0) {
             computed.issues.forEach((it) => failed.push(`RR issue: ${it}`));
+            rrIssues.push(...computed.issues);
           }
           const rrComputed = Number.isFinite(computed && typeof computed.rr === 'number' ? computed.rr : Math.abs((tp - entry) / (entry - sl))) ? (computed.rr || Math.abs((tp - entry) / (entry - sl))) : null;
           // Accept as a candidate if RR positive; stricter filtering happens later in enforceValidationRules
@@ -825,6 +828,7 @@ function evaluateDecisionEngine(obs) {
     failed_conditions: Array.from(new Set(failed)),
     trade_setup,
     candidate: false,
+    rrIssues,
   };
 
   // Determine final status
@@ -1012,6 +1016,8 @@ function applyMentorStrategy(normalized) {
   response.whyNotNow = explain.whyNotNow;
   response.dataLimitations = explain.dataLimitations;
   response.breakdown = explain.breakdown;
+  // Expose RR parsing/validation issues for UI diagnostics
+  response.rrIssues = Array.isArray(evalRes.rrIssues) ? Array.from(new Set(evalRes.rrIssues)) : [];
 
   // If evaluation failed mandatory conditions, ensure trade_setup is none
   // If evaluation failed mandatory conditions, only clear trade_setup when no candidate was provided.
