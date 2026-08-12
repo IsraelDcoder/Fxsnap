@@ -64,6 +64,36 @@ function DataRow({
   );
 }
 
+// Breakdown row with icon and animated bar
+function BreakdownRow({ label, value, color, icon, delay }: { label: string; value: number; color?: string; icon?: string; delay: number }) {
+  const progress = useSharedValue(0);
+  React.useEffect(() => {
+    const t = setTimeout(() => {
+      progress.value = withTiming(Math.max(0, Math.min(100, value)), { duration: 800 });
+    }, delay);
+    return () => clearTimeout(t);
+  }, [value, delay]);
+
+  const barStyle = useAnimatedStyle(() => ({
+    width: `${progress.value}%`,
+  }));
+
+  return (
+    <Animated.View entering={FadeInLeft.delay(delay).duration(450)} style={{ marginTop: 8 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          {icon ? <Feather name={icon as any} size={14} color={color || '#00E676'} /> : null}
+          <Text style={[styles.dataLabel, { color: '#8E8E93' }]}>{label}</Text>
+        </View>
+        <Text style={[styles.dataValue, { color: color || '#00E676', fontSize: 13 }]}>{`${Math.round(value)}%`}</Text>
+      </View>
+      <View style={[styles.progressBar, { marginTop: 8 }]}>
+        <Animated.View style={[styles.progressFill, barStyle, { backgroundColor: color || '#00E676' }]} />
+      </View>
+    </Animated.View>
+  );
+}
+
 // ─── Floating toast ───────────────────────────────────────────────────────────
 function Toast({ visible, message }: { visible: boolean; message: string }) {
   const translateY = useSharedValue(80);
@@ -459,17 +489,21 @@ export default function AnalysisResultScreen() {
             {currentAnalysis.breakdown ? (
               <>
                 <View style={{ marginTop: 6 }} />
-                {['trend', 'zone', 'priceLocation', 'liquidity', 'confirmation', 'bos', 'rsi'].map((k, i) => {
-                  const val = (currentAnalysis.breakdown as any)[k] ?? 0;
-                  return (
-                    <View key={k} style={{ marginTop: i === 0 ? 6 : 10 }}>
-                      <Text style={[styles.dataLabel, { color: colors.textSecondary, marginBottom: 6 }]}>{k.charAt(0).toUpperCase() + k.slice(1)}</Text>
-                      <View style={styles.progressBar}>
-                        <View style={[styles.progressFill, { width: `${Math.max(0, Math.min(100, val))}%`, backgroundColor: '#00E676' }]} />
-                      </View>
-                    </View>
-                  );
-                })}
+                {(() => {
+                  const map = [
+                    { key: 'trend', label: 'Trend', icon: 'trending-up', color: '#7C4DFF' },
+                    { key: 'zone', label: 'Zone', icon: 'map-pin', color: '#00E676' },
+                    { key: 'priceLocation', label: 'Price Location', icon: 'layers', color: '#FFD60A' },
+                    { key: 'liquidity', label: 'Liquidity', icon: 'wind', color: '#00BCD4' },
+                    { key: 'confirmation', label: 'Confirmation', icon: 'check-circle', color: '#4CAF50' },
+                    { key: 'bos', label: 'Break of Structure', icon: 'zap', color: '#FF5252' },
+                    { key: 'rsi', label: 'RSI', icon: 'bar-chart-2', color: '#FF9F0A' },
+                  ];
+                  return map.map((m, i) => {
+                    const val = (currentAnalysis.breakdown as any)[m.key] ?? 0;
+                    return <BreakdownRow key={m.key} label={m.label} value={val} color={m.color} icon={m.icon} delay={600 + i * 80} />;
+                  });
+                })()}
               </>
             ) : null}
 
@@ -538,6 +572,16 @@ export default function AnalysisResultScreen() {
           </View>
         </Animated.View>
       </ScrollView>
+
+      {/* RR Issues display for diagnostics */}
+      {currentAnalysis.rrIssues && currentAnalysis.rrIssues.length ? (
+        <Animated.View entering={FadeInUp.delay(1400).duration(400)} style={[styles.levelsCard, { margin: 16, backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+          <Text style={[styles.cardTitle, { color: colors.text }]}>RR Diagnostics</Text>
+          {currentAnalysis.rrIssues.map((ri: string, idx: number) => (
+            <Text key={idx} style={[styles.chartNotes, { marginTop: 8, color: colors.textSecondary }]}>{`• ${ri}`}</Text>
+          ))}
+        </Animated.View>
+      ) : null}
 
       {/* Share card is placed off-screen but visible to view-shot. We set opacity: 0 and position far off-screen to avoid capture of UI chrome. */}
       <View style={styles.hiddenShareContainer}>

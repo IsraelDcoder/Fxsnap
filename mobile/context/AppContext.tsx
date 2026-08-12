@@ -73,6 +73,7 @@ export interface AnalysisResult {
   tradeTrigger?: string;
   whyNotNow?: string[];
   dataLimitations?: string[];
+  rrIssues?: string[];
   // Legacy chart validation fields (kept for backward compatibility)
   chartAnalysis?: {
     confidence: number;
