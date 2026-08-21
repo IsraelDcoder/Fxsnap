@@ -303,11 +303,17 @@ export default function AnalysisScreen() {
       // broad READ_MEDIA_* permissions; the system picker provides files without
       // requiring storage permissions and complies with Play policy.
     }
+    // On Android 13+ the system photo picker is available; ensure we use the
+    // non-legacy picker so broad storage permissions aren't required.
+    const useLegacy = Platform.OS === 'android' && (Platform.Version as any) < 33;
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: 'images',
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: false,
       quality: 0.9,
       base64: true,
+      // `legacy: false` uses the platform photo picker (when available) instead
+      // of legacy storage access which may require READ_* permissions.
+      legacy: useLegacy,
     });
     if (!result.canceled && result.assets[0]) {
       setImageUri(result.assets[0].uri);
