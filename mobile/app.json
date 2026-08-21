@@ -24,8 +24,7 @@
     "android": {
       "package": "com.fxsnap.mobile",
       "permissions": [
-        "CAMERA",
-        "READ_MEDIA_IMAGES"
+        "CAMERA"
       ]
     },
     "web": {

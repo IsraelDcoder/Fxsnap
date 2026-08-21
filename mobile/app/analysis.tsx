@@ -299,11 +299,9 @@ export default function AnalysisScreen() {
   const pickFromGallery = async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     if (Platform.OS !== 'web') {
-      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (!perm.granted) {
-        Alert.alert('Permission needed', 'Please allow access to your photo library.');
-        return;
-      }
+      // Use the platform photo picker where possible (Android 13+). Do not request
+      // broad READ_MEDIA_* permissions; the system picker provides files without
+      // requiring storage permissions and complies with Play policy.
     }
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: 'images',
