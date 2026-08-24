@@ -28,6 +28,7 @@ import { Feather } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import * as Haptics from '@/services/haptics';
 import { useApp } from '@/context/AppContext';
+import { getAvailablePlans, type PlanOffering } from '@/services/billing';
 import { useColors } from '@/hooks/useColors';
 
 
@@ -62,9 +63,8 @@ const REVIEWS = [
 ];
 
 const PLANS = [
-  { id: 'weekly',   label: 'Weekly',   price: '$7.99',  period: '/ week' },
-  { id: 'quarterly', label: '3 Months', price: '$29.99', period: '/ 3 months',
-    tag: 'MOST POPULAR', savings: undefined },
+  { id: 'weekly',   label: 'Weekly',   price: '$7.99',  period: 'week' },
+  { id: 'quarterly', label: '3 Months', price: '$29.99', period: '3 months', tag: 'MOST POPULAR', savings: undefined },
 ];
 
 const APP_TOKENS = {
@@ -210,6 +210,8 @@ export default function OnboardingScreen() {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [selectedPlan, setSelectedPlan] = useState('quarterly');
   const [loading, setLoading] = useState(false);
+  const [plans, setPlans] = useState<PlanOffering[]>([]);
+  const [loadingPlans, setLoadingPlans] = useState(true);
   const { completeOnboarding, purchasePlan } = useApp();
   const insets = useSafeAreaInsets();
 
@@ -247,6 +249,26 @@ export default function OnboardingScreen() {
     await completeOnboarding();
     router.replace('/home');
   };
+
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      try {
+        const availablePlans = await getAvailablePlans();
+        if (!active) return;
+        setPlans(availablePlans);
+        if (availablePlans.length > 0) {
+          const fallback = availablePlans.find((p) => p.plan === selectedPlan && p.available) || availablePlans.find((p) => p.available);
+          if (fallback) setSelectedPlan(fallback.plan);
+        }
+      } catch (e) {
+        setPlans([]);
+      } finally {
+        if (active) setLoadingPlans(false);
+      }
+    })();
+    return () => { active = false; };
+  }, []);
 
   // ── SCREEN 0: Hook ──────────────────────────────────────────────────────────
   if (currentScreen === 'hook') {
@@ -423,6 +445,9 @@ export default function OnboardingScreen() {
   }
 
   // ── SCREEN 4: Paywall ───────────────────────────────────────────────────────
+                      {loadingPlans === false && plans.length > 0 && (
+                        <Text style={[styles.legalText, { color: colors.textMuted }]}>Prices shown are provided by RevenueCat and may vary by region.</Text>
+                      )}
   return (
     <ScreenWrapper style={[styles.container, { backgroundColor: colors.background }]} contentContainerStyle={[styles.paywallContent, { paddingBottom: botPad + 24 }]}>
       <View style={styles.paywallHeader}>
@@ -456,31 +481,58 @@ export default function OnboardingScreen() {
         </Animated.View>
 
         <Animated.View entering={FadeInUp.delay(300).duration(600)} style={styles.planCards}>
-          {PLANS.map((plan) => (
-            <TouchableOpacity
-              key={plan.id}
-              style={[styles.planCard, selectedPlan === plan.id && styles.planCardSelected, { backgroundColor: colors.surface, borderColor: selectedPlan === plan.id ? colors.primary : colors.cardBorder }]}
-              onPress={() => {
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                setSelectedPlan(plan.id);
-              }}
-              activeOpacity={0.9}
-            >
-              {plan.tag && (
-                <View style={styles.planTag}>
-                  <Text style={[styles.planTagText, { color: colors.primaryForeground }]}>{plan.tag}</Text>
+          {loadingPlans ? (
+            <View style={[styles.loadingState, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}> 
+              <Text style={[styles.loadingText, { color: colors.textSecondary }]}>Loading subscription options…</Text>
+            </View>
+          ) : plans.length > 0 ? (
+            plans.map((plan) => {
+              const isSelected = selectedPlan === plan.plan;
+              return (
+                <TouchableOpacity
+                  key={plan.plan}
+                  style={[styles.planCard, isSelected && styles.planCardSelected, { backgroundColor: isSelected ? colors.surface : colors.card, borderColor: isSelected ? colors.primary : colors.cardBorder }]}
+                  onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setSelectedPlan(plan.plan); }}
+                  activeOpacity={0.9}
+                >
+                  {plan.plan === 'quarterly' && (
+                    <View style={styles.planTag}>
+                      <Text style={styles.planTagText}>MOST POPULAR</Text>
+                    </View>
+                  )}
+                  <View>
+                    <Text style={[styles.planName, { color: colors.text }]}>{plan.title}</Text>
+                  </View>
+                  <View style={{ alignItems: 'flex-end' }}>
+                    <Text style={[styles.planPrice, { color: colors.text }]}>{plan.price}</Text>
+                    <Text style={[styles.planPeriod, { color: colors.textSecondary }]}>{plan.period}</Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })
+          ) : (
+            PLANS.map((plan) => (
+              <TouchableOpacity
+                key={plan.id}
+                style={[styles.planCard, selectedPlan === plan.id && styles.planCardSelected, { backgroundColor: colors.surface, borderColor: selectedPlan === plan.id ? colors.primary : colors.cardBorder }]}
+                onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setSelectedPlan(plan.id); }}
+                activeOpacity={0.9}
+              >
+                {plan.tag && (
+                  <View style={styles.planTag}>
+                    <Text style={[styles.planTagText, { color: colors.primaryForeground }]}>{plan.tag}</Text>
+                  </View>
+                )}
+                <View>
+                  <Text style={[styles.planName, { color: colors.text }]}>{plan.label}</Text>
                 </View>
-              )}
-              <View>
-                <Text style={[styles.planName, { color: colors.text }]}>{plan.label}</Text>
-                {plan.savings && <Text style={[styles.planSavings, { color: colors.buy }]}>{plan.savings}</Text>}
-              </View>
-              <View style={{ alignItems: 'flex-end' }}>
-                <Text style={[styles.planPrice, { color: colors.text }]}>{plan.price}</Text>
-                <Text style={[styles.planPeriod, { color: colors.textSecondary }]}>{plan.period}</Text>
-              </View>
-            </TouchableOpacity>
-          ))}
+                <View style={{ alignItems: 'flex-end' }}>
+                  <Text style={[styles.planPrice, { color: colors.text }]}>{plan.price}</Text>
+                  <Text style={[styles.planPeriod, { color: colors.textSecondary }]}>{plan.period}</Text>
+                </View>
+              </TouchableOpacity>
+            ))
+          )}
         </Animated.View>
 
         <Animated.View entering={FadeInUp.delay(450).duration(600)} style={styles.paywallActions}>
@@ -954,6 +1006,18 @@ const styles = StyleSheet.create({
   },
   planCards: {
     gap: 12,
+  },
+  loadingState: {
+    borderRadius: 16,
+    borderWidth: 1,
+    paddingVertical: 18,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+  },
+  loadingText: {
+    fontSize: 14,
+    fontFamily: 'Inter_500Medium',
+    textAlign: 'center',
   },
   planCard: {
     flexDirection: 'row',
