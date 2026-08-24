@@ -257,6 +257,10 @@ export default function OnboardingScreen() {
         const availablePlans = await getAvailablePlans();
         if (!active) return;
         setPlans(availablePlans);
+        // Debug log so developers can confirm RevenueCat plans were fetched
+        // at runtime (check device/emulator logs).
+        // eslint-disable-next-line no-console
+        console.log('Onboarding: availablePlans', availablePlans.map(p => ({ plan: p.plan, price: p.price, available: p.available })));
         if (availablePlans.length > 0) {
           const fallback = availablePlans.find((p) => p.plan === selectedPlan && p.available) || availablePlans.find((p) => p.available);
           if (fallback) setSelectedPlan(fallback.plan);
