@@ -16,9 +16,41 @@ const crypto = require('crypto');
 const { z } = require('zod');
 const persistentStore = require('./persistentStore');
 const { createAuth, verifyAuth } = require('./auth');
+const marketService = require('./marketService');
+// Optional Twelve Data provider (server-side market data proxy)
+let marketProvider = null;
+try {
+  const TwelveDataProvider = require('./twelvedataProvider');
+  const tdKey = process.env.TWELVEDATA_API_KEY || null;
+  if (tdKey && tdKey !== 'replace_with_twelvedata_api_key') {
+    try {
+      marketProvider = new TwelveDataProvider(tdKey);
+      console.log('[market] Using Twelve Data provider for market data');
+    } catch (e) {
+      console.warn('[market] Twelve Data provider failed to initialize:', e && e.message ? e.message : e);
+      marketProvider = null;
+    }
+  }
+} catch (err) {
+  // Not an error — provider module may not be present in some environments
+}
 const { buildSessionContext } = require('./tradingSessions');
 const { buildBiasConfidence, computeSetupConfidence } = require('./scoring');
 const { parseRiskReward: rrParse, parsePriceOrRange: rrParsePriceOrRange, computeRRFromLevels } = require('./rr');
+const { buildInstrumentNewsResponse } = require('./newsService');
+const { MarketNewsProvider } = require('./newsProvider');
+
+let newsProvider = null;
+try {
+  const finnhubApiKey = process.env.FINNHUB_API_KEY || null;
+  const twelvedataApiKey = process.env.TWELVEDATA_API_KEY || null;
+  if (finnhubApiKey || twelvedataApiKey) {
+    newsProvider = new MarketNewsProvider({ finnhubApiKey, twelvedataApiKey });
+    console.log('[news] Using configured news providers');
+  }
+} catch (error) {
+  console.warn('[news] Failed to initialize news providers:', error && error.message ? error.message : error);
+}
 
 function loadEnvFile() {
   const envPath = path.resolve(__dirname, '..', '.env');
@@ -1200,6 +1232,178 @@ function enforceValidationRules(response) {
   return response;
 }
 
+function normalizeCandleSeries(candles) {
+  if (!Array.isArray(candles)) return [];
+  const series = candles
+    .map((candle) => {
+      if (!candle || typeof candle !== 'object') return null;
+      const open = Number(candle.open ?? candle.o ?? 0);
+      const high = Number(candle.high ?? candle.h ?? 0);
+      const low = Number(candle.low ?? candle.l ?? 0);
+      const close = Number(candle.close ?? candle.c ?? candle.price ?? 0);
+      const time = candle.time || candle.datetime || candle.timestamp || candle.t || '';
+      if (!Number.isFinite(open) || !Number.isFinite(high) || !Number.isFinite(low) || !Number.isFinite(close) || !time) return null;
+      return { time: String(time), open, high, low, close };
+    })
+    .filter(Boolean);
+
+  series.sort((a, b) => String(a.time).localeCompare(String(b.time)));
+  return series;
+}
+
+function analyzeMarketFromCandles(symbol, interval, candles) {
+  const cleanedSymbol = String(symbol || '').trim().toUpperCase();
+  const cleanedInterval = String(interval || '15m').trim() || '15m';
+  const series = normalizeCandleSeries(candles);
+
+  if (series.length < 5) {
+    const fallback = {
+      status: 'no_trade',
+      detectedPair: cleanedSymbol || null,
+      timeframe: cleanedInterval,
+      chart: { is_chart: true, pair: cleanedSymbol || '', timeframe: cleanedInterval, chart_quality: 'poor', price_scale_visible: true, candles_visible: true, has_enough_candles: false },
+      analysis: {
+        trend: 'neutral',
+        market_structure: 'insufficient_data',
+        structure_bias: 'neutral',
+        volatility: 'low',
+        volume: 'not_visible',
+        price_action: [],
+        structure: 'Not enough candle data to assess a valid setup.',
+        sentiment: 'neutral',
+        indicators: 'none',
+        notes: 'The market needs more candles before a valid directional read is possible.',
+      },
+      zones: { support: 'not_clear', resistance: 'not_clear', demand: [], supply: [], liquidity: [] },
+      strategy: {
+        daily_trend: 'neutral',
+        higher_timeframe_confirmation: 'unavailable',
+        zone_status: 'unavailable',
+        liquidity_sweep: 'unavailable',
+        bos: 'unavailable',
+        rsi_confirmation: 'unavailable',
+      },
+      trade_setup: { type: 'none', entry_zone: 'none', stop_loss: 'none', take_profit: 'none', risk_reward: null },
+      confidence: 0,
+      reasons: ['Not enough candle data to analyze the market.'],
+      marketBias: 'neutral',
+      marketBiasConfidence: 0,
+      marketConfidence: 0,
+      setupStatus: 'NO_SETUP',
+      setupConfidence: 0,
+      tradeStatus: 'no_setup',
+      tradeDecision: 'NO_TRADE',
+      decision: 'NO_TRADE',
+      whyNotNow: ['Not enough candle data to analyze the market.'],
+      dataLimitations: ['Not enough candle data to analyze the market.'],
+      breakdown: { trend: 0, zone: 0, priceLocation: 0, liquidity: 0, confirmation: 0, bos: 0, rsi: 0, rawScore: 0 },
+    };
+    return fallback;
+  }
+
+  const closes = series.map((c) => c.close);
+  const startClose = closes[0];
+  const endClose = closes[closes.length - 1];
+  const totalMovePct = ((endClose - startClose) / startClose) * 100;
+  const avgBody = series.reduce((sum, candle) => sum + Math.abs(candle.close - candle.open), 0) / series.length;
+  const directionalMove = Math.abs(totalMovePct);
+  const currentTrend = totalMovePct > 0.35 ? 'bullish' : totalMovePct < -0.35 ? 'bearish' : 'neutral';
+  const structureText = totalMovePct > 0.4 ? 'Higher highs and bullish continuation are visible across the selected timeframe.'
+    : totalMovePct < -0.4 ? 'Lower highs and bearish continuation are visible across the selected timeframe.'
+    : 'The market is directionless and remains in a sideways or range-bound structure.';
+
+  const recentHigh = Math.max(...series.slice(-12).map((candle) => candle.high));
+  const recentLow = Math.min(...series.slice(-12).map((candle) => candle.low));
+  const priorHigh = Math.max(...series.slice(-24, -12).map((candle) => candle.high));
+  const priorLow = Math.min(...series.slice(-24, -12).map((candle) => candle.low));
+  const bullishBreak = endClose > recentHigh * 0.9995 || endClose > priorHigh;
+  const bearishBreak = endClose < recentLow * 1.0005 || endClose < priorLow;
+
+  const marketBias = currentTrend === 'bullish' ? 'bullish' : currentTrend === 'bearish' ? 'bearish' : 'neutral';
+  const volatility = avgBody > 0.004 ? 'high' : avgBody > 0.0017 ? 'moderate' : 'low';
+  const canSetup = marketBias !== 'neutral' && directionalMove > 0.18 && (bullishBreak || bearishBreak || directionalMove > 0.25);
+  const tradeType = canSetup && marketBias === 'bullish' ? 'buy' : canSetup && marketBias === 'bearish' ? 'sell' : 'none';
+  const entry = tradeType === 'buy' ? `${(recentLow * 0.999).toFixed(5)}` : tradeType === 'sell' ? `${(recentHigh * 1.001).toFixed(5)}` : 'none';
+  const stop = tradeType === 'buy' ? `${(Math.min(...series.slice(-12).map((c) => c.low)) * 0.9985).toFixed(5)}` : tradeType === 'sell' ? `${(Math.max(...series.slice(-12).map((c) => c.high)) * 1.0015).toFixed(5)}` : 'none';
+  const takeProfit = tradeType === 'buy' ? `${(Math.max(...series.slice(-12).map((c) => c.high)) * 1.008).toFixed(5)}` : tradeType === 'sell' ? `${(Math.min(...series.slice(-12).map((c) => c.low)) * 0.992).toFixed(5)}` : 'none';
+  const rr = tradeType === 'none' ? null : 1.8;
+  const strength = Math.min(100, Math.max(0, Math.round(directionalMove * 1000 + (canSetup ? 25 : 0))));
+
+  const normalized = {
+    status: canSetup ? 'success' : 'no_trade',
+    detectedPair: cleanedSymbol || null,
+    timeframe: cleanedInterval,
+    chart: {
+      is_chart: true,
+      pair: cleanedSymbol || '',
+      timeframe: cleanedInterval,
+      chart_quality: 'good',
+      price_scale_visible: true,
+      candles_visible: true,
+      has_enough_candles: series.length >= 10,
+    },
+    analysis: {
+      trend: currentTrend,
+      market_structure: structureText,
+      structure_bias: marketBias,
+      volatility,
+      volume: 'not_visible',
+      price_action: [currentTrend === 'bullish' ? 'Bullish continuation remains in progress.' : currentTrend === 'bearish' ? 'Bearish continuation remains in progress.' : 'Price action is broadly range-bound.'],
+      structure: structureText,
+      sentiment: currentTrend,
+      indicators: 'none',
+      notes: currentTrend === 'neutral' ? 'Price is range-bound and not yet clear enough for an actionable setup.' : `The recent bias is ${marketBias} with a measurable directional move in the selected window.`,
+    },
+    zones: {
+      support: `Recent support near ${recentLow.toFixed(5)}`,
+      resistance: `Recent resistance near ${recentHigh.toFixed(5)}`,
+      demand: [`Near ${recentLow.toFixed(5)}`],
+      supply: [`Near ${recentHigh.toFixed(5)}`],
+      liquidity: [`Recent swing range ${recentLow.toFixed(5)} to ${recentHigh.toFixed(5)}`],
+    },
+    strategy: {
+      daily_trend: marketBias === 'bullish' ? 'bullish' : marketBias === 'bearish' ? 'bearish' : 'neutral',
+      higher_timeframe_confirmation: 'unavailable',
+      zone_status: 'near_zone',
+      liquidity_sweep: 'unavailable',
+      bos: 'unavailable',
+      rsi_confirmation: 'unavailable',
+    },
+    trade_setup: {
+      type: tradeType,
+      entry_zone: entry,
+      stop_loss: stop,
+      take_profit: takeProfit,
+      risk_reward: rr,
+    },
+    confidence: strength,
+    reasons: currentTrend === 'neutral' ? ['Directional structure is not clear enough for a trade.'] : ['Directional structure is visible and the recent move is meaningful.'],
+    market_data_timestamp: new Date().toISOString(),
+    market_data_source: 'structured-candles',
+  };
+
+  const applied = applyMentorStrategy(normalized);
+  const result = {
+    ...applied,
+    marketBias: applied.marketBias || marketBias,
+    marketBiasConfidence: typeof applied.marketBiasConfidence === 'number' ? applied.marketBiasConfidence : strength,
+    marketConfidence: typeof applied.marketConfidence === 'number' ? applied.marketConfidence : strength,
+    setupStatus: applied.setupStatus || (applied.trade_setup && applied.trade_setup.type !== 'none' ? 'DEVELOPING' : 'NO_SETUP'),
+    decision: applied.decision || (applied.trade_setup && applied.trade_setup.type !== 'none' ? 'WAIT' : 'NO_TRADE'),
+    whyNotNow: Array.isArray(applied.whyNotNow) && applied.whyNotNow.length ? applied.whyNotNow : (currentTrend === 'neutral' ? ['Directional structure is not clear enough for a trade.'] : []),
+    dataLimitations: Array.isArray(applied.dataLimitations) && applied.dataLimitations.length ? applied.dataLimitations : (currentTrend === 'neutral' ? ['Directional structure is not clear enough for a trade.'] : []),
+    confidence: typeof applied.confidence === 'number' ? applied.confidence : strength,
+  };
+
+  if (result.status !== 'success' && result.trade_setup && result.trade_setup.type !== 'none') {
+    result.trade_setup = { ...result.trade_setup, type: 'none', entry_zone: 'none', stop_loss: 'none', take_profit: 'none', risk_reward: null };
+    result.decision = 'NO_TRADE';
+    result.setupStatus = 'NO_SETUP';
+  }
+
+  return result;
+}
+
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'application/javascript; charset=utf-8',
@@ -1776,6 +1980,169 @@ function createRequestHandler() {
     }
 
     if (pathname === '/api/strategy' && req.method === 'POST') return generateStrategy(req, res);
+    // Market endpoints (demo/skeleton)
+    if (pathname === '/market/quotes' && req.method === 'GET') {
+      const symbolsParam = url.searchParams.get('symbols') || '';
+      const symbols = symbolsParam ? symbolsParam.split(',').map((s) => s.trim()).filter(Boolean) : undefined;
+      const source = marketProvider || marketService;
+      return Promise.resolve(source.getQuotes(symbols)).then((quotes) => sendJson(res, 200, { quotes })).catch((err) => sendJson(res, 500, { error: err.message }));
+    }
+    if (pathname === '/market/metrics' && req.method === 'GET') {
+      try {
+        const marketBroker = require('./marketBroker');
+        const metrics = marketBroker.getMetrics ? marketBroker.getMetrics() : { error: 'metrics unavailable' };
+        return sendJson(res, 200, { metrics });
+      } catch (e) {
+        return sendJson(res, 500, { error: 'metrics unavailable' });
+      }
+    }
+    if (pathname === '/market/candles' && req.method === 'GET') {
+      const symbol = url.searchParams.get('symbol');
+      const interval = url.searchParams.get('interval') || '1min';
+      const limit = Math.min(500, Number(url.searchParams.get('limit') || '100'));
+      if (!symbol) return sendJson(res, 400, { error: 'symbol required' });
+      const source = marketProvider || marketService;
+      return Promise.resolve(source.getCandles(symbol, interval, limit)).then((candles) => sendJson(res, 200, { symbol, interval, candles })).catch((err) => sendJson(res, 500, { error: err.message }));
+    }
+    if (pathname === '/market/news' && req.method === 'GET') {
+      const symbol = String(url.searchParams.get('symbol') || '').trim();
+      if (!symbol) return sendJson(res, 400, { error: 'symbol required' });
+      return (async () => {
+        try {
+          if (newsProvider) {
+            const articles = await newsProvider.getNewsForInstrument(symbol);
+            const events = await newsProvider.getUpcomingEvents(symbol);
+            return sendJson(res, 200, buildInstrumentNewsResponse(symbol, { articles, events }));
+          }
+
+          const fallback = buildInstrumentNewsResponse(symbol, {
+            articles: [
+              { id: 'macro-boe-1', title: 'Bank of England policy tone remains key for GBP', summary: 'BoE officials continue to weigh inflation and wage pressure versus growth risks.', source: 'Reuters', publishedAt: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(), currencies: ['GBP', 'USD'], category: 'central-bank', impact: 'MEDIUM' },
+              { id: 'macro-fed-1', title: 'Federal Reserve focus stays on inflation and rates', summary: 'Investors remain focused on inflation and policy guidance, which influences the USD backdrop.', source: 'Bloomberg', publishedAt: new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString(), currencies: ['USD'], category: 'inflation', impact: 'HIGH' },
+              { id: 'gold-fed-1', title: 'Fed path and yields remain central to gold pricing', summary: 'Gold is sensitive to the US rates outlook and calmer risk sentiment.', source: 'MarketWatch', publishedAt: new Date(Date.now() - 11 * 60 * 60 * 1000).toISOString(), currencies: ['USD'], category: 'commodity', impact: 'MEDIUM' },
+            ],
+            events: [
+              { id: 'uk-cpi-1', title: 'UK CPI release', date: new Date(Date.now() + 18 * 60 * 60 * 1000).toISOString(), impact: 'HIGH', currency: 'GBP', country: 'United Kingdom' },
+              { id: 'fed-rate-1', title: 'FOMC rate decision', date: new Date(Date.now() + 26 * 60 * 60 * 1000).toISOString(), impact: 'HIGH', currency: 'USD', country: 'United States' },
+            ],
+          });
+          return sendJson(res, 200, fallback);
+        } catch (error) {
+          return sendJson(res, 500, { error: error.message || 'Unable to load news.' });
+        }
+      })();
+    }
+    if (pathname === '/market/events' && req.method === 'GET') {
+      const symbol = String(url.searchParams.get('symbol') || '').trim();
+      if (!symbol) return sendJson(res, 400, { error: 'symbol required' });
+      return (async () => {
+        try {
+          if (newsProvider) {
+            const events = await newsProvider.getUpcomingEvents(symbol);
+            return sendJson(res, 200, { symbol, events });
+          }
+
+          const fallback = buildInstrumentNewsResponse(symbol, {
+            articles: [],
+            events: [
+              { id: 'uk-cpi-1', title: 'UK CPI release', date: new Date(Date.now() + 18 * 60 * 60 * 1000).toISOString(), impact: 'HIGH', currency: 'GBP', country: 'United Kingdom' },
+              { id: 'fed-rate-1', title: 'FOMC rate decision', date: new Date(Date.now() + 26 * 60 * 60 * 1000).toISOString(), impact: 'HIGH', currency: 'USD', country: 'United States' },
+            ],
+          });
+          return sendJson(res, 200, { symbol, events: fallback.events });
+        } catch (error) {
+          return sendJson(res, 500, { error: error.message || 'Unable to load events.' });
+        }
+      })();
+    }
+    if (pathname === '/market/daily-brief' && req.method === 'GET') {
+      const symbols = String(url.searchParams.get('watchlist') || 'EUR/USD,GBP/USD,USD/JPY,AUD/USD,USD/CAD,USD/CHF,NZD/USD,XAU/USD')
+        .split(',')
+        .map((value) => value.trim())
+        .filter(Boolean);
+
+      return (async () => {
+        try {
+          const articleCollections = await Promise.all(symbols.map(async (symbol) => {
+            if (!newsProvider) return [];
+            try {
+              return await newsProvider.getNewsForInstrument(symbol);
+            } catch (error) {
+              return [];
+            }
+          }));
+
+          const eventCollections = await Promise.all(symbols.map(async (symbol) => {
+            if (!newsProvider) return [];
+            try {
+              return await newsProvider.getUpcomingEvents(symbol);
+            } catch (error) {
+              return [];
+            }
+          }));
+
+          const fallbackArticles = [
+            { id: 'brief-boe', title: 'BoE inflation surprise keeps sterling in focus', summary: 'UK price growth beat expectations and kept traders focused on the policy path.', source: 'Reuters', publishedAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(), currencies: ['GBP'], category: 'inflation', impact: 'HIGH' },
+            { id: 'brief-fed', title: 'Fed pricing remains constructive for the dollar', summary: 'Rate expectations continue to anchor the USD backdrop across major FX pairs.', source: 'Bloomberg', publishedAt: new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString(), currencies: ['USD'], category: 'rates', impact: 'MEDIUM' },
+            { id: 'brief-eur', title: 'Eurozone growth data adds modest support to EUR', summary: 'The single currency is responding to a steadier growth backdrop alongside softer volatility.', source: 'Financial Times', publishedAt: new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString(), currencies: ['EUR'], category: 'growth', impact: 'LOW' },
+            { id: 'brief-jpy', title: 'JPY remains sensitive to policy and yields', summary: 'The yen remains highly connected to domestic rate expectations and broader risk tone.', source: 'Reuters', publishedAt: new Date(Date.now() - 7 * 60 * 60 * 1000).toISOString(), currencies: ['JPY'], category: 'rates', impact: 'MEDIUM' },
+            { id: 'brief-gold', title: 'Gold keeps reacting to real-rate expectations', summary: 'Gold remains a key barometer of the USD and bond-market backdrop.', source: 'MarketWatch', publishedAt: new Date(Date.now() - 9 * 60 * 60 * 1000).toISOString(), currencies: ['XAU', 'USD'], category: 'commodity', impact: 'MEDIUM' },
+          ];
+
+          const fallbackEvents = [
+            { id: 'brief-cpi', title: 'UK CPI release', date: new Date(Date.now() + 18 * 60 * 60 * 1000).toISOString(), impact: 'HIGH', currency: 'GBP', country: 'United Kingdom', eventType: 'inflation' },
+            { id: 'brief-fomc', title: 'FOMC rate decision', date: new Date(Date.now() + 26 * 60 * 60 * 1000).toISOString(), impact: 'HIGH', currency: 'USD', country: 'United States', eventType: 'rates' },
+            { id: 'brief-nfp', title: 'Nonfarm payrolls', date: new Date(Date.now() + 40 * 60 * 60 * 1000).toISOString(), impact: 'HIGH', currency: 'USD', country: 'United States', eventType: 'employment' },
+            { id: 'brief-gdp', title: 'UK GDP update', date: new Date(Date.now() + 52 * 60 * 60 * 1000).toISOString(), impact: 'MEDIUM', currency: 'GBP', country: 'United Kingdom', eventType: 'growth' },
+          ];
+
+          const articleSet = newsProvider ? articleCollections.flat() : fallbackArticles;
+          const eventSet = newsProvider ? eventCollections.flat() : fallbackEvents;
+          const cards = require('./newsService').buildDailyBriefCards(symbols, { articles: articleSet, events: eventSet });
+          const dateText = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'long', year: 'numeric' }).format(new Date());
+
+          return sendJson(res, 200, {
+            title: 'Your daily brief is ready',
+            dateText,
+            updatesToday: Math.max(cards.length, 1),
+            cards,
+          });
+        } catch (error) {
+          return sendJson(res, 500, { error: error.message || 'Unable to generate daily brief.' });
+        }
+      })();
+    }
+    if ((pathname === '/market/analyze' || pathname === '/api/market-analysis') && req.method === 'POST') {
+      return readJsonBody(req)
+        .then((body) => {
+          const symbol = typeof body.symbol === 'string' ? body.symbol : '';
+          const interval = typeof body.interval === 'string' ? body.interval : '15m';
+          const candles = Array.isArray(body.candles) ? body.candles : [];
+          return sendJson(res, 200, analyzeMarketFromCandles(symbol, interval, candles));
+        })
+        .catch((err) => sendJson(res, 400, { error: err.message || 'Invalid market analysis payload.' }));
+    }
+    if (pathname === '/market/stream' && req.method === 'GET') {
+      // optional ?symbols=SYM1,SYM2 - SSE stream of ticks
+      const symbolsParam = url.searchParams.get('symbols') || '';
+      const symbols = symbolsParam ? symbolsParam.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean) : undefined;
+      // Simple auth: allow if auth header present and valid; otherwise allow demo access
+      const authHeader = String(req.headers.authorization || '');
+      const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+      // If token is provided validate it, otherwise continue as anonymous demo stream
+      if (token) {
+        const principal = verifyAuth(AUTH_SECRET, token);
+        if (!principal) return sendJson(res, 401, { error: 'invalid token' });
+      }
+      // Use broker which multiplexes provider (Twelve Data) or falls back to simulator
+      try {
+        const marketBroker = require('./marketBroker');
+        return marketBroker.attachSSE(req, res, symbols);
+      } catch (e) {
+        // fallback to legacy
+        return marketService.attachSSE(req, res, symbols);
+      }
+    }
     if ((pathname === '/api/chart-analysis' || pathname === '/analyze-chart') && req.method === 'POST') return analyzeChart(req, res);
     if (pathname === '/api/events' && req.method === 'POST') return receiveEvent(req, res);
     if (pathname === '/api/entitlement' && req.method === 'GET') return getEntitlement(req, res);

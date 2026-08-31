@@ -4,20 +4,35 @@ function normalizeBaseUrl(value: string): string {
   return value.replace(/\/$/, '');
 }
 
+function getExpoHostIp(): string | null {
+  try {
+    // Expo exposes the dev-server host in runtime; on a real device that is the
+    // local LAN IP of the machine running the backend, which is exactly what we want.
+    const constants = require('expo-constants');
+    const hostUri = constants?.expoConfig?.hostUri || constants?.manifest2?.extra?.expoGo?.hostUri || constants?.manifest?.debuggerHost || constants?.expoGo?.hostUri;
+    if (!hostUri || typeof hostUri !== 'string') return null;
+    const host = hostUri.split(':')[0];
+    if (!host || host === 'localhost' || host === '127.0.0.1') return null;
+    return host;
+  } catch {
+    return null;
+  }
+}
+
 export function resolveApiBaseUrl(value?: string | null): string {
-  const candidate = (value || process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3000').trim();
-  if (!candidate) return 'http://localhost:3000';
-
-  const placeholderPattern = /your-vercel-app-name\.vercel\.app|your-backend-url\.example\.com|replace_with\//i;
-  if (placeholderPattern.test(candidate)) {
-    return 'http://localhost:3000';
+  const explicit = (value || process.env.EXPO_PUBLIC_API_URL || '').trim();
+  if (explicit) {
+    const placeholderPattern = /your-vercel-app-name\.vercel\.app|your-backend-url\.example\.com|replace_with\//i;
+    if (placeholderPattern.test(explicit)) {
+      return 'http://localhost:3000';
+    }
+    return normalizeBaseUrl(explicit);
   }
 
-  if (candidate === 'http://127.0.0.1:3000' || candidate === 'http://10.0.2.2:3000') {
-    return 'http://localhost:3000';
-  }
+  const expoHostIp = getExpoHostIp();
+  if (expoHostIp) return `http://${expoHostIp}:3000`;
 
-  return normalizeBaseUrl(candidate);
+  return 'http://localhost:3000';
 }
 
 const API_URL = resolveApiBaseUrl();

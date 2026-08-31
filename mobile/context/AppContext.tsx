@@ -106,6 +106,16 @@ export interface SavedStrategy {
   createdAt: string;
 }
 
+export interface SavedBrief {
+  user_id: string;
+  brief_id: string;
+  card_id: string;
+  instrument: string;
+  headline: string;
+  summary: string;
+  created_at: string;
+}
+
 export interface AppSettings {
   accountBalance: number;
   balanceSet: boolean;
@@ -120,6 +130,7 @@ interface AppContextValue {
   settings: AppSettings;
   savedAnalyses: AnalysisResult[];
   savedStrategies: SavedStrategy[];
+  savedBriefs: SavedBrief[];
   currentAnalysis: AnalysisResult | null;
   isLoading: boolean;
   completeOnboarding: () => void;
@@ -132,6 +143,8 @@ interface AppContextValue {
   setCurrentAnalysis: (a: AnalysisResult | null) => void;
   saveStrategy: (s: SavedStrategy) => Promise<void>;
   deleteStrategy: (id: string) => Promise<void>;
+  saveBriefCard: (brief: SavedBrief) => Promise<void>;
+  deleteBriefCard: (briefId: string, cardId: string) => Promise<void>;
   exportData: () => Promise<string>;
   importData: (backupJson: string) => Promise<void>;
   deleteAccount: () => Promise<void>;
@@ -154,6 +167,7 @@ export interface AppBackup {
   settings: AppSettings;
   savedAnalyses: AnalysisResult[];
   savedStrategies: SavedStrategy[];
+  savedBriefs: SavedBrief[];
 }
 
 function migrateSettings(value: unknown): AppSettings {
@@ -196,6 +210,31 @@ function migrateAnalyses(value: unknown): AnalysisResult[] {
   )) : [];
 }
 
+function migrateSavedBrief(value: unknown): SavedBrief | null {
+  if (!value || typeof value !== 'object') return null;
+  const stored = value as Partial<SavedBrief>;
+  if (
+    typeof stored.user_id !== 'string' ||
+    typeof stored.brief_id !== 'string' ||
+    typeof stored.card_id !== 'string' ||
+    typeof stored.instrument !== 'string' ||
+    typeof stored.headline !== 'string' ||
+    typeof stored.summary !== 'string' ||
+    typeof stored.created_at !== 'string'
+  ) {
+    return null;
+  }
+  return {
+    user_id: stored.user_id,
+    brief_id: stored.brief_id,
+    card_id: stored.card_id,
+    instrument: stored.instrument,
+    headline: stored.headline,
+    summary: stored.summary,
+    created_at: stored.created_at,
+  };
+}
+
 function parseJson<T>(value: string | null, fallback: T): T {
   if (!value) return fallback;
   try {
@@ -213,17 +252,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [settings, setSettings] = useState<AppSettings>(defaultSettings);
   const [savedAnalyses, setSavedAnalyses] = useState<AnalysisResult[]>([]);
   const [savedStrategies, setSavedStrategies] = useState<SavedStrategy[]>([]);
+  const [savedBriefs, setSavedBriefs] = useState<SavedBrief[]>([]);
   const [currentAnalysis, setCurrentAnalysis] = useState<AnalysisResult | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     const load = async () => {
       try {
-        const [ob, sett, saved, strats, versionValue] = await Promise.all([
+        const [ob, sett, saved, strats, briefData, versionValue] = await Promise.all([
           AsyncStorage.getItem('onboardingComplete'),
           AsyncStorage.getItem('settings'),
           AsyncStorage.getItem('savedAnalyses'),
           AsyncStorage.getItem('savedStrategies'),
+          AsyncStorage.getItem('savedBriefs'),
           AsyncStorage.getItem(DATA_VERSION_KEY),
         ]);
 
@@ -232,6 +273,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         const storedStrategies = parseJson<unknown[]>(strats, [])
           .map(migrateStrategy)
           .filter((strategy): strategy is SavedStrategy => strategy !== null);
+        const storedBriefs = parseJson<unknown[]>(briefData, [])
+          .map(migrateSavedBrief)
+          .filter((brief): brief is SavedBrief => brief !== null);
 
         setOnboardingComplete(ob === 'true');
         if (await configureBilling()) setIsSubscribed(await getPremiumStatus());
@@ -239,6 +283,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setHapticsEnabled(storedSettings.hapticsEnabled);
         setSavedAnalyses(storedAnalyses);
         setSavedStrategies(storedStrategies);
+        setSavedBriefs(storedBriefs);
 
         // A missing version means legacy data. Normalize it immediately so
         // future app updates always start from a known schema.
@@ -248,6 +293,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             ['settings', JSON.stringify(storedSettings)],
             ['savedAnalyses', JSON.stringify(storedAnalyses)],
             ['savedStrategies', JSON.stringify(storedStrategies)],
+            ['savedBriefs', JSON.stringify(storedBriefs)],
             [DATA_VERSION_KEY, String(APP_DATA_VERSION)],
           ]);
         }
@@ -317,6 +363,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     await AsyncStorage.setItem('savedStrategies', JSON.stringify(updated));
   };
 
+  const saveBriefCard = async (brief: SavedBrief) => {
+    const updated = [brief, ...savedBriefs.filter((item) => !(item.brief_id === brief.brief_id && item.card_id === brief.card_id))];
+    setSavedBriefs(updated);
+    await AsyncStorage.setItem('savedBriefs', JSON.stringify(updated));
+  };
+
+  const deleteBriefCard = async (briefId: string, cardId: string) => {
+    const updated = savedBriefs.filter((item) => !(item.brief_id === briefId && item.card_id === cardId));
+    setSavedBriefs(updated);
+    await AsyncStorage.setItem('savedBriefs', JSON.stringify(updated));
+  };
+
   const exportData = async (): Promise<string> => {
     const backup: AppBackup = {
       backupVersion: BACKUP_VERSION,
@@ -327,6 +385,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       settings,
       savedAnalyses,
       savedStrategies,
+      savedBriefs,
     };
     return JSON.stringify(backup, null, 2);
   };
@@ -342,18 +401,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const importedStrategies = (Array.isArray(backup.savedStrategies) ? backup.savedStrategies : [])
       .map(migrateStrategy)
       .filter((strategy): strategy is SavedStrategy => strategy !== null);
+    const importedBriefs = (Array.isArray(backup.savedBriefs) ? backup.savedBriefs : [])
+      .map(migrateSavedBrief)
+      .filter((brief): brief is SavedBrief => brief !== null);
     const importedOnboarding = backup.onboardingComplete === true;
     await AsyncStorage.multiSet([
       ['onboardingComplete', String(importedOnboarding)],
       ['settings', JSON.stringify(importedSettings)],
       ['savedAnalyses', JSON.stringify(importedAnalyses)],
       ['savedStrategies', JSON.stringify(importedStrategies)],
+      ['savedBriefs', JSON.stringify(importedBriefs)],
       [DATA_VERSION_KEY, String(APP_DATA_VERSION)],
     ]);
     setOnboardingComplete(importedOnboarding);
     setSettings(importedSettings);
     setSavedAnalyses(importedAnalyses);
     setSavedStrategies(importedStrategies);
+    setSavedBriefs(importedBriefs);
   };
 
   const deleteAccount = async () => {
@@ -362,6 +426,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       'settings',
       'savedAnalyses',
       'savedStrategies',
+      'savedBriefs',
       DATA_VERSION_KEY,
     ]);
     setOnboardingComplete(false);
@@ -370,6 +435,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setHapticsEnabled(defaultSettings.hapticsEnabled);
     setSavedAnalyses([]);
     setSavedStrategies([]);
+    setSavedBriefs([]);
     setCurrentAnalysis(null);
   };
 
@@ -381,6 +447,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         settings,
         savedAnalyses,
         savedStrategies,
+        savedBriefs,
         currentAnalysis,
         isLoading,
         completeOnboarding,
@@ -393,6 +460,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setCurrentAnalysis,
         saveStrategy,
         deleteStrategy,
+        saveBriefCard,
+        deleteBriefCard,
         exportData,
         importData,
         deleteAccount,

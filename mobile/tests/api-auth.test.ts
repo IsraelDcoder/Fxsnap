@@ -23,3 +23,10 @@ test('placeholder API URLs fall back to the local backend', () => {
   assert.equal(resolveApiBaseUrl('https://your-backend-url.example.com'), 'http://localhost:3000');
   assert.equal(resolveApiBaseUrl('https://real-backend.example.com'), 'https://real-backend.example.com');
 });
+
+test('explicit local and emulator URLs are preserved instead of being rewritten', () => {
+  assert.equal(resolveApiBaseUrl('http://localhost:3000'), 'http://localhost:3000');
+  assert.equal(resolveApiBaseUrl('http://127.0.0.1:3000'), 'http://127.0.0.1:3000');
+  assert.equal(resolveApiBaseUrl('http://10.0.2.2:3000'), 'http://10.0.2.2:3000');
+  assert.equal(resolveApiBaseUrl('http://192.168.1.25:3000'), 'http://192.168.1.25:3000');
+});

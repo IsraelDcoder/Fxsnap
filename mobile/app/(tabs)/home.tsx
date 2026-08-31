@@ -155,7 +155,7 @@ function InsightCard() {
         <View style={styles.insightBody}>
           <Text style={[styles.insightLabel, { color: colors.buy }]}>Daily Insight</Text>
           {visible ? (
-            <Animated.Text entering={FadeIn.duration(300)} exiting={FadeOut.duration(200)} style={[styles.insightText, { color: colors.textSecondary }]}>
+            <Animated.Text entering={FadeIn.duration(300)} exiting={FadeOut.duration(200)} style={[styles.insightText, { color: colors.textSecondary }]}> 
               {insight.text}
             </Animated.Text>
           ) : null}
@@ -286,11 +286,11 @@ export default function HomeScreen() {
 
       {/* Center content */}
       <View style={styles.center}>
-        <Animated.Text entering={FadeInDown.delay(160).duration(600)} style={[styles.appTitle, { color: colors.text }]}>
+        <Animated.Text entering={FadeInDown.delay(160).duration(600)} style={[styles.appTitle, { color: colors.text }]}> 
           FXSnap
         </Animated.Text>
-        <Animated.Text entering={FadeInDown.delay(240).duration(600)} style={[styles.appSubtitle, { color: colors.textSecondary }]}>
-          AI-powered chart analysis{'\n'}for smarter trading decisions
+        <Animated.Text entering={FadeInDown.delay(240).duration(600)} style={[styles.appSubtitle, { color: colors.textSecondary }]}> 
+          {`AI-powered chart analysis\nfor smarter trading decisions`}
         </Animated.Text>
 
         <MarketBar />
@@ -331,7 +331,7 @@ export default function HomeScreen() {
           onPress={() => router.push('/my-strategies')}
           badge={savedStrategies.length}
         />
-        <Text style={[styles.disclaimer, { color: colors.textMuted }]}>
+        <Text style={[styles.disclaimer, { color: colors.textMuted }]}> 
           Disclaimer: This app does not provide financial advice. Consult a licensed professional before making investment decisions.
         </Text>
       </Animated.View>
@@ -403,6 +403,8 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     borderRadius: 6,
     backgroundColor: '#2A2A2A',
+    borderWidth: 1,
+    borderColor: '#2A2A2A',
   },
   sessionPillClosed: { backgroundColor: '#1A1A1A' },
   sessionDot: { width: 6, height: 6, borderRadius: 3 },

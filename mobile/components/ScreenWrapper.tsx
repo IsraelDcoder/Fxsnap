@@ -7,18 +7,27 @@ type Props = {
   // Accept any style prop to avoid type incompatibilities (gap, filter, etc.)
   style?: StyleProp<any>;
   contentContainerStyle?: StyleProp<any>;
+  // When false, do not render an outer ScrollView. Useful for screens that use
+  // VirtualizedList-backed components (FlatList/SectionList) to avoid nesting warnings.
+  scrollable?: boolean;
 };
 
-export const ScreenWrapper = ({ children, style, contentContainerStyle }: Props) => {
+export const ScreenWrapper = ({ children, style, contentContainerStyle, scrollable = true }: Props) => {
   return (
     <SafeAreaView style={[styles.safe, style]}>
-      <ScrollView
-        contentContainerStyle={[styles.container, contentContainerStyle]}
-        showsVerticalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled"
-      >
-        {children}
-      </ScrollView>
+      {scrollable ? (
+        <ScrollView
+          contentContainerStyle={[styles.container, contentContainerStyle]}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
+          {children}
+        </ScrollView>
+      ) : (
+        // Use a plain View when the screen body is responsible for its own
+        // scrolling (e.g. FlatList) to avoid nesting VirtualizedLists.
+        <View style={[styles.container, contentContainerStyle]}>{children}</View>
+      )}
     </SafeAreaView>
   );
 };

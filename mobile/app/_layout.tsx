@@ -12,7 +12,8 @@ import {
   Inter_700Bold,
   useFonts,
 } from '@expo-google-fonts/inter';
-import { Stack } from 'expo-router';
+import { Stack, router } from 'expo-router';
+import { useApp } from '@/context/AppContext';
 import * as SplashScreen from 'expo-splash-screen';
 import * as Sentry from '@sentry/react-native';
 
@@ -29,16 +30,29 @@ if (hasValidSentryDsn) {
 const queryClient = new QueryClient();
 
 function RootLayoutNav() {
+  const { onboardingComplete, isLoading } = useApp();
+
+  useEffect(() => {
+    if (!isLoading) {
+      if (!onboardingComplete) {
+        router.replace('/onboarding');
+      } else {
+        router.replace('/(tabs)/home');
+      }
+    }
+  }, [isLoading, onboardingComplete]);
+
   return (
     <Stack screenOptions={{ headerShown: false, animation: 'fade' }}>
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       <Stack.Screen name="onboarding" options={{ headerShown: false, animation: 'fade' }} />
-      <Stack.Screen name="home" options={{ headerShown: false }} />
       <Stack.Screen name="analysis" options={{ headerShown: false, animation: 'slide_from_bottom' }} />
       <Stack.Screen name="analysis-result" options={{ headerShown: false, animation: 'slide_from_right' }} />
       <Stack.Screen name="strategy" options={{ headerShown: false, animation: 'slide_from_bottom' }} />
+      <Stack.Screen name="daily-brief" options={{ headerShown: false, animation: 'slide_from_right' }} />
       <Stack.Screen name="settings" options={{ headerShown: false, animation: 'slide_from_right' }} />
       <Stack.Screen name="saved" options={{ headerShown: false, animation: 'slide_from_right' }} />
+      <Stack.Screen name="saved-briefs" options={{ headerShown: false, animation: 'slide_from_right' }} />
       <Stack.Screen name="paywall" options={{ headerShown: false, animation: 'slide_from_bottom', presentation: 'modal' }} />
       <Stack.Screen name="my-strategies" options={{ headerShown: false, animation: 'slide_from_right' }} />
     </Stack>

@@ -230,3 +230,39 @@ test('neutral market remains no_setup while preserving explainable reasons', () 
   assert.ok(['NO_TRADE', 'WAIT'].includes(res.decision));
   assert.ok(Array.isArray(res.whyNotNow));
 });
+
+test('structured market analysis allows NO_SETUP and WAIT without forcing BUY or SELL', () => {
+  const candles = [
+    { time: '2024-01-01T00:00:00Z', open: 1.1000, high: 1.1015, low: 1.0992, close: 1.1007 },
+    { time: '2024-01-01T00:15:00Z', open: 1.1007, high: 1.1020, low: 1.0995, close: 1.1014 },
+    { time: '2024-01-01T00:30:00Z', open: 1.1014, high: 1.1024, low: 1.0998, close: 1.1009 },
+    { time: '2024-01-01T00:45:00Z', open: 1.1009, high: 1.1022, low: 1.0997, close: 1.1011 },
+    { time: '2024-01-01T01:00:00Z', open: 1.1011, high: 1.1028, low: 1.1003, close: 1.1016 },
+    { time: '2024-01-01T01:15:00Z', open: 1.1016, high: 1.1029, low: 1.1005, close: 1.1010 },
+    { time: '2024-01-01T01:30:00Z', open: 1.1010, high: 1.1018, low: 1.0992, close: 1.0998 },
+    { time: '2024-01-01T01:45:00Z', open: 1.0998, high: 1.1008, low: 1.0987, close: 1.0993 },
+    { time: '2024-01-01T02:00:00Z', open: 1.0993, high: 1.1005, low: 1.0986, close: 1.0990 },
+    { time: '2024-01-01T02:15:00Z', open: 1.0990, high: 1.1002, low: 1.0985, close: 1.0997 },
+    { time: '2024-01-01T02:30:00Z', open: 1.0997, high: 1.1008, low: 1.0989, close: 1.1001 },
+    { time: '2024-01-01T02:45:00Z', open: 1.1001, high: 1.1016, low: 1.0998, close: 1.1005 },
+    { time: '2024-01-01T03:00:00Z', open: 1.1005, high: 1.1014, low: 1.0990, close: 1.0994 },
+    { time: '2024-01-01T03:15:00Z', open: 1.0994, high: 1.1001, low: 1.0983, close: 1.0989 },
+    { time: '2024-01-01T03:30:00Z', open: 1.0989, high: 1.1000, low: 1.0982, close: 1.0991 },
+    { time: '2024-01-01T03:45:00Z', open: 1.0991, high: 1.1007, low: 1.0985, close: 1.1004 },
+    { time: '2024-01-01T04:00:00Z', open: 1.1004, high: 1.1012, low: 1.0990, close: 1.0996 },
+    { time: '2024-01-01T04:15:00Z', open: 1.0996, high: 1.1004, low: 1.0989, close: 1.0995 },
+    { time: '2024-01-01T04:30:00Z', open: 1.0995, high: 1.1003, low: 1.0988, close: 1.0992 },
+    { time: '2024-01-01T04:45:00Z', open: 1.0992, high: 1.1001, low: 1.0985, close: 1.0991 },
+    { time: '2024-01-01T05:00:00Z', open: 1.0991, high: 1.1000, low: 1.0987, close: 1.0994 },
+    { time: '2024-01-01T05:15:00Z', open: 1.0994, high: 1.1005, low: 1.0989, close: 1.0999 },
+    { time: '2024-01-01T05:30:00Z', open: 1.0999, high: 1.1010, low: 1.0991, close: 1.1002 },
+    { time: '2024-01-01T05:45:00Z', open: 1.1002, high: 1.1008, low: 1.0990, close: 1.0996 },
+    { time: '2024-01-01T06:00:00Z', open: 1.0996, high: 1.1005, low: 1.0989, close: 1.0993 },
+  ];
+
+  const res = require('./serve').analyzeMarketFromCandles('EUR/USD', '15m', candles);
+  assert.ok(['no_trade', 'success'].includes(res.status));
+  assert.ok(['NO_SETUP', 'DEVELOPING', 'WAIT'].includes(res.setupStatus || 'NO_SETUP'));
+  assert.ok(!['BUY', 'SELL'].includes(res.decision) || res.trade_setup.type === 'none' || res.decision === 'WAIT');
+  assert.ok(Array.isArray(res.whyNotNow));
+});
