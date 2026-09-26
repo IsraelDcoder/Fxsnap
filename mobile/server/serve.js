@@ -2054,7 +2054,14 @@ function createRequestHandler() {
       const symbolsParam = url.searchParams.get('symbols') || '';
       const symbols = symbolsParam ? symbolsParam.split(',').map((s) => s.trim()).filter(Boolean) : undefined;
       const source = marketProvider || marketService;
-      return Promise.resolve(source.getQuotes(symbols)).then((quotes) => sendJson(res, 200, { quotes })).catch((err) => sendJson(res, 500, { error: err.message }));
+      return Promise.resolve(source.getQuotes(symbols)).then((quotes) => sendJson(res, 200, { quotes, dataSource: marketProvider ? 'provider' : 'simulated' })).catch((err) => sendJson(res, 500, { error: err.message }));
+    }
+    if (pathname === '/market/calendar' && req.method === 'GET') {
+      const calendarAvailable = Boolean(newsProvider?.providers?.some((provider) => typeof provider.getEconomicCalendar === 'function'));
+      if (!calendarAvailable) return sendJson(res, 200, { events: [], dataSource: 'unavailable' });
+      return newsProvider.getEconomicCalendar()
+        .then((events) => sendJson(res, 200, { events, dataSource: 'provider' }))
+        .catch((error) => sendJson(res, 502, { error: error.message || 'Unable to load economic calendar.' }));
     }
     if (pathname === '/market/metrics' && req.method === 'GET') {
       try {
@@ -2071,7 +2078,7 @@ function createRequestHandler() {
       const limit = Math.min(500, Number(url.searchParams.get('limit') || '100'));
       if (!symbol) return sendJson(res, 400, { error: 'symbol required' });
       const source = marketProvider || marketService;
-      return Promise.resolve(source.getCandles(symbol, interval, limit)).then((candles) => sendJson(res, 200, { symbol, interval, candles })).catch((err) => sendJson(res, 500, { error: err.message }));
+      return Promise.resolve(source.getCandles(symbol, interval, limit)).then((candles) => sendJson(res, 200, { symbol, interval, candles, dataSource: marketProvider ? 'provider' : 'simulated' })).catch((err) => sendJson(res, 500, { error: err.message }));
     }
     if (pathname === '/market/news' && req.method === 'GET') {
       const symbol = String(url.searchParams.get('symbol') || '').trim();
@@ -2125,61 +2132,7 @@ function createRequestHandler() {
       })();
     }
     if (pathname === '/market/daily-brief' && req.method === 'GET') {
-      const symbols = String(url.searchParams.get('watchlist') || 'EUR/USD,GBP/USD,USD/JPY,AUD/USD,USD/CAD,USD/CHF,NZD/USD,XAU/USD')
-        .split(',')
-        .map((value) => value.trim())
-        .filter(Boolean);
-
-      return (async () => {
-        try {
-          const articleCollections = await Promise.all(symbols.map(async (symbol) => {
-            if (!newsProvider) return [];
-            try {
-              return await newsProvider.getNewsForInstrument(symbol);
-            } catch (error) {
-              return [];
-            }
-          }));
-
-          const eventCollections = await Promise.all(symbols.map(async (symbol) => {
-            if (!newsProvider) return [];
-            try {
-              return await newsProvider.getUpcomingEvents(symbol);
-            } catch (error) {
-              return [];
-            }
-          }));
-
-          const fallbackArticles = [
-            { id: 'brief-boe', title: 'BoE inflation surprise keeps sterling in focus', summary: 'UK price growth beat expectations and kept traders focused on the policy path.', source: 'Reuters', publishedAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(), currencies: ['GBP'], category: 'inflation', impact: 'HIGH' },
-            { id: 'brief-fed', title: 'Fed pricing remains constructive for the dollar', summary: 'Rate expectations continue to anchor the USD backdrop across major FX pairs.', source: 'Bloomberg', publishedAt: new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString(), currencies: ['USD'], category: 'rates', impact: 'MEDIUM' },
-            { id: 'brief-eur', title: 'Eurozone growth data adds modest support to EUR', summary: 'The single currency is responding to a steadier growth backdrop alongside softer volatility.', source: 'Financial Times', publishedAt: new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString(), currencies: ['EUR'], category: 'growth', impact: 'LOW' },
-            { id: 'brief-jpy', title: 'JPY remains sensitive to policy and yields', summary: 'The yen remains highly connected to domestic rate expectations and broader risk tone.', source: 'Reuters', publishedAt: new Date(Date.now() - 7 * 60 * 60 * 1000).toISOString(), currencies: ['JPY'], category: 'rates', impact: 'MEDIUM' },
-            { id: 'brief-gold', title: 'Gold keeps reacting to real-rate expectations', summary: 'Gold remains a key barometer of the USD and bond-market backdrop.', source: 'MarketWatch', publishedAt: new Date(Date.now() - 9 * 60 * 60 * 1000).toISOString(), currencies: ['XAU', 'USD'], category: 'commodity', impact: 'MEDIUM' },
-          ];
-
-          const fallbackEvents = [
-            { id: 'brief-cpi', title: 'UK CPI release', date: new Date(Date.now() + 18 * 60 * 60 * 1000).toISOString(), impact: 'HIGH', currency: 'GBP', country: 'United Kingdom', eventType: 'inflation' },
-            { id: 'brief-fomc', title: 'FOMC rate decision', date: new Date(Date.now() + 26 * 60 * 60 * 1000).toISOString(), impact: 'HIGH', currency: 'USD', country: 'United States', eventType: 'rates' },
-            { id: 'brief-nfp', title: 'Nonfarm payrolls', date: new Date(Date.now() + 40 * 60 * 60 * 1000).toISOString(), impact: 'HIGH', currency: 'USD', country: 'United States', eventType: 'employment' },
-            { id: 'brief-gdp', title: 'UK GDP update', date: new Date(Date.now() + 52 * 60 * 60 * 1000).toISOString(), impact: 'MEDIUM', currency: 'GBP', country: 'United Kingdom', eventType: 'growth' },
-          ];
-
-          const articleSet = newsProvider ? articleCollections.flat() : fallbackArticles;
-          const eventSet = newsProvider ? eventCollections.flat() : fallbackEvents;
-          const cards = require('./newsService').buildDailyBriefCards(symbols, { articles: articleSet, events: eventSet });
-          const dateText = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'long', year: 'numeric' }).format(new Date());
-
-          return sendJson(res, 200, {
-            title: 'Your daily brief is ready',
-            dateText,
-            updatesToday: Math.max(cards.length, 1),
-            cards,
-          });
-        } catch (error) {
-          return sendJson(res, 500, { error: error.message || 'Unable to generate daily brief.' });
-        }
-      })();
+      return sendJson(res, 410, { error: 'The market-news daily brief has been replaced by FXSnap Daily Brief educational content.' });
     }
     if ((pathname === '/market/analyze' || pathname === '/api/market-analysis') && req.method === 'POST') {
       return readJsonBody(req)

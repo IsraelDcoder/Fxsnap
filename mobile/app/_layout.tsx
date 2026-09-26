@@ -50,7 +50,10 @@ function RootLayoutNav() {
       <Stack.Screen name="analysis-result" options={{ headerShown: false, animation: 'slide_from_right' }} />
       <Stack.Screen name="strategy" options={{ headerShown: false, animation: 'slide_from_bottom' }} />
       <Stack.Screen name="daily-brief" options={{ headerShown: false, animation: 'slide_from_right' }} />
+      <Stack.Screen name="economic-calendar" options={{ headerShown: false, animation: 'slide_from_right' }} />
       <Stack.Screen name="settings" options={{ headerShown: false, animation: 'slide_from_right' }} />
+      <Stack.Screen name="lot-size-calculator" options={{ headerShown: false, animation: 'slide_from_right' }} />
+      <Stack.Screen name="risk-management" options={{ headerShown: false, animation: 'slide_from_right' }} />
       <Stack.Screen name="saved" options={{ headerShown: false, animation: 'slide_from_right' }} />
       <Stack.Screen name="saved-briefs" options={{ headerShown: false, animation: 'slide_from_right' }} />
       <Stack.Screen name="paywall" options={{ headerShown: false, animation: 'slide_from_bottom', presentation: 'modal' }} />

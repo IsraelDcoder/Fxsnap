@@ -2,12 +2,14 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { addBillingListener, billingIsConfigured, configureBilling, getPremiumStatus, purchasePlan, restorePurchases, type BillingPlan } from '@/services/billing';
 import { setHapticsEnabled } from '@/services/haptics';
+import { createDailyRiskActivity, getLocalRiskDateKey, normalizeDailyRiskActivity, type DailyRiskActivity, type OpenRiskPosition } from '@/services/risk';
 
-export const APP_DATA_VERSION = 2;
+export const APP_DATA_VERSION = 3;
 const DATA_VERSION_KEY = 'fxsnap:dataVersion';
 const BACKUP_VERSION = 1;
+const RISK_ACTIVITY_KEY = 'fxsnap:riskActivity';
 
-export type AnalysisStatus = 'success' | 'no_trade' | 'invalid_image' | 'ai_unavailable' | 'ai_invalid_response' | 'free_analysis_used';
+export type AnalysisStatus = 'success' | 'no_trade' | 'invalid_image' | 'ai_unavailable' | 'ai_invalid_response' | 'free_analysis_used' | 'free_access_unavailable';
 
 export interface AnalysisResult {
   id: string;
@@ -117,9 +119,14 @@ export interface SavedBrief {
 }
 
 export interface AppSettings {
+  displayName: string;
   accountBalance: number;
   balanceSet: boolean;
   riskPercent: number;
+  maxDailyLossPercent: number;
+  maxOpenRiskPercent: number;
+  maxTradesPerDay: number;
+  maxConsecutiveLosses: number;
   hapticsEnabled: boolean;
   darkMode: boolean;
 }
@@ -131,6 +138,7 @@ interface AppContextValue {
   savedAnalyses: AnalysisResult[];
   savedStrategies: SavedStrategy[];
   savedBriefs: SavedBrief[];
+  riskActivity: DailyRiskActivity;
   currentAnalysis: AnalysisResult | null;
   isLoading: boolean;
   completeOnboarding: () => void;
@@ -145,15 +153,22 @@ interface AppContextValue {
   deleteStrategy: (id: string) => Promise<void>;
   saveBriefCard: (brief: SavedBrief) => Promise<void>;
   deleteBriefCard: (briefId: string, cardId: string) => Promise<void>;
+  recordOpenRiskPosition: (position: OpenRiskPosition) => Promise<void>;
+  closeRiskPosition: (positionId: string, realizedPnl: number) => Promise<void>;
   exportData: () => Promise<string>;
   importData: (backupJson: string) => Promise<void>;
   deleteAccount: () => Promise<void>;
 }
 
 const defaultSettings: AppSettings = {
+  displayName: '',
   accountBalance: 1000,
   balanceSet: false,
   riskPercent: 1,
+  maxDailyLossPercent: 3,
+  maxOpenRiskPercent: 3,
+  maxTradesPerDay: 3,
+  maxConsecutiveLosses: 3,
   hapticsEnabled: true,
   darkMode: true,
 };
@@ -168,6 +183,7 @@ export interface AppBackup {
   savedAnalyses: AnalysisResult[];
   savedStrategies: SavedStrategy[];
   savedBriefs: SavedBrief[];
+  riskActivity?: DailyRiskActivity;
 }
 
 function migrateSettings(value: unknown): AppSettings {
@@ -175,6 +191,11 @@ function migrateSettings(value: unknown): AppSettings {
   return {
     ...defaultSettings,
     ...stored,
+    displayName: typeof stored.displayName === 'string' ? stored.displayName : '',
+    maxDailyLossPercent: Number.isFinite(Number(stored.maxDailyLossPercent)) ? Number(stored.maxDailyLossPercent) : defaultSettings.maxDailyLossPercent,
+    maxOpenRiskPercent: Number.isFinite(Number(stored.maxOpenRiskPercent)) ? Number(stored.maxOpenRiskPercent) : defaultSettings.maxOpenRiskPercent,
+    maxTradesPerDay: Number.isFinite(Number(stored.maxTradesPerDay)) ? Number(stored.maxTradesPerDay) : defaultSettings.maxTradesPerDay,
+    maxConsecutiveLosses: Number.isFinite(Number(stored.maxConsecutiveLosses)) ? Number(stored.maxConsecutiveLosses) : defaultSettings.maxConsecutiveLosses,
     // Older versions did not store this field. Do not treat the default
     // balance as user-confirmed unless the user explicitly saved it.
     balanceSet: typeof stored.balanceSet === 'boolean' ? stored.balanceSet : false,
@@ -253,18 +274,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [savedAnalyses, setSavedAnalyses] = useState<AnalysisResult[]>([]);
   const [savedStrategies, setSavedStrategies] = useState<SavedStrategy[]>([]);
   const [savedBriefs, setSavedBriefs] = useState<SavedBrief[]>([]);
+  const [riskActivity, setRiskActivity] = useState<DailyRiskActivity>(() => createDailyRiskActivity(getLocalRiskDateKey()));
   const [currentAnalysis, setCurrentAnalysis] = useState<AnalysisResult | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     const load = async () => {
       try {
-        const [ob, sett, saved, strats, briefData, versionValue] = await Promise.all([
+        const [ob, sett, saved, strats, briefData, riskData, versionValue] = await Promise.all([
           AsyncStorage.getItem('onboardingComplete'),
           AsyncStorage.getItem('settings'),
           AsyncStorage.getItem('savedAnalyses'),
           AsyncStorage.getItem('savedStrategies'),
           AsyncStorage.getItem('savedBriefs'),
+          AsyncStorage.getItem(RISK_ACTIVITY_KEY),
           AsyncStorage.getItem(DATA_VERSION_KEY),
         ]);
 
@@ -276,6 +299,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         const storedBriefs = parseJson<unknown[]>(briefData, [])
           .map(migrateSavedBrief)
           .filter((brief): brief is SavedBrief => brief !== null);
+        const storedRiskActivity = normalizeDailyRiskActivity(
+          parseJson<Partial<DailyRiskActivity> | null>(riskData, null),
+          getLocalRiskDateKey(),
+        );
 
         setOnboardingComplete(ob === 'true');
         if (await configureBilling()) setIsSubscribed(await getPremiumStatus());
@@ -284,6 +311,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setSavedAnalyses(storedAnalyses);
         setSavedStrategies(storedStrategies);
         setSavedBriefs(storedBriefs);
+        setRiskActivity(storedRiskActivity);
+        await AsyncStorage.setItem(RISK_ACTIVITY_KEY, JSON.stringify(storedRiskActivity));
 
         // A missing version means legacy data. Normalize it immediately so
         // future app updates always start from a known schema.
@@ -375,6 +404,30 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     await AsyncStorage.setItem('savedBriefs', JSON.stringify(updated));
   };
 
+  const recordOpenRiskPosition = async (position: OpenRiskPosition) => {
+    const current = normalizeDailyRiskActivity(riskActivity, getLocalRiskDateKey());
+    const updated: DailyRiskActivity = {
+      ...current,
+      tradesToday: current.tradesToday + 1,
+      openPositions: [position, ...current.openPositions.filter((item) => item.id !== position.id)],
+    };
+    setRiskActivity(updated);
+    await AsyncStorage.setItem(RISK_ACTIVITY_KEY, JSON.stringify(updated));
+  };
+
+  const closeRiskPosition = async (positionId: string, realizedPnl: number) => {
+    const current = normalizeDailyRiskActivity(riskActivity, getLocalRiskDateKey());
+    if (!current.openPositions.some((position) => position.id === positionId)) return;
+    const updated: DailyRiskActivity = {
+      ...current,
+      dailyNetPnl: current.dailyNetPnl + realizedPnl,
+      consecutiveLosses: realizedPnl < 0 ? current.consecutiveLosses + 1 : realizedPnl > 0 ? 0 : current.consecutiveLosses,
+      openPositions: current.openPositions.filter((position) => position.id !== positionId),
+    };
+    setRiskActivity(updated);
+    await AsyncStorage.setItem(RISK_ACTIVITY_KEY, JSON.stringify(updated));
+  };
+
   const exportData = async (): Promise<string> => {
     const backup: AppBackup = {
       backupVersion: BACKUP_VERSION,
@@ -386,6 +439,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       savedAnalyses,
       savedStrategies,
       savedBriefs,
+      riskActivity,
     };
     return JSON.stringify(backup, null, 2);
   };
@@ -411,6 +465,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       ['savedAnalyses', JSON.stringify(importedAnalyses)],
       ['savedStrategies', JSON.stringify(importedStrategies)],
       ['savedBriefs', JSON.stringify(importedBriefs)],
+      [RISK_ACTIVITY_KEY, JSON.stringify(normalizeDailyRiskActivity(backup.riskActivity || null, getLocalRiskDateKey()))],
       [DATA_VERSION_KEY, String(APP_DATA_VERSION)],
     ]);
     setOnboardingComplete(importedOnboarding);
@@ -418,6 +473,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setSavedAnalyses(importedAnalyses);
     setSavedStrategies(importedStrategies);
     setSavedBriefs(importedBriefs);
+    setRiskActivity(normalizeDailyRiskActivity(backup.riskActivity || null, getLocalRiskDateKey()));
   };
 
   const deleteAccount = async () => {
@@ -427,6 +483,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       'savedAnalyses',
       'savedStrategies',
       'savedBriefs',
+      RISK_ACTIVITY_KEY,
+      'fxsnap:dailyBrief:assignments:v1',
+      'fxsnap:dailyBrief:reads:v1',
       DATA_VERSION_KEY,
     ]);
     setOnboardingComplete(false);
@@ -436,6 +495,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setSavedAnalyses([]);
     setSavedStrategies([]);
     setSavedBriefs([]);
+    setRiskActivity(createDailyRiskActivity(getLocalRiskDateKey()));
     setCurrentAnalysis(null);
   };
 
@@ -448,6 +508,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         savedAnalyses,
         savedStrategies,
         savedBriefs,
+        riskActivity,
         currentAnalysis,
         isLoading,
         completeOnboarding,
@@ -462,6 +523,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         deleteStrategy,
         saveBriefCard,
         deleteBriefCard,
+        recordOpenRiskPosition,
+        closeRiskPosition,
         exportData,
         importData,
         deleteAccount,

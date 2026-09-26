@@ -390,6 +390,14 @@ export default function AnalysisScreen() {
       return;
     }
 
+    if (chart.status === 'free_access_unavailable') {
+      const message = chart.message || 'Free analysis is temporarily unavailable because durable entitlement storage is not configured. Your free analysis was not used.';
+      setAnalysisError(message);
+      Alert.alert('Analysis temporarily unavailable', message);
+      setStage('preview');
+      return;
+    }
+
     const elapsed = Date.now() - analysisStartedAt;
     const remainingMinimumTime = Math.max(0, 10000 - elapsed);
     await new Promise((resolve) => setTimeout(resolve, remainingMinimumTime));

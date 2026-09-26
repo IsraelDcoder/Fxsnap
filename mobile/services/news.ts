@@ -24,6 +24,11 @@ export interface UpcomingEvent {
   currency?: string | null;
 }
 
+export interface EconomicCalendarResponse {
+  events: UpcomingEvent[];
+  live: boolean;
+}
+
 export interface DailyBriefCard {
   id: string;
   instrument: string;
@@ -51,6 +56,20 @@ export interface NewsProvider {
 const API_BASE = resolveApiBaseUrl();
 
 export class DefaultNewsProvider implements NewsProvider {
+  async getEconomicCalendar(): Promise<EconomicCalendarResponse> {
+    try {
+      const response = await fetch(`${API_BASE}/market/calendar`);
+      if (!response.ok) return { events: [], live: false };
+      const payload = await response.json();
+      return {
+        events: Array.isArray(payload?.events) ? payload.events : [],
+        live: payload?.dataSource === 'provider',
+      };
+    } catch {
+      return { events: [], live: false };
+    }
+  }
+
   async getNewsForInstrument(symbol: string): Promise<NewsItem[]> {
     try {
       const response = await fetch(`${API_BASE}/market/news?symbol=${encodeURIComponent(symbol)}`);

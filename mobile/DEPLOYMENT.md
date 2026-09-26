@@ -32,6 +32,7 @@ git push -u origin main
    - GEMINI_API_KEY (Google Gemini key for chart analysis)
    - GEMINI_VISION_MODEL (default `gemini-1.5-flash`)
    - ALPHA_VANTAGE_API_KEY
+   - TWELVEDATA_API_KEY (live forex quotes, candles, and economic calendar)
    - REVENUECAT_SECRET_API_KEY
    - REVENUECAT_ENTITLEMENT_ID
    - FXSNAP_AUTH_SECRET

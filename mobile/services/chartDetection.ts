@@ -2,7 +2,7 @@ import { getApiHeaders, resolveApiBaseUrl } from '@/services/apiAuth';
 
 const API_URL = resolveApiBaseUrl();
 
-export type AnalysisStatus = 'success' | 'no_trade' | 'invalid_image' | 'ai_unavailable' | 'ai_invalid_response' | 'free_analysis_used';
+export type AnalysisStatus = 'success' | 'no_trade' | 'invalid_image' | 'ai_unavailable' | 'ai_invalid_response' | 'free_analysis_used' | 'free_access_unavailable';
 
 export interface ChartAnalysisResult {
   status: AnalysisStatus;
@@ -117,6 +117,9 @@ export async function analyzeChartImage(
     if (!response.ok) {
       if (response.status === 402 && payload.error === 'free_analysis_used') {
         return emptyAnalysis('free_analysis_used', 'Your free chart analysis has been used.');
+      }
+      if (response.status === 503 && payload.error === 'Free analysis access storage is not configured.') {
+        return emptyAnalysis('free_access_unavailable', 'Free analysis is temporarily unavailable because the server has not configured durable entitlement storage. Your free analysis was not used.');
       }
       return emptyAnalysis('ai_unavailable', payload.error || 'Chart AI is unavailable.');
     }

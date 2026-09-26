@@ -87,6 +87,7 @@ class TwelveDataNewsProvider {
       const start = new Date();
       const end = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
       const payload = await fetchJson(`https://api.twelvedata.com/economic_calendar?apikey=${encodeURIComponent(this.apiKey)}&start_date=${encodeURIComponent(start.toISOString().slice(0, 10))}&end_date=${encodeURIComponent(end.toISOString().slice(0, 10))}`);
+      if (payload?.status === 'error' || payload?.code === 'error') throw new Error(payload.message || 'Economic calendar provider returned an error.');
       const events = Array.isArray(payload?.events) ? payload.events : [];
       const relevant = getRelatedCurrencies(symbol);
       return events
@@ -109,6 +110,27 @@ class TwelveDataNewsProvider {
         }));
     } catch (error) {
       return [];
+    }
+  }
+
+  async getEconomicCalendar() {
+    if (!this.apiKey) return [];
+    try {
+      const start = new Date();
+      const end = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+      const payload = await fetchJson(`https://api.twelvedata.com/economic_calendar?apikey=${encodeURIComponent(this.apiKey)}&start_date=${encodeURIComponent(start.toISOString().slice(0, 10))}&end_date=${encodeURIComponent(end.toISOString().slice(0, 10))}`);
+      if (payload?.status === 'error' || payload?.code === 'error') throw new Error(payload.message || 'Economic calendar provider returned an error.');
+      const events = Array.isArray(payload?.events) ? payload.events : [];
+      return events.map((item) => ({
+        id: String(item.id || `${item.event || 'event'}-${item.date || Date.now()}`),
+        title: String(item.event || item.name || 'Economic event').trim(),
+        date: item.date || item.datetime || new Date().toISOString(),
+        impact: String(item.impact || item.importance || 'MEDIUM').toUpperCase(),
+        country: item.country || null,
+        currency: String(item.currency || '').trim().toUpperCase() || null,
+      }));
+    } catch (error) {
+      throw error;
     }
   }
 }
@@ -165,6 +187,18 @@ class MarketNewsProvider {
     }
 
     return buildInstrumentNewsResponse(symbol, { articles: [], events: Array.from(deduped.values()) }).events;
+  }
+
+  async getEconomicCalendar() {
+    const calendarProviders = this.providers.filter((provider) => typeof provider.getEconomicCalendar === 'function');
+    if (!calendarProviders.length) return [];
+    const collections = await Promise.all(calendarProviders.map((provider) => provider.getEconomicCalendar()));
+    const deduped = new Map();
+    for (const event of collections.flat()) {
+      const key = `${event.title}|${event.date}|${event.currency || 'unknown'}`;
+      if (!deduped.has(key)) deduped.set(key, event);
+    }
+    return Array.from(deduped.values());
   }
 }
 

@@ -57,8 +57,8 @@ export default function SavedBriefsScreen() {
       {sortedBriefs.length === 0 ? (
         <View style={styles.emptyState}>
           <Feather name="bookmark" size={40} color={colors.textMuted} />
-          <Text style={[styles.emptyTitle, { color: colors.text }]}>No saved brief cards</Text>
-          <Text style={[styles.emptyText, { color: colors.textSecondary }]}>Save any story card from your daily brief to keep it here.</Text>
+          <Text style={[styles.emptyTitle, { color: colors.text }]}>No saved insights</Text>
+          <Text style={[styles.emptyText, { color: colors.textSecondary }]}>Save a Daily Brief insight to revisit it here.</Text>
           <TouchableOpacity style={[styles.primaryButton, { backgroundColor: colors.primary }]} onPress={() => router.push('/daily-brief')}>
             <Text style={[styles.primaryButtonText, { color: colors.primaryForeground }]}>Open brief</Text>
           </TouchableOpacity>

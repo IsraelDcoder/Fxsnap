@@ -26,6 +26,7 @@ import * as Haptics from '@/services/haptics';
 import { useApp } from '@/context/AppContext';
 import { useColors } from '@/hooks/useColors';
 import { getTradingSessionState, SESSION_DEFINITIONS } from '@/services/tradingSessions';
+import HomeDashboard from '@/components/HomeDashboard';
 
 // ─── Market sessions ──────────────────────────────────────────────────────────
 type Session = { name: string; color: string; open: boolean };
@@ -265,76 +266,7 @@ function ActionButton({
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 export default function HomeScreen() {
-  const insets = useSafeAreaInsets();
-  const colors = useColors();
-  const { isLoading, savedStrategies } = useApp();
-
-  const topPad = Platform.OS === 'web' ? 67 : insets.top;
-  const botPad = Platform.OS === 'web' ? 34 : insets.bottom;
-
-  return (
-    <View style={[styles.container, { paddingTop: topPad, backgroundColor: colors.background }]}> 
-      {/* Header */}
-      <Animated.View entering={FadeIn.delay(100).duration(500)} style={styles.header}>
-        <TouchableOpacity style={[styles.iconBtn, { backgroundColor: colors.card, borderColor: colors.cardBorder }]} onPress={() => router.push('/settings')}>
-          <Feather name="settings" size={20} color={colors.text} />
-        </TouchableOpacity>
-        <TouchableOpacity style={[styles.iconBtn, { backgroundColor: colors.card, borderColor: colors.cardBorder }]} onPress={() => router.push('/saved')}>
-          <Feather name="bookmark" size={20} color={colors.text} />
-        </TouchableOpacity>
-      </Animated.View>
-
-      {/* Center content */}
-      <View style={styles.center}>
-        <Animated.Text entering={FadeInDown.delay(160).duration(600)} style={[styles.appTitle, { color: colors.text }]}> 
-          FXSnap
-        </Animated.Text>
-        <Animated.Text entering={FadeInDown.delay(240).duration(600)} style={[styles.appSubtitle, { color: colors.textSecondary }]}> 
-          {`AI-powered chart analysis\nfor smarter trading decisions`}
-        </Animated.Text>
-
-        <MarketBar />
-        <InsightCard />
-        <AccountSnapshot />
-      </View>
-
-      {/* Bottom buttons */}
-      <Animated.View
-        entering={FadeInUp.delay(520).duration(600)}
-        style={[styles.bottomSection, { paddingBottom: botPad + 20 }]}
-      >
-        <ActionButton
-          icon="activity"
-          label="Run Analysis"
-          sublabel="Upload a chart to get signals"
-          onPress={() => {
-            if (isLoading) return;
-            router.push('/analysis');
-          }}
-          primary
-        />
-        <ActionButton
-          icon="sliders"
-          label="Strategy"
-          sublabel="Generate a personalised trading plan"
-          onPress={() => {
-            if (isLoading) return;
-            router.push('/strategy');
-          }}
-        />
-        <ActionButton
-          icon="cpu"
-          label="My Strategies"
-          sublabel="View your saved strategies"
-          onPress={() => router.push('/my-strategies')}
-          badge={savedStrategies.length}
-        />
-        <Text style={[styles.disclaimer, { color: colors.textMuted }]}> 
-          Disclaimer: This app does not provide financial advice. Consult a licensed professional before making investment decisions.
-        </Text>
-      </Animated.View>
-    </View>
-  );
+  return <HomeDashboard />;
 }
 
 const styles = StyleSheet.create({

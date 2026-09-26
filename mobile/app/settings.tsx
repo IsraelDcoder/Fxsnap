@@ -24,8 +24,6 @@ import * as Clipboard from 'expo-clipboard';
 import { useApp } from '@/context/AppContext';
 import { useColors } from '@/hooks/useColors';
 
-const RISK_OPTIONS = [0.5, 1, 1.5, 2, 3, 5];
-
 export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
   const colors = useColors();
@@ -74,38 +72,10 @@ export default function SettingsScreen() {
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
   const botPad = Platform.OS === 'web' ? 34 : insets.bottom;
 
-  const [balanceInput, setBalanceInput] = useState(settings.accountBalance.toString());
-  const [balanceSaved, setBalanceSaved] = useState(settings.balanceSet);
+  const [displayNameInput, setDisplayNameInput] = useState(settings.displayName);
 
-  // Lot calculator — pre-filled from user's saved settings
-  const [calcBalance, setCalcBalance] = useState(settings.accountBalance.toString());
-  const [calcRisk, setCalcRisk] = useState(settings.riskPercent.toString());
-  const [calcSl, setCalcSl] = useState('20');
-
-  const parsedBalance = parseFloat(calcBalance);
-  const parsedRisk = parseFloat(calcRisk);
-  const parsedSl = parseFloat(calcSl);
-  const minimumLot = 0.01;
-  const supportsNanoLot = true;
-  const minimumSupportedLot = supportsNanoLot ? 0.001 : minimumLot;
-  const riskAmount = parsedBalance * (parsedRisk / 100);
-  const rawLot = parsedSl > 0 ? riskAmount / (parsedSl * 10) : 0;
-  const roundedLot = rawLot > 0 ? Math.max(minimumSupportedLot, rawLot) : 0;
-  const calcLotSize =
-    parsedBalance >= 0 && parsedRisk >= 0 && parsedSl > 0
-      ? roundedLot.toFixed(supportsNanoLot ? 3 : 2)
-      : '—';
-  const isSmallAccount = parsedBalance > 0 && parsedBalance < 100;
-  const isVerySmallLot = rawLot > 0 && rawLot < minimumSupportedLot;
-
-  const saveBalance = () => {
-    const val = parseFloat(balanceInput);
-    if (!isNaN(val) && val > 0) {
-      updateSettings({ accountBalance: val, balanceSet: true });
-      setCalcBalance(val.toString());
-      setBalanceSaved(true);
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    }
+  const saveDisplayName = () => {
+    updateSettings({ displayName: displayNameInput.trim().slice(0, 40) });
   };
 
   const exportBackup = async () => {
@@ -205,155 +175,32 @@ export default function SettingsScreen() {
           {/* ── Account ── */}
           <Animated.View entering={FadeInDown.delay(80).duration(500)}>
             <SectionHeader
-              title="Account"
-              subtitle="Used to calculate lot sizes automatically"
+              title="Profile"
+              subtitle="Personalize your FXSnap profile"
             />
             <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>  
-              <Row icon="dollar-sign" label="Account Balance">
-                <View style={[styles.inputRow, { backgroundColor: colors.surface, borderColor: colors.cardBorder, borderWidth: 1 }]}> 
-                  <TextInput
-                    style={[styles.input, { color: colors.text }]}
-                    value={balanceInput}
-                    onChangeText={(v) => {
-                      setBalanceInput(v);
-                      setBalanceSaved(false);
-                    }}
-                    keyboardType="decimal-pad"
-                    onBlur={saveBalance}
-                    onSubmitEditing={saveBalance}
-                    returnKeyType="done"
-                    placeholderTextColor={colors.textMuted}
-                  />
-                  <Text style={[styles.inputSuffix, { color: colors.textSecondary }]}>USD</Text>
-                  {balanceSaved && (
-                    <Feather name="check-circle" size={16} color={colors.buy} style={{ marginLeft: 4 }} />
-                  )}
-                </View>
+              <Row icon="user" label="First name">
+                <TextInput
+                  style={[styles.input, { color: colors.text, backgroundColor: colors.surface, borderColor: colors.cardBorder, borderWidth: 1, borderRadius: 10, paddingHorizontal: 12 }]}
+                  value={displayNameInput}
+                  onChangeText={setDisplayNameInput}
+                  onBlur={saveDisplayName}
+                  onSubmitEditing={saveDisplayName}
+                  returnKeyType="done"
+                  maxLength={40}
+                  placeholder="Your name"
+                  placeholderTextColor={colors.textMuted}
+                />
               </Row>
-
-              {!settings.balanceSet && (
-                <Animated.View entering={FadeInDown.duration(300)} style={[styles.balanceTip, { backgroundColor: colors.surface, borderColor: colors.cardBorder }]}>
-                  <Feather name="info" size={13} color={colors.gold} />
-                  <Text style={[styles.balanceTipText, { color: colors.textSecondary }]}>
-                    Save your balance for accurate lot size calculations in analysis.
-                  </Text>
-                </Animated.View>
-              )}
-            </View>
-          </Animated.View>
-
-          {/* ── Risk Management ── */}
-          <Animated.View entering={FadeInDown.delay(140).duration(500)}>
-            <SectionHeader title="Risk Management" />
-            <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
-              <Text style={[styles.riskLabel, { color: colors.textSecondary }]}>Risk per trade: <Text style={[styles.riskValue, { color: colors.text }]}>{settings.riskPercent}%</Text></Text>
-              <View style={styles.riskOptions}>
-                {RISK_OPTIONS.map((r) => (
-                  <TouchableOpacity
-                    key={r}
-                    style={[
-                      styles.riskChip,
-                      settings.riskPercent === r && styles.riskChipActive,
-                      {
-                        backgroundColor: settings.riskPercent === r ? colors.primary : colors.surface,
-                        borderColor: settings.riskPercent === r ? colors.primary : colors.cardBorder,
-                      },
-                    ]}
-                    onPress={() => {
-                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                      updateSettings({ riskPercent: r });
-                      setCalcRisk(r.toString());
-                    }}
-                  >
-                    <Text
-                      style={[
-                        styles.riskChipText,
-                        settings.riskPercent === r && styles.riskChipTextActive,
-                        { color: settings.riskPercent === r ? colors.primaryForeground : colors.textSecondary },
-                      ]}
-                    >
-                      {r}%
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-              <View style={[styles.riskInfo, { backgroundColor: colors.surface, borderColor: colors.cardBorder }]}>
-                <Feather name="shield" size={13} color={colors.textMuted} />
-                <Text style={[styles.riskInfoText, { color: colors.textSecondary }]}>
-                  At {settings.riskPercent}% risk on a ${settings.accountBalance.toLocaleString()} account = $
-                  {(settings.accountBalance * settings.riskPercent / 100).toFixed(2)} per trade
-                </Text>
-              </View>
-            </View>
-          </Animated.View>
-
-          {/* ── Lot Size Calculator ── */}
-          <Animated.View entering={FadeInDown.delay(200).duration(500)}>
-            <SectionHeader title="Lot Size Calculator" />
-            <View style={[styles.card, { gap: 14, backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
-              <View style={styles.calcRow}>
-                <View style={styles.calcField}>
-                  <Text style={[styles.calcLabel, { color: colors.textSecondary }]}>Balance ($)</Text>
-                  <TextInput
-                    style={[styles.calcInput, { backgroundColor: colors.surface, borderColor: colors.cardBorder, color: colors.text }]}
-                    value={calcBalance}
-                    onChangeText={setCalcBalance}
-                    keyboardType="decimal-pad"
-                    placeholderTextColor={colors.textMuted}
-                    returnKeyType="done"
-                  />
+              <TouchableOpacity style={[styles.navigationRow, { marginTop: 12 }]} onPress={() => router.push('/saved-briefs')}>
+                <View style={styles.rowLeft}>
+                  <View style={[styles.rowIcon, { backgroundColor: colors.surface, borderColor: colors.cardBorder, borderWidth: 1 }]}>
+                    <Feather name="bookmark" size={16} color={colors.textMuted} />
+                  </View>
+                  <Text style={[styles.rowLabel, { color: colors.text }]}>Saved Briefs</Text>
                 </View>
-                <View style={styles.calcField}>
-                  <Text style={[styles.calcLabel, { color: colors.textSecondary }]}>Risk (%)</Text>
-                  <TextInput
-                    style={[styles.calcInput, { backgroundColor: colors.surface, borderColor: colors.cardBorder, color: colors.text }]}
-                    value={calcRisk}
-                    onChangeText={setCalcRisk}
-                    keyboardType="decimal-pad"
-                    placeholderTextColor={colors.textMuted}
-                    returnKeyType="done"
-                  />
-                </View>
-                <View style={styles.calcField}>
-                  <Text style={[styles.calcLabel, { color: colors.textSecondary }]}>SL (pips)</Text>
-                  <TextInput
-                    style={[styles.calcInput, { backgroundColor: colors.surface, borderColor: colors.cardBorder, color: colors.text }]}
-                    value={calcSl}
-                    onChangeText={setCalcSl}
-                    keyboardType="decimal-pad"
-                    placeholderTextColor={colors.textMuted}
-                    returnKeyType="done"
-                  />
-                </View>
-              </View>
-              <View style={[styles.calcResult, { backgroundColor: colors.surface, borderColor: colors.cardBorder }]}>
-                <Text style={[styles.calcResultLabel, { color: colors.textSecondary }]}>Lot Size</Text>
-                <Text style={[styles.calcResultValue, { color: colors.buy }]}>{calcLotSize}</Text>
-              </View>
-              <TouchableOpacity
-                style={styles.syncBtn}
-                onPress={() => {
-                  setCalcBalance(settings.accountBalance.toString());
-                  setCalcRisk(settings.riskPercent.toString());
-                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                }}
-              >
-                <Feather name="refresh-cw" size={13} color={colors.textMuted} />
-                <Text style={[styles.syncBtnText, { color: colors.textSecondary }]}>Sync from my account settings</Text>
+                <Feather name="chevron-right" size={18} color={colors.textMuted} />
               </TouchableOpacity>
-              <Text style={[styles.calcResultNote, { color: colors.buy }]}>{
-                isSmallAccount
-                  ? 'Small Account Mode Enabled — optimized for low balances.'
-                  : 'Forex estimate only. Quote-currency conversion and broker contract rules may change the result.'
-              }</Text>
-              {isVerySmallLot && (
-                <Text style={[styles.calcResultNote, { color: colors.buy }]}>
-                  Calculated lot size is very small; adjusted to minimum supported lot size.
-                </Text>
-              )}
-              <Text style={[styles.calcFormula, { color: colors.textMuted }]}>
-                Forex estimate only. Quote-currency conversion and broker contract rules may change the result.
-              </Text>
             </View>
           </Animated.View>
 
