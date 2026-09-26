@@ -1562,7 +1562,7 @@ async function generateStrategy(req, res) {
       headers: {
         'content-type': 'application/json',
         authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
-        'HTTP-Referer': process.env.OPENROUTER_SITE_URL || 'http://localhost:3000',
+        'HTTP-Referer': process.env.OPENROUTER_SITE_URL || 'https://fxsnap.vercel.app',
         'X-Title': process.env.OPENROUTER_APP_NAME || 'FXSnap',
       },
       body: JSON.stringify({
@@ -1624,7 +1624,7 @@ async function callVisionModel(messages, timeoutMs = 30000) {
     headers: {
       'content-type': 'application/json',
       authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
-      'HTTP-Referer': process.env.OPENROUTER_SITE_URL || 'http://localhost:3000',
+      'HTTP-Referer': process.env.OPENROUTER_SITE_URL || 'https://fxsnap.vercel.app',
       'X-Title': process.env.OPENROUTER_APP_NAME || 'FXSnap',
     },
     body: JSON.stringify({

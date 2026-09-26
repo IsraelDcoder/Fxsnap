@@ -1,41 +1,12 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-function normalizeBaseUrl(value: string): string {
-  return value.replace(/\/$/, '');
+export const API_BASE_URL = 'https://fxsnap.vercel.app';
+
+export function resolveApiBaseUrl(): string {
+  return API_BASE_URL;
 }
 
-function getExpoHostIp(): string | null {
-  try {
-    // Expo exposes the dev-server host in runtime; on a real device that is the
-    // local LAN IP of the machine running the backend, which is exactly what we want.
-    const constants = require('expo-constants');
-    const hostUri = constants?.expoConfig?.hostUri || constants?.manifest2?.extra?.expoGo?.hostUri || constants?.manifest?.debuggerHost || constants?.expoGo?.hostUri;
-    if (!hostUri || typeof hostUri !== 'string') return null;
-    const host = hostUri.split(':')[0];
-    if (!host || host === 'localhost' || host === '127.0.0.1') return null;
-    return host;
-  } catch {
-    return null;
-  }
-}
-
-export function resolveApiBaseUrl(value?: string | null): string {
-  const explicit = (value || process.env.EXPO_PUBLIC_API_URL || '').trim();
-  if (explicit) {
-    const placeholderPattern = /your-vercel-app-name\.vercel\.app|your-backend-url\.example\.com|replace_with\//i;
-    if (placeholderPattern.test(explicit)) {
-      return 'http://localhost:3000';
-    }
-    return normalizeBaseUrl(explicit);
-  }
-
-  const expoHostIp = getExpoHostIp();
-  if (expoHostIp) return `http://${expoHostIp}:3000`;
-
-  return 'http://localhost:3000';
-}
-
-const API_URL = resolveApiBaseUrl();
+const API_URL = API_BASE_URL;
 const DEVICE_ID_KEY = 'fxsnap:deviceId';
 const SESSION_TOKEN_KEY = 'fxsnap:sessionToken';
 const SESSION_TOKEN_VERSION_KEY = 'fxsnap:sessionTokenVersion';

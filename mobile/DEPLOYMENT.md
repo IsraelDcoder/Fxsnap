@@ -40,8 +40,9 @@ git push -u origin main
    - SUPABASE_URL (alternative durable store; use with SUPABASE_SERVICE_ROLE_KEY)
    - SUPABASE_SERVICE_ROLE_KEY (server-only; never expose this to the mobile app)
    - SUPABASE_KV_TABLE (optional, defaults to `fxsnap_kv`)
-   - EXPO_PUBLIC_API_URL (set to your Vercel deployment URL)
 4. Deploy.
+
+The mobile app targets `https://fxsnap.vercel.app` for all API requests. Deploy the backend at that URL before releasing a mobile build.
 
 ### Supabase storage alternative
 
