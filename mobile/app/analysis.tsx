@@ -30,6 +30,7 @@ import type { AnalysisResult } from '@/context/AppContext';
 import { PairSelectionModal } from '@/components/PairSelectionModal';
 import { useColors } from '@/hooks/useColors';
 import { analyzeChartImage, type ChartAnalysisResult } from '../services/chartDetection';
+import { hasUsedFreeAnalysis } from '@/services/apiAuth';
 import { trackEvent } from '@/services/telemetry';
 
 type Stage = 'pick' | 'preview' | 'analyzing';
@@ -277,7 +278,7 @@ function buildAnalysisResult(chart: ChartAnalysisResult, pair: string, imageUri?
 export default function AnalysisScreen() {
   const insets = useSafeAreaInsets();
   const colors = useColors();
-  const { setCurrentAnalysis } = useApp();
+  const { setCurrentAnalysis, isSubscribed, isLoading } = useApp();
   const [stage, setStage] = useState<Stage>('pick');
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [imageBase64, setImageBase64] = useState<string | null>(null);
@@ -288,12 +289,15 @@ export default function AnalysisScreen() {
 
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
   const botPad = Platform.OS === 'web' ? 34 : insets.bottom;
-  const { isSubscribed, isLoading } = useApp();
-
   useEffect(() => {
-    if (!isLoading && !isSubscribed) {
-      router.replace('/paywall');
-    }
+    if (isLoading || isSubscribed) return;
+    let active = true;
+    void hasUsedFreeAnalysis().then((used) => {
+      if (active && used) router.replace('/paywall');
+    }).catch((error: unknown) => {
+      if (active) setAnalysisError(error instanceof Error ? error.message : 'Unable to verify free analysis access.');
+    });
+    return () => { active = false; };
   }, [isLoading, isSubscribed]);
 
   const pickFromGallery = async () => {
@@ -347,6 +351,7 @@ export default function AnalysisScreen() {
   };
 
   const handleImageSelected = async () => {
+    if (isLoading) return;
     trackEvent('analysis_started');
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     if (!imageUri) return;
@@ -362,6 +367,7 @@ export default function AnalysisScreen() {
   };
 
   const handlePairSelected = async (pair: string) => {
+    if (isLoading) return;
     setSelectedPair(pair);
     setShowPairModal(false);
 
@@ -377,7 +383,12 @@ export default function AnalysisScreen() {
     }
 
     // Single-pass disciplined AI analysis (server enforces the validation layer).
-    const chart = await analyzeChartImage(imageBase64, imageMimeType, pair);
+    const chart = await analyzeChartImage(imageBase64, imageMimeType, pair, isSubscribed);
+
+    if (chart.status === 'free_analysis_used') {
+      router.replace('/paywall');
+      return;
+    }
 
     const elapsed = Date.now() - analysisStartedAt;
     const remainingMinimumTime = Math.max(0, 10000 - elapsed);

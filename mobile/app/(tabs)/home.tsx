@@ -267,7 +267,7 @@ function ActionButton({
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const colors = useColors();
-  const { isSubscribed, isLoading, savedStrategies } = useApp();
+  const { isLoading, savedStrategies } = useApp();
 
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
   const botPad = Platform.OS === 'web' ? 34 : insets.bottom;
@@ -309,7 +309,6 @@ export default function HomeScreen() {
           sublabel="Upload a chart to get signals"
           onPress={() => {
             if (isLoading) return;
-            if (!isSubscribed) return router.push('/paywall');
             router.push('/analysis');
           }}
           primary
@@ -320,7 +319,6 @@ export default function HomeScreen() {
           sublabel="Generate a personalised trading plan"
           onPress={() => {
             if (isLoading) return;
-            if (!isSubscribed) return router.push('/paywall');
             router.push('/strategy');
           }}
         />

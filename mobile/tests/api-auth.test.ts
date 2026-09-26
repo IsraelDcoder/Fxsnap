@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
-const { createAuth, verifyAuth } = require('../server/auth.js');
+const { createAuth, verifyAuth, verifyAuthIdentity } = require('../server/auth.js');
 const { resolveApiBaseUrl } = require('../services/apiAuth.ts');
 
 test('signed anonymous tokens round-trip and reject tampering', () => {
@@ -16,6 +16,15 @@ test('signed anonymous tokens round-trip and reject tampering', () => {
 test('expired tokens are rejected', () => {
   const token = createAuth('test-secret', 'device-1234567890', -1);
   assert.equal(verifyAuth('test-secret', token), null);
+});
+
+test('signed sessions retain a separate stable free-analysis identity', () => {
+  const token = createAuth('test-secret', 'legacy-device-123456', undefined, 'ios-vendor-1234567890');
+  assert.deepEqual(verifyAuthIdentity('test-secret', token), {
+    deviceId: 'legacy-device-123456',
+    freeAnalysisId: 'ios-vendor-1234567890',
+  });
+  assert.equal(verifyAuth('test-secret', token), 'legacy-device-123456');
 });
 
 test('placeholder API URLs fall back to the local backend', () => {

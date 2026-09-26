@@ -17,7 +17,7 @@ import { useApp } from '@/context/AppContext';
 export function useColors() {
   const scheme = useColorScheme();
   const { settings } = useApp();
-  const useDark = typeof settings.darkMode === 'boolean' ? settings.darkMode : scheme === 'dark';
+  const useDark = typeof settings?.darkMode === 'boolean' ? settings.darkMode : scheme === 'dark';
   const palette = useDark ? colors.dark : colors.light;
   return { ...palette, radius: colors.radius };
 }

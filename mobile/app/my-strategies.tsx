@@ -156,7 +156,7 @@ function StrategyCard({
 export default function MyStrategiesScreen() {
   const insets = useSafeAreaInsets();
   const colors = useColors();
-  const { savedStrategies, deleteStrategy, isSubscribed, isLoading } = useApp();
+  const { savedStrategies, deleteStrategy } = useApp();
 
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
   const botPad = Platform.OS === 'web' ? 34 : insets.bottom;
@@ -185,8 +185,6 @@ export default function MyStrategiesScreen() {
           <TouchableOpacity
             style={[styles.emptyBtn, { backgroundColor: colors.primary }]}
             onPress={() => {
-              if (isLoading) return;
-              if (!isSubscribed) return router.push('/paywall');
               router.push('/strategy');
             }}
           >

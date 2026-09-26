@@ -33,7 +33,7 @@ import { useColors } from '@/hooks/useColors';
 
 
 type Screen = 'hook' | 'value' | 'trust' | 'social' | 'paywall';
-const SCREENS: Screen[] = ['hook', 'value', 'trust', 'social', 'paywall'];
+const SCREENS: Screen[] = ['hook', 'value', 'trust', 'social'];
 const PROGRESS_SCREENS: Screen[] = ['hook', 'value', 'trust', 'social'];
 
 const OB_IMAGES: Record<string, any> = {
@@ -441,7 +441,7 @@ export default function OnboardingScreen() {
               <View key={i} style={[styles.pageDot, i === progressIndex && styles.pageDotActive, { backgroundColor: i === progressIndex ? colors.primary : colors.cardBorder }]} />
             ))}
           </View>
-          <TouchableOpacity style={[styles.ctaBtn, { backgroundColor: colors.primary }]} onPress={goNext} activeOpacity={0.9}>
+          <TouchableOpacity style={[styles.ctaBtn, { backgroundColor: colors.primary }]} onPress={handleClose} activeOpacity={0.9}>
             <Text style={[styles.ctaText, { color: colors.primaryForeground }]}>{pageCtaLabel}</Text>
           </TouchableOpacity>
         </View>

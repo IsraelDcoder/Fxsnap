@@ -1,6 +1,6 @@
 # FXSnap Privacy Policy
 
-_Last updated: 1 August 2026_
+_Last updated: 26 September 2026_
 
 FXSnap processes information needed to provide chart analysis and trading tools. This may include uploaded chart images, selected instruments, account-balance and risk settings, saved analyses, saved strategies, and technical diagnostics.
 
@@ -16,9 +16,13 @@ Market-data requests and chart-analysis requests are made through the FXSnap bac
 
 Saved analyses, strategies, settings, and backups may be stored locally on your device. Local storage can be lost if the app is removed or device data is cleared. Do not use local backup exports as a secure credential store.
 
+## Device identifier and free analysis
+
+On iOS and Android, FXSnap uses an app-scoped identifier to preserve the one-time free chart-analysis allowance if the app is reinstalled or its local data is cleared. On iOS, this identifier is stored in Keychain; on Android, FXSnap uses the platform's app-scoped device identifier. The identifier and whether that allowance has been used are sent to and stored by the FXSnap backend. This identifier is not an advertising identifier. Subscription purchases and paid entitlements continue to be managed through RevenueCat.
+
 ## Data deletion and contact
 
-To request deletion of data held by a deployed FXSnap service, contact the app operator through the support address published in the store listing. Local data can be removed by deleting the app data or using the in-app deletion control when available.
+To request deletion of data held by a deployed FXSnap service, contact the app operator through the support address published in the store listing. The free-analysis usage record is server-side and is not removed by deleting local app data; include it in a deletion request. Local data can be removed by deleting the app data or using the in-app deletion control when available.
 
 ## No financial advice
 

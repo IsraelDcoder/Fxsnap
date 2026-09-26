@@ -2,7 +2,7 @@ import { getApiHeaders, resolveApiBaseUrl } from '@/services/apiAuth';
 
 const API_URL = resolveApiBaseUrl();
 
-export type AnalysisStatus = 'success' | 'no_trade' | 'invalid_image' | 'ai_unavailable' | 'ai_invalid_response';
+export type AnalysisStatus = 'success' | 'no_trade' | 'invalid_image' | 'ai_unavailable' | 'ai_invalid_response' | 'free_analysis_used';
 
 export interface ChartAnalysisResult {
   status: AnalysisStatus;
@@ -104,16 +104,20 @@ function emptyAnalysis(status: AnalysisStatus, message: string): ChartAnalysisRe
 export async function analyzeChartImage(
   imageBase64: string,
   mimeType = 'image/jpeg',
-  pair?: string
+  pair?: string,
+  premiumAccess = false
 ): Promise<ChartAnalysisResult> {
   try {
     const response = await fetch(`${API_URL}/analyze-chart`, {
       method: 'POST',
       headers: await getApiHeaders(),
-      body: JSON.stringify({ imageBase64, mimeType, pair }),
+      body: JSON.stringify({ imageBase64, mimeType, pair, premiumAccess }),
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
+      if (response.status === 402 && payload.error === 'free_analysis_used') {
+        return emptyAnalysis('free_analysis_used', 'Your free chart analysis has been used.');
+      }
       return emptyAnalysis('ai_unavailable', payload.error || 'Chart AI is unavailable.');
     }
 

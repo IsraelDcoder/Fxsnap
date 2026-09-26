@@ -15,7 +15,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { z } = require('zod');
 const persistentStore = require('./persistentStore');
-const { createAuth, verifyAuth } = require('./auth');
+const { createAuth, verifyAuth, verifyAuthIdentity } = require('./auth');
 const marketService = require('./marketService');
 // Optional Twelve Data provider (server-side market data proxy)
 let marketProvider = null;
@@ -1514,6 +1514,12 @@ function requireAuth(req, res) {
   return deviceId;
 }
 
+function getFreeAnalysisId(req) {
+  const token = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+  const identity = verifyAuthIdentity(AUTH_SECRET, token);
+  return identity?.freeAnalysisId || null;
+}
+
 function readJsonBody(req) {
   return new Promise((resolve, reject) => {
     let raw = '';
@@ -1839,46 +1845,73 @@ async function analyzeChart(req, res) {
       return sendJson(res, 200, aiUnavailableResponse(input, 'Chart AI is not configured on the server. Set OPENROUTER_API_KEY.'));
     }
 
-    let raw = null;
-    let lastError = null;
+    const verifiedPremium = input.premiumAccess === true
+      ? await getRevenueCatPremiumStatus(deviceId)
+      : false;
+    const hasPremiumAccess = verifiedPremium === true || (verifiedPremium === null && input.premiumAccess === true);
+    const freeAnalysisId = getFreeAnalysisId(req) || deviceId;
+    const accessKey = `fxsnap:freeAnalysis:used:${freeAnalysisId}`;
+    const reservationKey = `fxsnap:freeAnalysis:pending:${freeAnalysisId}`;
+    let reservation = null;
+    if (!hasPremiumAccess) {
+      if (process.env.NODE_ENV === 'production' && !persistentStore.enabled) {
+        return sendJson(res, 503, { error: 'Free analysis access storage is not configured.' });
+      }
+      if (await persistentStore.getJson(accessKey)) {
+        return sendJson(res, 402, { error: 'free_analysis_used' });
+      }
+      reservation = crypto.randomBytes(16).toString('hex');
+      if (!(await persistentStore.setJsonIfAbsent(reservationKey, reservation, 300))) {
+        if (await persistentStore.getJson(accessKey)) return sendJson(res, 402, { error: 'free_analysis_used' });
+        return sendJson(res, 409, { error: 'analysis_in_progress' });
+      }
+    }
+
     try {
-      raw = await callOpenRouterTrader(imageBase64, mime, input.pair || 'unknown', 45000);
-    } catch (error) {
-      lastError = error;
-      console.error('[Chart AI] OpenRouter analysis failed.', error);
-    }
-
-    if (!raw) {
-      console.error('[Chart AI] Provider failed:', lastError);
-      const message = `Chart AI could not analyze the image. ${(lastError instanceof Error ? lastError.message : 'unknown provider error')}`;
-      return sendJson(res, 200, aiUnavailableResponse(input, message));
-    }
-
-    const canonical = canonicalizeRawAnalysis(raw);
-    if (!canonical) {
-      console.error('[Chart AI] Invalid raw AI payload:', raw);
-      return sendJson(res, 200, aiInvalidResponse(input, 'The analysis engine returned an invalid response. Please try again.'));
-    }
-
-    const parsed = TradeAnalysisSchema.safeParse(canonical);
-    if (!parsed.success) {
-      console.error('[Chart AI] Invalid AI shape:', parsed.error.flatten(), 'canonical:', canonical);
-      return sendJson(res, 200, aiInvalidResponse(input, 'The analysis engine returned an invalid response. Please try again.'));
-    }
-
-    const normalized = normalizeAnalysis(parsed.data);
-    if (!normalized) {
-      console.error('[Chart AI] Normalization failed:', parsed.data);
-      return sendJson(res, 200, aiInvalidResponse(input, 'The analysis engine returned an invalid response. Please try again.'));
-    }
-
-    const finalResult = applyMentorStrategy(normalized);
-    if (finalResult.status === 'success' && finalResult.trade_setup.type === 'none') {
-      finalResult.status = 'no_trade';
-    }
-
-    if (finalResult.status === 'success' && finalResult.trade_setup.type !== 'none') {
+      let raw = null;
+      let lastError = null;
       try {
+        raw = await callOpenRouterTrader(imageBase64, mime, input.pair || 'unknown', 45000);
+      } catch (error) {
+        lastError = error;
+        console.error('[Chart AI] OpenRouter analysis failed.', error);
+      }
+
+      if (!raw) {
+        console.error('[Chart AI] Provider failed:', lastError);
+        const message = `Chart AI could not analyze the image. ${(lastError instanceof Error ? lastError.message : 'unknown provider error')}`;
+        return sendJson(res, 200, aiUnavailableResponse(input, message));
+      }
+
+      const canonical = canonicalizeRawAnalysis(raw);
+      if (!canonical) {
+        console.error('[Chart AI] Invalid raw AI payload:', raw);
+        return sendJson(res, 200, aiInvalidResponse(input, 'The analysis engine returned an invalid response. Please try again.'));
+      }
+
+      const parsed = TradeAnalysisSchema.safeParse(canonical);
+      if (!parsed.success) {
+        console.error('[Chart AI] Invalid AI shape:', parsed.error.flatten(), 'canonical:', canonical);
+        return sendJson(res, 200, aiInvalidResponse(input, 'The analysis engine returned an invalid response. Please try again.'));
+      }
+
+      const normalized = normalizeAnalysis(parsed.data);
+      if (!normalized) {
+        console.error('[Chart AI] Normalization failed:', parsed.data);
+        return sendJson(res, 200, aiInvalidResponse(input, 'The analysis engine returned an invalid response. Please try again.'));
+      }
+
+      const finalResult = applyMentorStrategy(normalized);
+      if (finalResult.status === 'success' && finalResult.trade_setup.type === 'none') {
+        finalResult.status = 'no_trade';
+      }
+
+      if (!hasPremiumAccess && ['success', 'no_trade'].includes(finalResult.status)) {
+        await persistentStore.setJson(accessKey, { usedAt: new Date().toISOString() });
+      }
+
+      if (finalResult.status === 'success' && finalResult.trade_setup.type !== 'none') {
+        try {
         const generatedSignal = {
           deviceId,
           pair: finalResult.detectedPair || input.pair || '',
@@ -1897,15 +1930,33 @@ async function analyzeChart(req, res) {
         };
         const id = crypto.randomBytes(10).toString('hex');
         await persistentStore.setJson(`fxsnap:generatedSignal:${deviceId}:${id}`, generatedSignal, 60 * 60 * 24 * 365);
-      } catch (error) {
-        console.error('[Chart AI] Failed to persist generated signal:', error);
+        } catch (error) {
+          console.error('[Chart AI] Failed to persist generated signal:', error);
+        }
       }
-    }
 
-    return sendJson(res, 200, finalResult);
+      return sendJson(res, 200, finalResult);
+    } finally {
+      if (reservation) await persistentStore.deleteJsonIfValue(reservationKey, reservation);
+    }
   } catch (error) {
     console.error('[Chart AI] Error:', error);
     return sendJson(res, 200, aiUnavailableResponse(input, `Chart AI failed: ${(error instanceof Error ? error.message : 'unknown error')}`));
+  }
+}
+
+async function getAnalysisAccess(req, res) {
+  const deviceId = requireAuth(req, res); if (!deviceId) return;
+  try {
+    if (process.env.NODE_ENV === 'production' && !persistentStore.enabled) {
+      return sendJson(res, 503, { error: 'Free analysis access storage is not configured.' });
+    }
+    const freeAnalysisId = getFreeAnalysisId(req) || deviceId;
+    const used = Boolean(await persistentStore.getJson(`fxsnap:freeAnalysis:used:${freeAnalysisId}`));
+    return sendJson(res, 200, { used });
+  } catch (error) {
+    console.error('[Analysis access] Lookup failed:', error);
+    return sendJson(res, 503, { error: 'Unable to verify free analysis access.' });
   }
 }
 
@@ -1936,6 +1987,22 @@ async function getEntitlement(req, res) {
     const active = Boolean(entitlement && (!expiresAt || expiresAt > Date.now()));
     return sendJson(res, 200, { active, expiresAt: entitlement?.expires_date || null, store: entitlement?.store || null });
   } catch (error) { return sendJson(res, 504, { error: error.name === 'AbortError' ? 'RevenueCat lookup timed out.' : 'RevenueCat lookup failed.' }); }
+}
+
+async function getRevenueCatPremiumStatus(deviceId) {
+  const secret = process.env.REVENUECAT_SECRET_API_KEY;
+  const entitlementId = process.env.REVENUECAT_ENTITLEMENT_ID || 'premium';
+  if (!secret || secret.startsWith('replace_')) return null;
+  try {
+    const response = await fetchWithTimeout(`https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(deviceId)}`, { headers: { authorization: `Bearer ${secret}` } });
+    if (!response.ok) return null;
+    const payload = await response.json();
+    const entitlement = payload.subscriber?.entitlements?.[entitlementId];
+    const expiresAt = entitlement?.expires_date ? Date.parse(entitlement.expires_date) : null;
+    return Boolean(entitlement && (!expiresAt || expiresAt > Date.now()));
+  } catch {
+    return null;
+  }
 }
 
 async function recordSignal(req, res) {
@@ -1974,8 +2041,10 @@ function createRequestHandler() {
     if (pathname === '/api/session' && req.method === 'POST') {
       return readJsonBody(req).then((body) => {
         const deviceId = String(body.deviceId || '');
+        const freeAnalysisId = String(body.freeAnalysisId || deviceId);
         if (!/^[a-zA-Z0-9_-]{16,128}$/.test(deviceId)) return sendJson(res, 400, { error: 'Invalid device identity.' });
-        return sendJson(res, 200, { token: signToken(deviceId), expiresIn: 30 * 24 * 60 * 60 });
+        if (!/^[a-zA-Z0-9_-]{16,128}$/.test(freeAnalysisId)) return sendJson(res, 400, { error: 'Invalid free analysis identity.' });
+        return sendJson(res, 200, { token: createAuth(AUTH_SECRET, deviceId, undefined, freeAnalysisId), expiresIn: 30 * 24 * 60 * 60 });
       }).catch((error) => sendJson(res, 400, { error: error.message }));
     }
 
@@ -2144,6 +2213,7 @@ function createRequestHandler() {
       }
     }
     if ((pathname === '/api/chart-analysis' || pathname === '/analyze-chart') && req.method === 'POST') return analyzeChart(req, res);
+    if (pathname === '/api/analysis-access' && req.method === 'GET') return getAnalysisAccess(req, res);
     if (pathname === '/api/events' && req.method === 'POST') return receiveEvent(req, res);
     if (pathname === '/api/entitlement' && req.method === 'GET') return getEntitlement(req, res);
     if (pathname === '/api/signals' && req.method === 'POST') return recordSignal(req, res);

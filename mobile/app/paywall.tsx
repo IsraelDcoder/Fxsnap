@@ -25,7 +25,7 @@ export default function PaywallScreen() {
   // ScreenWrapper handles safe area and scrolling
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { purchasePlan, restorePurchases, billingAvailable } = useApp();
+  const { purchasePlan, restorePurchases, billingAvailable, isSubscribed, isLoading } = useApp();
   const supportEmail = process.env.EXPO_PUBLIC_SUPPORT_EMAIL || 'support@fxsnap.app';
   const [selectedPlan, setSelectedPlan] = useState('quarterly');
   const [plans, setPlans] = useState<PlanOffering[]>([]);
@@ -56,6 +56,12 @@ export default function PaywallScreen() {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!isLoading && isSubscribed) router.replace('/home');
+  }, [isLoading, isSubscribed]);
+
+  if (isLoading || isSubscribed) return null;
 
   const selectedPlanMeta = plans.find((plan) => plan.plan === selectedPlan) ?? plans[0];
   const selectedPlanLabel = selectedPlan === 'quarterly' ? '3-Month' : 'Weekly';

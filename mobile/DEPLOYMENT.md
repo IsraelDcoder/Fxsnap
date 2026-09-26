@@ -35,6 +35,7 @@ git push -u origin main
    - REVENUECAT_SECRET_API_KEY
    - REVENUECAT_ENTITLEMENT_ID
    - FXSNAP_AUTH_SECRET
+   - REDIS_URL (required for durable free-analysis entitlements across server restarts)
    - EXPO_PUBLIC_API_URL (set to your Vercel deployment URL)
 4. Deploy.
 
