@@ -36,9 +36,16 @@ git push -u origin main
    - REVENUECAT_SECRET_API_KEY
    - REVENUECAT_ENTITLEMENT_ID
    - FXSNAP_AUTH_SECRET
-   - REDIS_URL (required for durable free-analysis entitlements across server restarts)
+   - REDIS_URL (preferred durable store for free-analysis entitlements)
+   - SUPABASE_URL (alternative durable store; use with SUPABASE_SERVICE_ROLE_KEY)
+   - SUPABASE_SERVICE_ROLE_KEY (server-only; never expose this to the mobile app)
+   - SUPABASE_KV_TABLE (optional, defaults to `fxsnap_kv`)
    - EXPO_PUBLIC_API_URL (set to your Vercel deployment URL)
 4. Deploy.
+
+### Supabase storage alternative
+
+If Redis is not available, run `server/supabase-kv.sql` once in the Supabase SQL editor. Then add `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` to the Vercel Production environment. The backend uses Supabase for rate limits, free-analysis reservations, entitlements, signals, and event storage. Keep the service-role key server-side only.
 
 ```bash
 cd mobile
