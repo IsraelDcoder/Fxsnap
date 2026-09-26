@@ -5,6 +5,7 @@ const require = createRequire(import.meta.url);
 const { createAuth, verifyAuth, verifyAuthIdentity } = require('../server/auth.js');
 const { API_BASE_URL, resolveApiBaseUrl } = require('../services/apiAuth.ts');
 const { normalizeChartAnalysisError } = require('../services/chartDetection.ts');
+const { hasRevenueCatEntitlement } = require('../services/revenuecatEntitlements.ts');
 
 test('signed anonymous tokens round-trip and reject tampering', () => {
   const token = createAuth('test-secret', 'device-1234567890');
@@ -42,4 +43,10 @@ test('premium-required backend payloads are normalized into a paywall flow inste
     status: 'free_analysis_used',
     message: 'Your free chart analysis has already been used.',
   });
+});
+
+test('premium entitlement checks accept both backend and app entitlement identifiers', () => {
+  assert.equal(hasRevenueCatEntitlement({ premium: { identifier: 'premium' } }), true);
+  assert.equal(hasRevenueCatEntitlement({ Pro: { identifier: 'Pro' } }), true);
+  assert.equal(hasRevenueCatEntitlement({ starter: { identifier: 'starter' } }), false);
 });

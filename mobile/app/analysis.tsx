@@ -278,7 +278,7 @@ function buildAnalysisResult(chart: ChartAnalysisResult, pair: string, imageUri?
 export default function AnalysisScreen() {
   const insets = useSafeAreaInsets();
   const colors = useColors();
-  const { setCurrentAnalysis, isSubscribed, isLoading } = useApp();
+  const { setCurrentAnalysis, isSubscribed, isLoading, billingAvailable } = useApp();
   const [stage, setStage] = useState<Stage>('pick');
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [imageBase64, setImageBase64] = useState<string | null>(null);
@@ -394,56 +394,95 @@ export default function AnalysisScreen() {
     setAnalysisError(null);
     const analysisStartedAt = Date.now();
 
+    console.log('[ANALYSIS] User started analysis', {
+      pair,
+      isSubscribed,
+      billingAvailable,
+      imagePresent: Boolean(imageBase64),
+      mimeType: imageMimeType,
+      timestamp: new Date().toISOString(),
+    });
+
     if (!imageBase64) {
+      console.error('[ANALYSIS ERROR] stage=prepare error=Missing chart image payload');
       setAnalysisError('Chart image data is unavailable. Please upload it again.');
       setStage('preview');
       return;
     }
 
-    // Single-pass disciplined AI analysis (server enforces the validation layer).
-    const chart = await analyzeChartImage(imageBase64, imageMimeType, pair, isSubscribed);
+    try {
+      console.log('[ANALYSIS] Preparing request');
+      const chart = await analyzeChartImage(imageBase64, imageMimeType, pair, isSubscribed);
+      console.log('[ANALYSIS] API response received', {
+        status: chart.status,
+        pair,
+        message: chart.message,
+        elapsedMs: Date.now() - analysisStartedAt,
+        isSubscribed,
+      });
 
-    if (chart.status === 'free_analysis_used') {
-      router.replace('/paywall');
-      return;
-    }
+      if (chart.status === 'free_analysis_used') {
+        console.warn('[ANALYSIS] Premium entitlement missing or free-use limit reached', {
+          pair,
+          isSubscribed,
+          billingAvailable,
+        });
+        setAnalysisError(chart.message || 'Your free analysis has already been used.');
+        setStage('preview');
+        router.replace('/paywall');
+        return;
+      }
 
-    if (chart.status === 'free_access_unavailable') {
-      const message = chart.message || 'Free analysis is temporarily unavailable because durable entitlement storage is not configured. Your free analysis was not used.';
-      setAnalysisError(message);
-      Alert.alert('Analysis temporarily unavailable', message);
+      if (chart.status === 'free_access_unavailable') {
+        const message = chart.message || 'Free analysis is temporarily unavailable because durable entitlement storage is not configured. Your free analysis was not used.';
+        console.error('[ANALYSIS ERROR] stage=entitlement error=free_access_unavailable status=503 response=', { message });
+        setAnalysisError(message);
+        Alert.alert('Analysis temporarily unavailable', message);
+        setStage('preview');
+        return;
+      }
+
+      const elapsed = Date.now() - analysisStartedAt;
+      const remainingMinimumTime = Math.max(0, 10000 - elapsed);
+      console.log('[ANALYSIS] Waiting for minimum response window', { remainingMinimumTime, elapsedMs: elapsed });
+      await new Promise((resolve) => setTimeout(resolve, remainingMinimumTime));
+
+      if (chart.status === 'ai_unavailable') {
+        console.error('[ANALYSIS ERROR] stage=api error=ai_unavailable status=200 response=', chart);
+        trackEvent('analysis_ai_unavailable', { pair });
+        setAnalysisError(chart.message || 'Chart AI is unavailable right now. Please try again shortly.');
+        Alert.alert('AI Unavailable', chart.message || 'Chart AI is unavailable right now. Please try again shortly.');
+        setStage('preview');
+        return;
+      }
+
+      if (chart.status === 'invalid_image') {
+        console.error('[ANALYSIS ERROR] stage=validation error=invalid_image status=200 response=', chart);
+        trackEvent('analysis_invalid_image', { pair });
+        setAnalysisError(chart.analysis.notes || 'No valid trading chart detected. Please upload a clearer chart.');
+        Alert.alert('Invalid Image', chart.analysis.notes || 'No valid trading chart detected. Please upload a clearer chart.');
+        setStage('preview');
+        return;
+      }
+
+      const result = buildAnalysisResult(chart, pair, imageUri ?? undefined);
+      console.log('[ANALYSIS] Result received', {
+        pair,
+        status: chart.status,
+        confidence: result.confidence,
+        renderStage: 'analysis-result',
+      });
+      setCurrentAnalysis(result);
+      trackEvent('analysis_succeeded', { pair, status: chart.status, confidence: chart.confidence });
+
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      router.replace('/analysis-result');
+    } catch (error) {
+      console.error('[ANALYSIS ERROR] stage=request error=', error);
+      setAnalysisError(error instanceof Error ? error.message : 'Analysis failed. Please try again.');
+      Alert.alert('Analysis failed', 'We couldn\'t complete your analysis. Please try again.');
       setStage('preview');
-      return;
     }
-
-    const elapsed = Date.now() - analysisStartedAt;
-    const remainingMinimumTime = Math.max(0, 10000 - elapsed);
-    await new Promise((resolve) => setTimeout(resolve, remainingMinimumTime));
-
-    // Handle clean states.
-    if (chart.status === 'ai_unavailable') {
-      trackEvent('analysis_ai_unavailable', { pair });
-      setAnalysisError(chart.message || 'Chart AI is unavailable right now. Please try again shortly.');
-      Alert.alert('AI Unavailable', chart.message || 'Chart AI is unavailable right now. Please try again shortly.');
-      setStage('preview');
-      return;
-    }
-
-    if (chart.status === 'invalid_image') {
-      trackEvent('analysis_invalid_image', { pair });
-      setAnalysisError(chart.analysis.notes || 'No valid trading chart detected. Please upload a clearer chart.');
-      Alert.alert('Invalid Image', chart.analysis.notes || 'No valid trading chart detected. Please upload a clearer chart.');
-      setStage('preview');
-      return;
-    }
-
-    // success OR no_trade both land on the result screen with a disciplined state.
-    const result = buildAnalysisResult(chart, pair, imageUri ?? undefined);
-    setCurrentAnalysis(result);
-    trackEvent('analysis_succeeded', { pair, status: chart.status, confidence: chart.confidence });
-
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    router.replace('/analysis-result');
   };
 
 

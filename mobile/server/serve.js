@@ -1985,33 +1985,50 @@ async function receiveEvent(req, res) {
   } catch (error) { return sendJson(res, 400, { error: error.message }); }
 }
 
+function getRevenueCatEntitlementCandidates() {
+  const configured = process.env.REVENUECAT_ENTITLEMENT_ID || 'premium';
+  return Array.from(new Set([
+    configured,
+    'premium',
+    'Premium',
+    'Pro',
+    'pro',
+  ].filter(Boolean))).map((value) => value.trim());
+}
+
 async function getEntitlement(req, res) {
   const deviceId = requireAuth(req, res); if (!deviceId) return;
   const secret = process.env.REVENUECAT_SECRET_API_KEY;
-  const entitlementId = process.env.REVENUECAT_ENTITLEMENT_ID || 'premium';
+  const entitlementIds = getRevenueCatEntitlementCandidates();
   if (!secret || secret.startsWith('replace_')) return sendJson(res, 503, { error: 'RevenueCat server verification is not configured.' });
   try {
     const response = await fetchWithTimeout(`https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(deviceId)}`, { headers: { authorization: `Bearer ${secret}` } });
     const payload = await response.json();
     if (!response.ok) return sendJson(res, 502, { error: 'RevenueCat entitlement lookup failed.' });
-    const entitlement = payload.subscriber?.entitlements?.[entitlementId];
-    const expiresAt = entitlement?.expires_date ? Date.parse(entitlement.expires_date) : null;
-    const active = Boolean(entitlement && (!expiresAt || expiresAt > Date.now()));
-    return sendJson(res, 200, { active, expiresAt: entitlement?.expires_date || null, store: entitlement?.store || null });
+    const entitlements = payload.subscriber?.entitlements ?? {};
+    const matchingEntitlement = entitlementIds
+      .map((entitlementId) => entitlements[entitlementId])
+      .find(Boolean);
+    const expiresAt = matchingEntitlement?.expires_date ? Date.parse(matchingEntitlement.expires_date) : null;
+    const active = Boolean(matchingEntitlement && (!expiresAt || expiresAt > Date.now()));
+    return sendJson(res, 200, { active, expiresAt: matchingEntitlement?.expires_date || null, store: matchingEntitlement?.store || null, entitlementId: matchingEntitlement?.identifier || null });
   } catch (error) { return sendJson(res, 504, { error: error.name === 'AbortError' ? 'RevenueCat lookup timed out.' : 'RevenueCat lookup failed.' }); }
 }
 
 async function getRevenueCatPremiumStatus(deviceId) {
   const secret = process.env.REVENUECAT_SECRET_API_KEY;
-  const entitlementId = process.env.REVENUECAT_ENTITLEMENT_ID || 'premium';
+  const entitlementIds = getRevenueCatEntitlementCandidates();
   if (!secret || secret.startsWith('replace_')) return null;
   try {
     const response = await fetchWithTimeout(`https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(deviceId)}`, { headers: { authorization: `Bearer ${secret}` } });
     if (!response.ok) return null;
     const payload = await response.json();
-    const entitlement = payload.subscriber?.entitlements?.[entitlementId];
-    const expiresAt = entitlement?.expires_date ? Date.parse(entitlement.expires_date) : null;
-    return Boolean(entitlement && (!expiresAt || expiresAt > Date.now()));
+    const entitlements = payload.subscriber?.entitlements ?? {};
+    const matchingEntitlement = entitlementIds
+      .map((entitlementId) => entitlements[entitlementId])
+      .find(Boolean);
+    const expiresAt = matchingEntitlement?.expires_date ? Date.parse(matchingEntitlement.expires_date) : null;
+    return Boolean(matchingEntitlement && (!expiresAt || expiresAt > Date.now()));
   } catch {
     return null;
   }

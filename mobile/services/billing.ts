@@ -1,9 +1,11 @@
 import { Platform } from 'react-native';
 import Purchases, { LOG_LEVEL, type CustomerInfo, type PurchasesPackage } from 'react-native-purchases';
 import { getDeviceId } from '@/services/apiAuth';
+import { hasRevenueCatEntitlement, REVENUECAT_ENTITLEMENT_CANDIDATES } from '@/services/revenuecatEntitlements';
 
 export type BillingPlan = 'weekly' | 'quarterly';
 export const PREMIUM_ENTITLEMENT_ID = process.env.EXPO_PUBLIC_RC_ENTITLEMENT_ID || 'Pro';
+export const PREMIUM_ENTITLEMENT_IDS = REVENUECAT_ENTITLEMENT_CANDIDATES;
 
 const IOS_KEY = process.env.EXPO_PUBLIC_RC_IOS_KEY || '';
 const ANDROID_KEY = process.env.EXPO_PUBLIC_RC_ANDROID_KEY || '';
@@ -26,8 +28,12 @@ function configuredKey() {
   return '';
 }
 
+export function hasPremiumEntitlement(info: Partial<CustomerInfo> | null | undefined): boolean {
+  return hasRevenueCatEntitlement(info?.entitlements?.active ?? null);
+}
+
 function hasPremium(info: CustomerInfo) {
-  return Boolean(info.entitlements.active[PREMIUM_ENTITLEMENT_ID]);
+  return hasPremiumEntitlement(info);
 }
 
 export interface PlanOffering {
