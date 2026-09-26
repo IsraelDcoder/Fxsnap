@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { createAuth, verifyAuth, verifyAuthIdentity } = require('../server/auth.js');
 const { resolveApiBaseUrl } = require('../services/apiAuth.ts');
+const { normalizeChartAnalysisError } = require('../services/chartDetection.ts');
 
 test('signed anonymous tokens round-trip and reject tampering', () => {
   const token = createAuth('test-secret', 'device-1234567890');
@@ -38,4 +39,15 @@ test('explicit local and emulator URLs are preserved instead of being rewritten'
   assert.equal(resolveApiBaseUrl('http://127.0.0.1:3000'), 'http://127.0.0.1:3000');
   assert.equal(resolveApiBaseUrl('http://10.0.2.2:3000'), 'http://10.0.2.2:3000');
   assert.equal(resolveApiBaseUrl('http://192.168.1.25:3000'), 'http://192.168.1.25:3000');
+});
+
+test('premium-required backend payloads are normalized into a paywall flow instead of a raw error', () => {
+  assert.deepEqual(normalizeChartAnalysisError({ code: 'PREMIUM_REQUIRED', reason: 'FREE_ANALYSIS_USED' }), {
+    status: 'free_analysis_used',
+    message: 'Your free chart analysis has already been used.',
+  });
+  assert.deepEqual(normalizeChartAnalysisError({ error: 'free_analysis_used' }), {
+    status: 'free_analysis_used',
+    message: 'Your free chart analysis has already been used.',
+  });
 });

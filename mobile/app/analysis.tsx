@@ -289,6 +289,22 @@ export default function AnalysisScreen() {
 
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
   const botPad = Platform.OS === 'web' ? 34 : insets.bottom;
+
+  const checkAccessBeforeAnalysis = async (): Promise<boolean> => {
+    if (isLoading || isSubscribed) return true;
+    try {
+      const used = await hasUsedFreeAnalysis();
+      if (used) {
+        router.replace('/paywall');
+        return false;
+      }
+      return true;
+    } catch (error: unknown) {
+      setAnalysisError(error instanceof Error ? error.message : 'Unable to verify free analysis access.');
+      return false;
+    }
+  };
+
   useEffect(() => {
     if (isLoading || isSubscribed) return;
     let active = true;
@@ -352,6 +368,7 @@ export default function AnalysisScreen() {
 
   const handleImageSelected = async () => {
     if (isLoading) return;
+    if (!(await checkAccessBeforeAnalysis())) return;
     trackEvent('analysis_started');
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     if (!imageUri) return;
@@ -368,6 +385,7 @@ export default function AnalysisScreen() {
 
   const handlePairSelected = async (pair: string) => {
     if (isLoading) return;
+    if (!(await checkAccessBeforeAnalysis())) return;
     setSelectedPair(pair);
     setShowPairModal(false);
 

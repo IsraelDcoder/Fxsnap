@@ -4,6 +4,31 @@ const API_URL = resolveApiBaseUrl();
 
 export type AnalysisStatus = 'success' | 'no_trade' | 'invalid_image' | 'ai_unavailable' | 'ai_invalid_response' | 'free_analysis_used' | 'free_access_unavailable';
 
+export function normalizeChartAnalysisError(payload: any): { status: AnalysisStatus; message: string } {
+  const code = typeof payload?.code === 'string' ? payload.code : typeof payload?.error === 'string' ? payload.error : '';
+  const reason = typeof payload?.reason === 'string' ? payload.reason : '';
+  const combined = `${code} ${reason}`.toLowerCase();
+
+  if (code === 'PREMIUM_REQUIRED' || combined.includes('free_analysis_used') || payload?.error === 'free_analysis_used') {
+    return {
+      status: 'free_analysis_used',
+      message: 'Your free chart analysis has already been used.',
+    };
+  }
+
+  if (combined.includes('storage is not configured') || combined.includes('free analysis access storage is not configured')) {
+    return {
+      status: 'free_access_unavailable',
+      message: 'Free analysis is temporarily unavailable because durable entitlement storage is not configured. Your free analysis was not used.',
+    };
+  }
+
+  return {
+    status: 'ai_unavailable',
+    message: payload?.message || payload?.error || 'Chart AI is unavailable right now. Please try again shortly.',
+  };
+}
+
 export interface ChartAnalysisResult {
   status: AnalysisStatus;
   message?: string;
@@ -115,13 +140,11 @@ export async function analyzeChartImage(
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
-      if (response.status === 402 && payload.error === 'free_analysis_used') {
-        return emptyAnalysis('free_analysis_used', 'Your free chart analysis has been used.');
+      const normalized = normalizeChartAnalysisError(payload);
+      if (normalized.status === 'free_analysis_used' || normalized.status === 'free_access_unavailable') {
+        return emptyAnalysis(normalized.status, normalized.message);
       }
-      if (response.status === 503 && payload.error === 'Free analysis access storage is not configured.') {
-        return emptyAnalysis('free_access_unavailable', 'Free analysis is temporarily unavailable because the server has not configured durable entitlement storage. Your free analysis was not used.');
-      }
-      return emptyAnalysis('ai_unavailable', payload.error || 'Chart AI is unavailable.');
+      return emptyAnalysis('ai_unavailable', normalized.message);
     }
 
     const status: AnalysisStatus = ['success', 'no_trade', 'invalid_image', 'ai_unavailable', 'ai_invalid_response'].includes(payload.status)

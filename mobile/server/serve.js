@@ -1858,11 +1858,23 @@ async function analyzeChart(req, res) {
         return sendJson(res, 503, { error: 'Free analysis access storage is not configured.' });
       }
       if (await persistentStore.getJson(accessKey)) {
-        return sendJson(res, 402, { error: 'free_analysis_used' });
+        return sendJson(res, 402, {
+          code: 'PREMIUM_REQUIRED',
+          reason: 'FREE_ANALYSIS_USED',
+          error: 'free_analysis_used',
+          message: 'Your free chart analysis has already been used.',
+        });
       }
       reservation = crypto.randomBytes(16).toString('hex');
       if (!(await persistentStore.setJsonIfAbsent(reservationKey, reservation, 300))) {
-        if (await persistentStore.getJson(accessKey)) return sendJson(res, 402, { error: 'free_analysis_used' });
+        if (await persistentStore.getJson(accessKey)) {
+          return sendJson(res, 402, {
+            code: 'PREMIUM_REQUIRED',
+            reason: 'FREE_ANALYSIS_USED',
+            error: 'free_analysis_used',
+            message: 'Your free chart analysis has already been used.',
+          });
+        }
         return sendJson(res, 409, { error: 'analysis_in_progress' });
       }
     }
