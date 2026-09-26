@@ -12,7 +12,7 @@ import {
   Inter_700Bold,
   useFonts,
 } from '@expo-google-fonts/inter';
-import { Stack, router } from 'expo-router';
+import { Stack, usePathname } from 'expo-router';
 import { useApp } from '@/context/AppContext';
 import * as SplashScreen from 'expo-splash-screen';
 import * as Sentry from '@sentry/react-native';
@@ -29,21 +29,19 @@ if (hasValidSentryDsn) {
 }
 const queryClient = new QueryClient();
 
-function RootLayoutNav() {
+function RootLayoutNav({ fontsReady }: { fontsReady: boolean }) {
   const { onboardingComplete, isLoading } = useApp();
+  const pathname = usePathname();
 
   useEffect(() => {
-    if (!isLoading) {
-      if (!onboardingComplete) {
-        router.replace('/onboarding');
-      } else {
-        router.replace('/(tabs)/home');
-      }
+    if (fontsReady && !isLoading && pathname !== '/') {
+      void SplashScreen.hideAsync();
     }
-  }, [isLoading, onboardingComplete]);
+  }, [fontsReady, isLoading, pathname]);
 
   return (
     <Stack screenOptions={{ headerShown: false, animation: 'fade' }}>
+      <Stack.Screen name="index" options={{ headerShown: false }} />
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       <Stack.Screen name="onboarding" options={{ headerShown: false, animation: 'fade' }} />
       <Stack.Screen name="analysis" options={{ headerShown: false, animation: 'slide_from_bottom' }} />
@@ -70,12 +68,6 @@ export default function RootLayout() {
     Inter_700Bold,
   });
 
-  useEffect(() => {
-    if (fontsLoaded || fontError) {
-      SplashScreen.hideAsync();
-    }
-  }, [fontsLoaded, fontError]);
-
   if (!fontsLoaded && !fontError) return null;
 
   return (
@@ -85,7 +77,7 @@ export default function RootLayout() {
           <GestureHandlerRootView style={{ flex: 1 }}>
             <KeyboardProvider>
               <AppProvider>
-                <RootLayoutNav />
+                <RootLayoutNav fontsReady={fontsLoaded || Boolean(fontError)} />
               </AppProvider>
             </KeyboardProvider>
           </GestureHandlerRootView>
