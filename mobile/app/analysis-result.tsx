@@ -1,5 +1,6 @@
 import React, { useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Platform,
   ScrollView,
   StyleSheet,
@@ -22,23 +23,9 @@ import { Feather } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import * as Haptics from '@/services/haptics';
 import * as Clipboard from 'expo-clipboard';
-import { shareAsync } from 'expo-sharing';
+import * as Sharing from 'expo-sharing';
 import { captureRef } from 'react-native-view-shot';
-// Import expo-file-system dynamically to avoid static TS resolution errors in environments
-// where the native module is not available (editor/tooling). Fall back to a no-op shim.
-let FileSystem: any;
-try {
-  // @ts-ignore
-  FileSystem = require('expo-file-system');
-} catch (err) {
-  // Fallback shim used in web/editor environments to avoid crashes while still
-  // allowing development of the share flow. getInfoAsync returns a non-existing file.
-  // Real devices with Expo will have the real module available at runtime.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  FileSystem = {
-    getInfoAsync: async (_uri: string) => ({ exists: false, size: 0 }),
-  };
-}
+import * as FileSystem from 'expo-file-system/legacy';
 import { useApp } from '@/context/AppContext';
 import type { AnalysisResult } from '@/context/AppContext';
 import AnalysisShareCard from '../components/AnalysisShareCard';
@@ -134,6 +121,7 @@ export default function AnalysisResultScreen() {
   const [toastVisible, setToastVisible] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
   const [shareDisabled, setShareDisabled] = useState(false);
+  const [shareError, setShareError] = useState(false);
   const shareCardRef = useRef<View | null>(null);
   const shareReadyRef = React.useRef(false);
 
@@ -183,17 +171,17 @@ export default function AnalysisResultScreen() {
     if (!currentAnalysis) return;
 
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setShareError(false);
 
     if (Platform.OS === 'web' || !shareCardRef.current) {
       await handleCopy();
-      showToast('Analysis copied to clipboard for sharing');
+      showToast('Image sharing is unavailable on web. Analysis copied.');
       return;
     }
 
     try {
       setShareDisabled(true);
-      // Ensure the share card has time to layout and fonts to load
-      console.log('[AnalysisShare] Mounting share card and waiting for render');
+      console.log('[Share] Started');
       // Wait for the share card onReady signal (polled), timeout after 2s
       const waitForReady = async (timeout = 2000) => {
         const start = Date.now();
@@ -205,49 +193,33 @@ export default function AnalysisResultScreen() {
         return shareReadyRef.current;
       };
       const ready = await waitForReady(2000);
-      console.log('[AnalysisShare] share card ready flag:', ready);
+      console.log('[Share] Rendering card', { ready });
+      if (!ready) throw new Error('Share card did not finish layout.');
 
-      console.log('[AnalysisShare] Capturing share card via base64 fallback');
-      // Use base64 capture as it is more reliable across platforms and avoids tmpfile path issues
-      const base64 = await captureRef(shareCardRef.current, {
+      console.log('[Share] Capturing image');
+      const capturedUri = await captureRef(shareCardRef.current, {
         format: 'png',
-        quality: 0.95,
-        result: 'base64',
+        quality: 1,
+        result: 'tmpfile',
       });
-      console.log('[AnalysisShare] capture base64 length:', base64 ? base64.length : 0);
+      console.log('[Share] Image generated', capturedUri);
+      if (!capturedUri || typeof capturedUri !== 'string') throw new Error('Capture did not return a file URI.');
 
-      if (!base64) throw new Error('No base64 returned from captureRef');
-      const tmpUri = FileSystem.cacheDirectory + `fxsnap-share-${Date.now()}.png`;
-      await FileSystem.writeAsStringAsync(tmpUri, base64, { encoding: FileSystem.EncodingType.Base64 });
-      try {
-        const info = await FileSystem.getInfoAsync(tmpUri);
-        console.log('[AnalysisShare] written file info:', info);
-        if (!info.exists || !(info.size && info.size > 0)) throw new Error('Written tmp file missing');
-      } catch (fsErr) {
-        console.error('[AnalysisShare] File verification failed after write', fsErr);
-        throw fsErr;
-      }
+      const info = await FileSystem.getInfoAsync(capturedUri);
+      console.log('[Share] File exists', info);
+      if (!info.exists || !(info.size && info.size > 0)) throw new Error('Captured share file is missing or empty.');
 
-      let shareUri = tmpUri;
-      if (Platform.OS === 'android' && typeof tmpUri === 'string' && !tmpUri.startsWith('file://')) {
-        shareUri = `file://${tmpUri}`;
-      }
-      await shareAsync(shareUri, { mimeType: 'image/png' });
+      const shareUri = capturedUri.startsWith('file://') ? capturedUri : `file://${capturedUri}`;
+      if (!(await Sharing.isAvailableAsync())) throw new Error('Native sharing is unavailable.');
+      console.log('[Share] File URI', shareUri);
+      console.log('[Share] Opening native share sheet');
+      await Sharing.shareAsync(shareUri, { mimeType: 'image/png', dialogTitle: 'Share FXSnap analysis' });
       showToast('Share card ready to share');
-      try { await FileSystem.deleteAsync(tmpUri, { idempotent: true }); } catch (e) { /* ignore cleanup errors */ }
+      try { await FileSystem.deleteAsync(capturedUri, { idempotent: true }); } catch { /* cache cleanup is best effort */ }
     } catch (error) {
-      // Detailed logging for debugging
-      console.error('[AnalysisShare] Image generation failed', error);
-      try {
-        // verify ref and presence
-        console.error('[AnalysisShare] shareCardRef.current:', shareCardRef.current);
-      } catch (inner) {
-        console.error('[AnalysisShare] shareCardRef.inspect failed', inner);
-      }
-
-      // Fallback: copy to clipboard but inform user this is a fallback
-      await handleCopy();
-      showToast('Could not create share image. Analysis copied to clipboard as a fallback.');
+      console.error('[Share] Failed', error);
+      setShareError(true);
+      showToast("Couldn't create the share card. Try again.");
     } finally {
       setShareDisabled(false);
     }
@@ -551,9 +523,24 @@ export default function AnalysisResultScreen() {
             onPress={handleShare}
             disabled={shareDisabled}
           >
-            <Feather name="share-2" size={17} color="#FFFFFF" />
-            <Text style={styles.copyBtnText}>Share</Text>
+            {shareDisabled ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Feather name="share-2" size={17} color="#FFFFFF" />}
+            <Text style={styles.copyBtnText}>{shareDisabled ? 'Creating share card...' : 'Share'}</Text>
           </TouchableOpacity>
+          {shareError ? (
+            <View style={styles.shareErrorBox}>
+              <Text style={styles.shareErrorTitle}>Couldn't create the share card.</Text>
+              <View style={styles.shareErrorActions}>
+                <TouchableOpacity style={styles.shareRetryBtn} onPress={() => void handleShare}>
+                  <Feather name="refresh-cw" size={15} color="#000000" />
+                  <Text style={styles.shareRetryText}>Try again</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.shareCopyBtn} onPress={() => void handleCopy}>
+                  <Feather name="copy" size={15} color="#FFFFFF" />
+                  <Text style={styles.shareCopyText}>Copy analysis</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : null}
 
           <View style={styles.actionRow}>
             {!alreadySaved && (
@@ -583,7 +570,7 @@ export default function AnalysisResultScreen() {
         </Animated.View>
       ) : null}
 
-      {/* Share card is placed off-screen but visible to view-shot. We set opacity: 0 and position far off-screen to avoid capture of UI chrome. */}
+      {/* Keep the card mounted and fully rendered off-screen so view-shot captures opaque pixels. */}
       <View style={styles.hiddenShareContainer}>
         <AnalysisShareCard
           ref={shareCardRef}
@@ -714,11 +701,17 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
   actions: { gap: 10 },
+  shareErrorBox: { backgroundColor: '#241313', borderWidth: 1, borderColor: '#6E2B2B', borderRadius: 14, padding: 14, gap: 12 },
+  shareErrorTitle: { color: '#FFFFFF', fontSize: 12, fontFamily: 'Inter_600SemiBold' },
+  shareErrorActions: { flexDirection: 'row', gap: 9 },
+  shareRetryBtn: { minHeight: 38, flex: 1, borderRadius: 11, backgroundColor: '#00E676', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+  shareRetryText: { color: '#000000', fontSize: 11, fontFamily: 'Inter_600SemiBold' },
+  shareCopyBtn: { minHeight: 38, flex: 1, borderRadius: 11, backgroundColor: '#2A2A2A', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+  shareCopyText: { color: '#FFFFFF', fontSize: 11, fontFamily: 'Inter_600SemiBold' },
   hiddenShareContainer: {
     position: 'absolute',
-    top: -10000,
-    left: -10000,
-    opacity: 0,
+    top: 0,
+    left: -1200,
     width: 1080,
     height: 1400,
   },
