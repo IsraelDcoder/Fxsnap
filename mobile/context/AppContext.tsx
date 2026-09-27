@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { router } from 'expo-router';
 import { addBillingListener, billingIsConfigured, configureBilling, getPremiumStatus, purchasePlan, restorePurchases, type BillingPlan } from '@/services/billing';
 import { setHapticsEnabled } from '@/services/haptics';
 import { createDailyRiskActivity, getLocalRiskDateKey, normalizeDailyRiskActivity, type DailyRiskActivity, type OpenRiskPosition } from '@/services/risk';
@@ -143,6 +144,10 @@ interface AppContextValue {
   isLoading: boolean;
   completeOnboarding: () => void;
   billingAvailable: boolean;
+  pendingFeatureRoute: string | null;
+  checkFeatureAccess: (route: string) => boolean;
+  consumePendingFeatureRoute: () => string | null;
+  clearPendingFeatureRoute: () => void;
   purchasePlan: (plan: BillingPlan) => Promise<boolean>;
   restorePurchases: () => Promise<boolean>;
   updateSettings: (s: Partial<AppSettings>) => void;
@@ -277,6 +282,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [riskActivity, setRiskActivity] = useState<DailyRiskActivity>(() => createDailyRiskActivity(getLocalRiskDateKey()));
   const [currentAnalysis, setCurrentAnalysis] = useState<AnalysisResult | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [pendingFeatureRoute, setPendingFeatureRoute] = useState<string | null>(null);
 
   useEffect(() => {
     const load = async () => {
@@ -359,6 +365,28 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const active = await restorePurchases();
     setIsSubscribed(active);
     return active;
+  };
+
+  const checkFeatureAccess = (route: string): boolean => {
+    if (isSubscribed) {
+      console.log('[PREMIUM GATE] Access granted', { route, isSubscribed });
+      return true;
+    }
+
+    console.log('[PREMIUM GATE] Access blocked; sending to paywall', { route, isSubscribed });
+    setPendingFeatureRoute(route);
+    router.replace('/paywall');
+    return false;
+  };
+
+  const consumePendingFeatureRoute = () => {
+    const queuedRoute = pendingFeatureRoute;
+    setPendingFeatureRoute(null);
+    return queuedRoute;
+  };
+
+  const clearPendingFeatureRoute = () => {
+    setPendingFeatureRoute(null);
   };
 
   const updateSettings = async (partial: Partial<AppSettings>) => {
@@ -513,6 +541,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         isLoading,
         completeOnboarding,
         billingAvailable,
+        pendingFeatureRoute,
+        checkFeatureAccess,
+        consumePendingFeatureRoute,
+        clearPendingFeatureRoute,
         purchasePlan: buyPlan,
         restorePurchases: restore,
         updateSettings,

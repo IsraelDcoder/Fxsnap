@@ -6,6 +6,7 @@ const { createAuth, verifyAuth, verifyAuthIdentity } = require('../server/auth.j
 const { API_BASE_URL, resolveApiBaseUrl } = require('../services/apiAuth.ts');
 const { normalizeChartAnalysisError } = require('../services/chartDetection.ts');
 const { hasRevenueCatEntitlement } = require('../services/revenuecatEntitlements.ts');
+const { isPremiumFeatureRoute, shouldGuardFeatureRoute } = require('../services/featureAccess.ts');
 
 test('signed anonymous tokens round-trip and reject tampering', () => {
   const token = createAuth('test-secret', 'device-1234567890');
@@ -49,4 +50,15 @@ test('premium entitlement checks accept both backend and app entitlement identif
   assert.equal(hasRevenueCatEntitlement({ premium: { identifier: 'premium' } }), true);
   assert.equal(hasRevenueCatEntitlement({ Pro: { identifier: 'Pro' } }), true);
   assert.equal(hasRevenueCatEntitlement({ starter: { identifier: 'starter' } }), false);
+});
+
+test('premium routes are centrally recognized and must gate before navigation', () => {
+  assert.equal(isPremiumFeatureRoute('/analysis'), true);
+  assert.equal(isPremiumFeatureRoute('/strategy'), true);
+  assert.equal(isPremiumFeatureRoute('/risk-management'), true);
+  assert.equal(isPremiumFeatureRoute('/lot-size-calculator'), true);
+  assert.equal(isPremiumFeatureRoute('/daily-brief'), false);
+  assert.equal(shouldGuardFeatureRoute('/analysis', false), true);
+  assert.equal(shouldGuardFeatureRoute('/analysis', true), false);
+  assert.equal(shouldGuardFeatureRoute('/daily-brief', false), false);
 });

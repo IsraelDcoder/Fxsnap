@@ -23,6 +23,7 @@ import * as Haptics from '@/services/haptics';
 import { useApp } from '@/context/AppContext';
 import type { SavedStrategy } from '@/context/AppContext';
 import { useColors } from '@/hooks/useColors';
+import { shouldGuardFeatureRoute } from '@/services/featureAccess';
 
 function formatDate(iso: string) {
   const d = new Date(iso);
@@ -156,7 +157,7 @@ function StrategyCard({
 export default function MyStrategiesScreen() {
   const insets = useSafeAreaInsets();
   const colors = useColors();
-  const { savedStrategies, deleteStrategy } = useApp();
+  const { savedStrategies, deleteStrategy, isSubscribed, checkFeatureAccess } = useApp();
 
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
   const botPad = Platform.OS === 'web' ? 34 : insets.bottom;
@@ -185,6 +186,10 @@ export default function MyStrategiesScreen() {
           <TouchableOpacity
             style={[styles.emptyBtn, { backgroundColor: colors.primary }]}
             onPress={() => {
+              if (shouldGuardFeatureRoute('/strategy', isSubscribed)) {
+                checkFeatureAccess('/strategy');
+                return;
+              }
               router.push('/strategy');
             }}
           >

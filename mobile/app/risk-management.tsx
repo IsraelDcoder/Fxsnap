@@ -17,6 +17,7 @@ import { router } from 'expo-router';
 import * as Haptics from '@/services/haptics';
 import { useApp } from '@/context/AppContext';
 import { useColors } from '@/hooks/useColors';
+import { shouldGuardFeatureRoute } from '@/services/featureAccess';
 import {
   calculateTradeRisk,
   getLocalRiskDateKey,
@@ -46,6 +47,8 @@ export default function RiskManagementScreen() {
     riskActivity,
     recordOpenRiskPosition,
     closeRiskPosition,
+    isSubscribed,
+    checkFeatureAccess,
   } = useApp();
 
   const [profileBalance, setProfileBalance] = useState(String(settings.accountBalance));
@@ -279,7 +282,13 @@ export default function RiskManagementScreen() {
             <Text style={[styles.checkTradeText, { color: colors.primaryForeground }]}>Check New Trade</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity onPress={() => router.push('/lot-size-calculator')} style={[styles.linkButton, { borderColor: colors.cardBorder }]}>
+          <TouchableOpacity onPress={() => {
+            if (shouldGuardFeatureRoute('/lot-size-calculator', isSubscribed)) {
+              checkFeatureAccess('/lot-size-calculator');
+              return;
+            }
+            router.push('/lot-size-calculator');
+          }} style={[styles.linkButton, { borderColor: colors.cardBorder }]}>
             <Feather name="grid" size={15} color={colors.textSecondary} />
             <Text style={[styles.linkButtonText, { color: colors.textSecondary }]}>Open Lot Size Calculator</Text>
             <Feather name="arrow-right" size={14} color={colors.textMuted} />

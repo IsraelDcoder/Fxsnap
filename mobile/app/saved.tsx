@@ -20,6 +20,7 @@ import * as Haptics from '@/services/haptics';
 import { useApp } from '@/context/AppContext';
 import type { AnalysisResult } from '@/context/AppContext';
 import { useColors } from '@/hooks/useColors';
+import { shouldGuardFeatureRoute } from '@/services/featureAccess';
 
 type Filter = 'all' | 'BUY' | 'SELL';
 
@@ -193,7 +194,7 @@ function AnalysisCard({
 export default function SavedScreen() {
   const insets = useSafeAreaInsets();
   const colors = useColors();
-  const { savedAnalyses, deleteAnalysis, setCurrentAnalysis } = useApp();
+  const { savedAnalyses, deleteAnalysis, setCurrentAnalysis, isSubscribed, checkFeatureAccess } = useApp();
   const [filter, setFilter] = useState<Filter>('all');
 
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
@@ -252,7 +253,13 @@ export default function SavedScreen() {
           </Text>
           <TouchableOpacity
             style={[styles.runBtn, { backgroundColor: colors.primary }]}
-            onPress={() => router.push('/analysis')}
+            onPress={() => {
+              if (shouldGuardFeatureRoute('/analysis', isSubscribed)) {
+                checkFeatureAccess('/analysis');
+                return;
+              }
+              router.push('/analysis');
+            }}
           >
             <Feather name="activity" size={16} color={colors.primaryForeground} />
             <Text style={[styles.runBtnText, { color: colors.primaryForeground }]}>Run Analysis</Text>

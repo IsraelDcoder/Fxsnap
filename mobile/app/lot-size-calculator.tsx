@@ -6,6 +6,7 @@ import { router } from 'expo-router';
 import * as Haptics from '@/services/haptics';
 import { useApp } from '@/context/AppContext';
 import { useColors } from '@/hooks/useColors';
+import { shouldGuardFeatureRoute } from '@/services/featureAccess';
 import { calculateLotSize } from '@/services/risk';
 
 const RISK_OPTIONS = [0.5, 1, 1.5, 2, 3, 5];
@@ -13,7 +14,7 @@ const RISK_OPTIONS = [0.5, 1, 1.5, 2, 3, 5];
 export default function LotSizeCalculatorScreen() {
   const insets = useSafeAreaInsets();
   const colors = useColors();
-  const { settings, updateSettings } = useApp();
+  const { settings, updateSettings, isSubscribed, checkFeatureAccess } = useApp();
   const [balance, setBalance] = useState(String(settings.accountBalance));
   const [risk, setRisk] = useState(String(settings.riskPercent));
   const [stopLoss, setStopLoss] = useState('20');
@@ -28,6 +29,10 @@ export default function LotSizeCalculatorScreen() {
   const lotSize = valid ? rawLot.toFixed(3) : '—';
 
   const saveInputs = async () => {
+    if (shouldGuardFeatureRoute('/lot-size-calculator', isSubscribed)) {
+      checkFeatureAccess('/lot-size-calculator');
+      return;
+    }
     if (!valid) {
       Alert.alert('Check your inputs', 'Enter a positive account size, risk percentage up to 10%, and stop-loss distance.');
       return;

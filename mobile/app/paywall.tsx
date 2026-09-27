@@ -25,7 +25,7 @@ export default function PaywallScreen() {
   // ScreenWrapper handles safe area and scrolling
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { purchasePlan, restorePurchases, billingAvailable, isSubscribed, isLoading } = useApp();
+  const { purchasePlan, restorePurchases, billingAvailable, isSubscribed, isLoading, consumePendingFeatureRoute, clearPendingFeatureRoute } = useApp();
   const supportEmail = process.env.EXPO_PUBLIC_SUPPORT_EMAIL || 'support@fxsnap.app';
   const [selectedPlan, setSelectedPlan] = useState('quarterly');
   const [plans, setPlans] = useState<PlanOffering[]>([]);
@@ -71,9 +71,12 @@ export default function PaywallScreen() {
     try {
       const purchased = await purchasePlan(selectedPlan as 'weekly' | 'quarterly');
       if (purchased) {
-        router.back();
+        const nextRoute = (consumePendingFeatureRoute() || '/home') as Parameters<typeof router.replace>[0];
+        console.log('[PREMIUM GATE] Subscription successful; resuming route', { nextRoute });
+        router.replace(nextRoute);
         return;
       }
+      clearPendingFeatureRoute();
       Alert.alert('Subscription failed', 'Unable to confirm your premium subscription. Please try again.');
     } catch (error) {
       Alert.alert(
@@ -92,7 +95,10 @@ export default function PaywallScreen() {
   return (
     <ScreenWrapper style={[styles.container, { backgroundColor: colors.background }]} contentContainerStyle={[styles.scrollContent, { paddingBottom: botPad + 24 }]}>
       <View style={styles.header}>
-        <TouchableOpacity style={[styles.closeBtn, { backgroundColor: colors.card }]} onPress={() => router.back()}>
+        <TouchableOpacity style={[styles.closeBtn, { backgroundColor: colors.card }]} onPress={() => {
+          clearPendingFeatureRoute();
+          router.back();
+        }}>
           <Feather name="x" size={20} color={colors.textSecondary} />
         </TouchableOpacity>
       </View>
