@@ -52,6 +52,17 @@ test('premium entitlement checks accept both backend and app entitlement identif
   assert.equal(hasRevenueCatEntitlement({ starter: { identifier: 'starter' } }), false);
 });
 
+test('exhausted API quota is shown as a temporary analysis outage instead of a raw provider error', () => {
+  assert.deepEqual(normalizeChartAnalysisError({ error: 'insufficient_quota' }), {
+    status: 'ai_unavailable',
+    message: 'Analysis is not available at the moment. Please try again later.',
+  });
+  assert.deepEqual(normalizeChartAnalysisError({ error: { message: 'You exceeded your current quota, please check your plan and billing details.' } }), {
+    status: 'ai_unavailable',
+    message: 'Analysis is not available at the moment. Please try again later.',
+  });
+});
+
 test('premium routes are centrally recognized and must gate before navigation', () => {
   assert.equal(isPremiumFeatureRoute('/analysis'), true);
   assert.equal(isPremiumFeatureRoute('/strategy'), true);

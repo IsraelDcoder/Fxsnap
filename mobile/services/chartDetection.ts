@@ -7,7 +7,7 @@ export type AnalysisStatus = 'success' | 'no_trade' | 'invalid_image' | 'ai_unav
 export function normalizeChartAnalysisError(payload: any): { status: AnalysisStatus; message: string } {
   const code = typeof payload?.code === 'string' ? payload.code : typeof payload?.error === 'string' ? payload.error : '';
   const reason = typeof payload?.reason === 'string' ? payload.reason : '';
-  const combined = `${code} ${reason}`.toLowerCase();
+  const combined = `${code} ${reason} ${payload?.message || ''} ${typeof payload?.error === 'object' && payload?.error ? payload.error.message || '' : ''}`.toLowerCase();
 
   if (code === 'PREMIUM_REQUIRED' || combined.includes('free_analysis_used') || payload?.error === 'free_analysis_used') {
     return {
@@ -20,6 +20,21 @@ export function normalizeChartAnalysisError(payload: any): { status: AnalysisSta
     return {
       status: 'free_access_unavailable',
       message: 'Free analysis is temporarily unavailable because durable entitlement storage is not configured. Your free analysis was not used.',
+    };
+  }
+
+  const quotaLike = combined.includes('quota')
+    || combined.includes('exceeded your current quota')
+    || combined.includes('insufficient_quota')
+    || combined.includes('rate limit')
+    || combined.includes('billing details')
+    || combined.includes('credit')
+    || combined.includes('limit reached');
+
+  if (quotaLike) {
+    return {
+      status: 'ai_unavailable',
+      message: 'Analysis is not available at the moment. Please try again later.',
     };
   }
 

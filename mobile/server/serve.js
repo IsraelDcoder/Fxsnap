@@ -1764,7 +1764,10 @@ async function callOpenRouterTrader(imageBase64, mimeType, pair, timeoutMs = 450
 }
 
 function aiUnavailableResponse(input, message) {
-  const detail = message || 'Chart AI is unavailable right now. Please try again shortly.';
+  const rawDetail = message || 'Chart AI is unavailable right now. Please try again shortly.';
+  const detail = /quota|credit|billing|limit reached|rate limit|exceeded your current quota|insufficient_quota/i.test(rawDetail)
+    ? 'Analysis is not available at the moment. Please try again later.'
+    : rawDetail;
   return {
     status: 'ai_unavailable',
     availability: 'ai_unavailable',

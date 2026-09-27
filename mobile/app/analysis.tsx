@@ -450,8 +450,9 @@ export default function AnalysisScreen() {
       if (chart.status === 'ai_unavailable') {
         console.error('[ANALYSIS ERROR] stage=api error=ai_unavailable status=200 response=', chart);
         trackEvent('analysis_ai_unavailable', { pair });
-        setAnalysisError(chart.message || 'Chart AI is unavailable right now. Please try again shortly.');
-        Alert.alert('AI Unavailable', chart.message || 'Chart AI is unavailable right now. Please try again shortly.');
+        const unavailableMessage = chart.message || 'Analysis is not available at the moment. Please try again later.';
+        setAnalysisError(unavailableMessage);
+        Alert.alert('Analysis unavailable', unavailableMessage);
         setStage('preview');
         return;
       }
