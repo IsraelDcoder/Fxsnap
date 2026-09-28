@@ -6,7 +6,7 @@ const { createAuth, verifyAuth, verifyAuthIdentity } = require('../server/auth.j
 const { API_BASE_URL, resolveApiBaseUrl } = require('../services/apiAuth.ts');
 const { normalizeChartAnalysisError } = require('../services/chartDetection.ts');
 const { hasRevenueCatEntitlement } = require('../services/revenuecatEntitlements.ts');
-const { isPremiumFeatureRoute, shouldGuardFeatureRoute } = require('../services/featureAccess.ts');
+const { isPremiumFeatureRoute, shouldAllowAnalysisAccess, shouldGuardFeatureRoute, shouldShowPaywall } = require('../services/featureAccess.ts');
 
 test('signed anonymous tokens round-trip and reject tampering', () => {
   const token = createAuth('test-secret', 'device-1234567890');
@@ -69,7 +69,17 @@ test('premium routes are centrally recognized and must gate before navigation', 
   assert.equal(isPremiumFeatureRoute('/risk-management'), true);
   assert.equal(isPremiumFeatureRoute('/lot-size-calculator'), true);
   assert.equal(isPremiumFeatureRoute('/daily-brief'), false);
-  assert.equal(shouldGuardFeatureRoute('/analysis', false), true);
-  assert.equal(shouldGuardFeatureRoute('/analysis', true), false);
+  assert.equal(shouldGuardFeatureRoute('/analysis', false, false), false);
+  assert.equal(shouldGuardFeatureRoute('/analysis', false, true), true);
+  assert.equal(shouldGuardFeatureRoute('/analysis', true, true), false);
   assert.equal(shouldGuardFeatureRoute('/daily-brief', false), false);
+});
+
+test('free-analysis access follows the required hierarchy: subscribed, first free analysis, then paywall', () => {
+  assert.equal(shouldAllowAnalysisAccess({ isSubscribed: true, hasUsedFreeAnalysis: true }), true);
+  assert.equal(shouldAllowAnalysisAccess({ isSubscribed: false, hasUsedFreeAnalysis: false }), true);
+  assert.equal(shouldAllowAnalysisAccess({ isSubscribed: false, hasUsedFreeAnalysis: true }), false);
+  assert.equal(shouldShowPaywall({ isSubscribed: false, hasUsedFreeAnalysis: true }), true);
+  assert.equal(shouldShowPaywall({ isSubscribed: false, hasUsedFreeAnalysis: false }), false);
+  assert.equal(shouldShowPaywall({ isSubscribed: true, hasUsedFreeAnalysis: true }), false);
 });

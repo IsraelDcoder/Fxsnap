@@ -368,7 +368,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   };
 
   const checkFeatureAccess = (route: string): boolean => {
-    if (isSubscribed) {
+    if (route === '/analysis' || isSubscribed) {
       console.log('[PREMIUM GATE] Access granted', { route, isSubscribed });
       return true;
     }

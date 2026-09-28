@@ -18,7 +18,7 @@ import { useApp } from '@/context/AppContext';
 import { useColors } from '@/hooks/useColors';
 import { getTradingSessionState, SESSION_DEFINITIONS } from '@/services/tradingSessions';
 import { getDailyBriefState, type DailyBriefItem, type DailyBriefState } from '@/services/dailyBrief';
-import { getDeviceId } from '@/services/apiAuth';
+import { getDeviceId, hasUsedFreeAnalysis } from '@/services/apiAuth';
 import { shouldGuardFeatureRoute } from '@/services/featureAccess';
 function greetingForHour(hour: number) {
   if (hour < 12) return 'Good morning,';
@@ -64,12 +64,14 @@ export default function HomeDashboard() {
     return () => clearTimeout(timer);
   }, [briefSaveMessage]);
 
-  const navigate = (path: '/analysis' | '/strategy' | '/settings' | '/daily-brief' | '/economic-calendar' | '/lot-size-calculator' | '/risk-management' | '/saved' | '/my-strategies', premiumOnly = false) => {
+  const navigate = async (path: '/analysis' | '/strategy' | '/settings' | '/daily-brief' | '/economic-calendar' | '/lot-size-calculator' | '/risk-management' | '/saved' | '/my-strategies', premiumOnly = false) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    if (premiumOnly && shouldGuardFeatureRoute(path, isSubscribed)) {
+
+    if (premiumOnly && shouldGuardFeatureRoute(path, isSubscribed, path === '/analysis' ? await hasUsedFreeAnalysis().catch(() => false) : false)) {
       checkFeatureAccess(path);
       return;
     }
+
     router.push(path);
   };
 

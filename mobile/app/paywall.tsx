@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Alert, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, BackHandler, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, {
   FadeInDown,
@@ -27,6 +27,15 @@ export default function PaywallScreen() {
   const insets = useSafeAreaInsets();
   const { purchasePlan, restorePurchases, billingAvailable, isSubscribed, isLoading, consumePendingFeatureRoute, clearPendingFeatureRoute } = useApp();
   const supportEmail = process.env.EXPO_PUBLIC_SUPPORT_EMAIL || 'support@fxsnap.app';
+
+  const dismissPaywall = () => {
+    clearPendingFeatureRoute();
+    if (router.canGoBack()) {
+      router.back();
+      return;
+    }
+    router.replace('/home');
+  };
   const [selectedPlan, setSelectedPlan] = useState('quarterly');
   const [plans, setPlans] = useState<PlanOffering[]>([]);
   const [loading, setLoading] = useState(false);
@@ -60,6 +69,16 @@ export default function PaywallScreen() {
   useEffect(() => {
     if (!isLoading && isSubscribed) router.replace('/home');
   }, [isLoading, isSubscribed]);
+
+  useEffect(() => {
+    const onBack = () => {
+      dismissPaywall();
+      return true;
+    };
+
+    const subscription = BackHandler.addEventListener('hardwareBackPress', onBack);
+    return () => subscription.remove();
+  }, []);
 
   if (isLoading || isSubscribed) return null;
 
@@ -95,10 +114,7 @@ export default function PaywallScreen() {
   return (
     <ScreenWrapper style={[styles.container, { backgroundColor: colors.background }]} contentContainerStyle={[styles.scrollContent, { paddingBottom: botPad + 24 }]}>
       <View style={styles.header}>
-        <TouchableOpacity style={[styles.closeBtn, { backgroundColor: colors.card }]} onPress={() => {
-          clearPendingFeatureRoute();
-          router.back();
-        }}>
+        <TouchableOpacity style={[styles.closeBtn, { backgroundColor: colors.card }]} onPress={dismissPaywall}>
           <Feather name="x" size={20} color={colors.textSecondary} />
         </TouchableOpacity>
       </View>
@@ -189,11 +205,14 @@ export default function PaywallScreen() {
               {loading ? 'Processing...' : billingAvailable ? `Start ${selectedPlanLabel} Plan` : 'Billing unavailable'}
             </Text>
           </TouchableOpacity>
+          <TouchableOpacity style={styles.cancelButton} onPress={dismissPaywall}>
+            <Text style={[styles.cancelText, { color: colors.textSecondary }]}>Cancel</Text>
+          </TouchableOpacity>
           <TouchableOpacity onPress={async () => {
             setLoading(true);
             try {
               const restored = await restorePurchases();
-              if (restored) router.back();
+              if (restored) dismissPaywall();
               else Alert.alert('No active subscription', 'No active FXSnap Premium entitlement was found.');
             } catch (error) {
               Alert.alert('Restore failed', error instanceof Error ? error.message : 'Unable to restore purchases.');
@@ -362,6 +381,21 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontFamily: 'Inter_700Bold',
     color: '#000',
+  },
+  cancelButton: {
+    width: '100%',
+    minHeight: 44,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#2A2A2A',
+    backgroundColor: '#121212',
+  },
+  cancelText: {
+    fontSize: 14,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#8E8E93',
   },
   restoreText: {
     fontSize: 14,
