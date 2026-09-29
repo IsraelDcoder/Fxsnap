@@ -374,15 +374,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       return { allowed: false, requiresPaywall: false, error: 'Account access is still loading. Please try again.' };
     }
 
-    let subscriptionActive = isSubscribed;
-    if (billingAvailable) {
-      try {
-        subscriptionActive = await getPremiumStatus();
-        setIsSubscribed(subscriptionActive);
-      } catch {
-        return { allowed: false, requiresPaywall: false, error: 'Unable to verify your subscription right now. Please try again.' };
-      }
-    }
+    const subscriptionActive = isSubscribed;
 
     let freeAnalysisUsed = false;
     if ((feature === 'AI_ANALYSIS' || feature === 'TRADE_SETUP') && !subscriptionActive) {
