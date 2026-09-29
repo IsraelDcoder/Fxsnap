@@ -2,6 +2,8 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router } from 'expo-router';
 import { addBillingListener, billingIsConfigured, configureBilling, getPremiumStatus, purchasePlan, restorePurchases, type BillingPlan } from '@/services/billing';
+import { hasUsedFreeAnalysis } from '@/services/apiAuth';
+import { getFeatureAccessDecision, type FeatureAccessDecision, type ProtectedFeature } from '@/services/featureAccess';
 import { setHapticsEnabled } from '@/services/haptics';
 import { createDailyRiskActivity, getLocalRiskDateKey, normalizeDailyRiskActivity, type DailyRiskActivity, type OpenRiskPosition } from '@/services/risk';
 
@@ -145,7 +147,7 @@ interface AppContextValue {
   completeOnboarding: () => void;
   billingAvailable: boolean;
   pendingFeatureRoute: string | null;
-  checkFeatureAccess: (route: string) => boolean;
+  checkFeatureAccess: (feature: ProtectedFeature, route: string) => Promise<FeatureAccessDecision & { error?: string }>;
   consumePendingFeatureRoute: () => string | null;
   clearPendingFeatureRoute: () => void;
   purchasePlan: (plan: BillingPlan) => Promise<boolean>;
@@ -367,16 +369,42 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return active;
   };
 
-  const checkFeatureAccess = (route: string): boolean => {
-    if (route === '/analysis' || isSubscribed) {
-      console.log('[PREMIUM GATE] Access granted', { route, isSubscribed });
-      return true;
+  const checkFeatureAccess = async (feature: ProtectedFeature, route: string): Promise<FeatureAccessDecision & { error?: string }> => {
+    if (isLoading) {
+      return { allowed: false, requiresPaywall: false, error: 'Account access is still loading. Please try again.' };
     }
 
-    console.log('[PREMIUM GATE] Access blocked; sending to paywall', { route, isSubscribed });
-    setPendingFeatureRoute(route);
-    router.replace('/paywall');
-    return false;
+    let subscriptionActive = isSubscribed;
+    if (billingAvailable) {
+      try {
+        subscriptionActive = await getPremiumStatus();
+        setIsSubscribed(subscriptionActive);
+      } catch {
+        return { allowed: false, requiresPaywall: false, error: 'Unable to verify your subscription right now. Please try again.' };
+      }
+    }
+
+    let freeAnalysisUsed = false;
+    if ((feature === 'AI_ANALYSIS' || feature === 'TRADE_SETUP') && !subscriptionActive) {
+      try {
+        freeAnalysisUsed = await hasUsedFreeAnalysis();
+      } catch {
+        return { allowed: false, requiresPaywall: false, error: 'Unable to verify free analysis access right now. Please try again.' };
+      }
+    }
+
+    const decision = getFeatureAccessDecision(feature, subscriptionActive, freeAnalysisUsed);
+    console.log(`[ACCESS] Feature: ${feature}`);
+    console.log(`[ACCESS] Subscription status: ${subscriptionActive}`);
+    console.log(`[ACCESS] Free analysis used: ${feature === 'AI_ANALYSIS' || feature === 'TRADE_SETUP' ? freeAnalysisUsed : 'not applicable'}`);
+    console.log(`[ACCESS] Result: ${decision.allowed ? 'ALLOWED' : 'PAYWALL'}`);
+    console.log(`[ACCESS] Navigation: ${decision.allowed ? route : '/paywall'}`);
+
+    if (decision.requiresPaywall) {
+      setPendingFeatureRoute(route);
+      router.replace('/paywall');
+    }
+    return decision;
   };
 
   const consumePendingFeatureRoute = () => {

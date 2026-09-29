@@ -30,11 +30,7 @@ export default function PaywallScreen() {
 
   const dismissPaywall = () => {
     clearPendingFeatureRoute();
-    if (router.canGoBack()) {
-      router.back();
-      return;
-    }
-    router.replace('/home');
+    router.replace('/(tabs)/home');
   };
   const [selectedPlan, setSelectedPlan] = useState('quarterly');
   const [plans, setPlans] = useState<PlanOffering[]>([]);

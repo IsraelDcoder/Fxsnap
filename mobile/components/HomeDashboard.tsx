@@ -18,8 +18,8 @@ import { useApp } from '@/context/AppContext';
 import { useColors } from '@/hooks/useColors';
 import { getTradingSessionState, SESSION_DEFINITIONS } from '@/services/tradingSessions';
 import { getDailyBriefState, type DailyBriefItem, type DailyBriefState } from '@/services/dailyBrief';
-import { getDeviceId, hasUsedFreeAnalysis } from '@/services/apiAuth';
-import { shouldGuardFeatureRoute } from '@/services/featureAccess';
+import { getDeviceId } from '@/services/apiAuth';
+import type { ProtectedFeature } from '@/services/featureAccess';
 function greetingForHour(hour: number) {
   if (hour < 12) return 'Good morning,';
   if (hour < 18) return 'Good afternoon,';
@@ -29,7 +29,7 @@ function greetingForHour(hour: number) {
 export default function HomeDashboard() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { settings, savedBriefs, saveBriefCard, deleteBriefCard, isSubscribed, checkFeatureAccess } = useApp();
+  const { settings, savedBriefs, saveBriefCard, deleteBriefCard, checkFeatureAccess } = useApp();
   const [sessionModalVisible, setSessionModalVisible] = useState(false);
   const [sessionState, setSessionState] = useState(getTradingSessionState());
   const [now, setNow] = useState(new Date());
@@ -64,16 +64,28 @@ export default function HomeDashboard() {
     return () => clearTimeout(timer);
   }, [briefSaveMessage]);
 
-  const navigate = async (path: '/analysis' | '/strategy' | '/settings' | '/daily-brief' | '/economic-calendar' | '/lot-size-calculator' | '/risk-management' | '/saved' | '/my-strategies', premiumOnly = false) => {
+  const navigate = (path: '/analysis' | '/strategy' | '/settings' | '/daily-brief' | '/economic-calendar' | '/lot-size-calculator' | '/risk-management' | '/saved' | '/my-strategies') => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-
-    if (premiumOnly && shouldGuardFeatureRoute(path, isSubscribed, path === '/analysis' ? await hasUsedFreeAnalysis().catch(() => false) : false)) {
-      checkFeatureAccess(path);
-      return;
-    }
-
     router.push(path);
   };
+
+  const openProtectedFeature = async (feature: ProtectedFeature, route: '/analysis' | '/strategy') => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    try {
+      const access = await checkFeatureAccess(feature, route);
+      if (access.error) {
+        Alert.alert('Unable to verify access', access.error);
+        return;
+      }
+      if (!access.allowed) return;
+      router.push(route);
+    } catch (error) {
+      Alert.alert('Unable to open feature', error instanceof Error ? error.message : 'Please try again.');
+    }
+  };
+
+  const openAnalysis = () => openProtectedFeature('AI_ANALYSIS', '/analysis');
+  const openStrategy = () => openProtectedFeature('STRATEGY_GENERATOR', '/strategy');
 
   const showSessions = () => setSessionModalVisible(true);
   const support = () => {
@@ -187,7 +199,7 @@ export default function HomeDashboard() {
         </View>
 
         <TouchableOpacity
-          onPress={() => navigate('/analysis', true)}
+          onPress={() => void openAnalysis()}
           activeOpacity={0.9}
           style={[styles.primaryCard, { borderColor: `${colors.buy}55`, backgroundColor: colors.card }]}
         >
@@ -205,9 +217,9 @@ export default function HomeDashboard() {
         </TouchableOpacity>
 
         <View style={styles.shortcutGrid}>
-          <Shortcut icon="trending-up" label="Trade\nSetup" colors={colors} onPress={() => navigate('/analysis', true)} />
-          <Shortcut icon="grid" label="Lot Size\nCalculator" colors={colors} onPress={() => navigate('/lot-size-calculator', true)} />
-          <Shortcut icon="sliders" label="Strategy\nGenerator" colors={colors} onPress={() => navigate('/strategy', true)} />
+          <Shortcut icon="trending-up" label="Trade\nSetup" colors={colors} onPress={() => void openProtectedFeature('TRADE_SETUP', '/analysis')} />
+          <Shortcut icon="grid" label="Lot Size\nCalculator" colors={colors} onPress={() => navigate('/lot-size-calculator')} />
+          <Shortcut icon="sliders" label="Strategy\nGenerator" colors={colors} onPress={() => void openStrategy()} />
         </View>
 
         <View style={styles.section}>
@@ -217,7 +229,7 @@ export default function HomeDashboard() {
           <View style={styles.quickAccessGrid}>
             <QuickAccess icon="calendar" label="Economic\nCalendar" colors={colors} onPress={() => navigate('/economic-calendar')} />
             <QuickAccess icon="clock" label="Trading\nSessions" colors={colors} onPress={showSessions} />
-            <QuickAccess icon="shield" label="Risk\nManagement" colors={colors} onPress={() => navigate('/risk-management', true)} />
+            <QuickAccess icon="shield" label="Risk\nManagement" colors={colors} onPress={() => navigate('/risk-management')} />
             <QuickAccess icon="headphones" label="Help &\nSupport" colors={colors} onPress={support} />
           </View>
         </View>
@@ -226,7 +238,7 @@ export default function HomeDashboard() {
       <View style={[styles.bottomNav, { paddingBottom: Math.max(insets.bottom, Platform.OS === 'web' ? 10 : 6), backgroundColor: colors.background, borderTopColor: colors.cardBorder }]}>
         <NavItem icon="home" label="Home" active colors={colors} onPress={() => {}} />
         <NavItem icon="bookmark" label="Analysis" colors={colors} onPress={() => navigate('/saved')} />
-        <TouchableOpacity onPress={() => navigate('/analysis', true)} style={styles.aiNavButton} accessibilityLabel="Open FXSnap AI analysis">
+        <TouchableOpacity onPress={() => void openAnalysis()} style={styles.aiNavButton} accessibilityLabel="Open FXSnap AI analysis">
           <View style={[styles.aiNavCircle, { backgroundColor: colors.buy }]}><Feather name="aperture" size={24} color={colors.primaryForeground} /></View>
         </TouchableOpacity>
         <NavItem icon="layers" label="Strategies" colors={colors} onPress={() => navigate('/my-strategies')} />

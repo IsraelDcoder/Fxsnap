@@ -9,7 +9,6 @@ import { useApp } from '@/context/AppContext';
 import type { SavedStrategy } from '@/context/AppContext';
 import { API_BASE_URL, getApiHeaders } from '@/services/apiAuth';
 import { useColors } from '@/hooks/useColors';
-import { shouldGuardFeatureRoute } from '@/services/featureAccess';
 
 type Stage = 'inputs' | 'generating' | 'result';
 type Style = 'scalping' | 'intraday' | 'swing';
@@ -51,13 +50,17 @@ function Generation({ onComplete, onError }: { onComplete: () => Promise<void>; 
 }
 
 export default function StrategyScreen() {
-  const insets = useSafeAreaInsets(); const colors = useColors(); const { saveStrategy, savedStrategies, isSubscribed, checkFeatureAccess } = useApp();
+  const insets = useSafeAreaInsets(); const colors = useColors(); const { saveStrategy, savedStrategies, checkFeatureAccess } = useApp();
   const [stage, setStage] = useState<Stage>('inputs'); const [answers, setAnswers] = useState<Answers>({ style: null, risk: '1', pairs: [], session: null, experience: null }); const [variation, setVariation] = useState(0); const [name, setName] = useState(''); const [strategy, setStrategy] = useState<Strategy | null>(null); const [error, setError] = useState<string | null>(null);
   const top = Platform.OS === 'web' ? 67 : insets.top; const bottom = Platform.OS === 'web' ? 34 : insets.bottom; const valid = Boolean(answers.style && answers.session && answers.experience && answers.pairs.length && Number(answers.risk) > 0 && Number(answers.risk) <= 5); const set = <K extends keyof Answers>(key: K, value: Answers[K]) => setAnswers((old) => ({ ...old, [key]: value }));
 
   const generate = async () => {
-    if (shouldGuardFeatureRoute('/strategy', isSubscribed)) {
-      checkFeatureAccess('/strategy');
+    const access = await checkFeatureAccess('STRATEGY_GENERATOR', '/strategy');
+    if (access.error) {
+      setError(access.error);
+      return;
+    }
+    if (!access.allowed) {
       return;
     }
     setError(null);

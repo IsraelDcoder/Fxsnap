@@ -20,7 +20,6 @@ import * as Haptics from '@/services/haptics';
 import { useApp } from '@/context/AppContext';
 import type { AnalysisResult } from '@/context/AppContext';
 import { useColors } from '@/hooks/useColors';
-import { shouldGuardFeatureRoute } from '@/services/featureAccess';
 
 type Filter = 'all' | 'BUY' | 'SELL';
 
@@ -194,7 +193,7 @@ function AnalysisCard({
 export default function SavedScreen() {
   const insets = useSafeAreaInsets();
   const colors = useColors();
-  const { savedAnalyses, deleteAnalysis, setCurrentAnalysis, isSubscribed, checkFeatureAccess } = useApp();
+  const { savedAnalyses, deleteAnalysis, setCurrentAnalysis, checkFeatureAccess } = useApp();
   const [filter, setFilter] = useState<Filter>('all');
 
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
@@ -253,9 +252,13 @@ export default function SavedScreen() {
           </Text>
           <TouchableOpacity
             style={[styles.runBtn, { backgroundColor: colors.primary }]}
-            onPress={() => {
-              if (shouldGuardFeatureRoute('/analysis', isSubscribed)) {
-                checkFeatureAccess('/analysis');
+            onPress={async () => {
+              const access = await checkFeatureAccess('AI_ANALYSIS', '/analysis');
+              if (access.error) {
+                Alert.alert('Unable to verify access', access.error);
+                return;
+              }
+              if (!access.allowed) {
                 return;
               }
               router.push('/analysis');
