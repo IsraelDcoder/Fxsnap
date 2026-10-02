@@ -5,6 +5,7 @@ Automated tests cover pure backtesting and signed API tokens. The following requ
 | Area | iOS | Android | Required setup |
 |---|---|---|---|
 | RevenueCat weekly purchase | Sandbox | License test track | Store products, RevenueCat offering, native development build |
+| RevenueCat monthly purchase | Sandbox | License test track | Monthly store product attached to the existing Premium entitlement and offering |
 | RevenueCat quarterly purchase | Sandbox | License test track | Same as above |
 | Restore purchase | Sandbox | License test track | Existing test entitlement, new device/account |
 | Expiration/refund/revocation | Store sandbox controls | Play test subscription controls | RevenueCat webhook and entitlement endpoint |

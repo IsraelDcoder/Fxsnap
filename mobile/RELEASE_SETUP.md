@@ -15,13 +15,15 @@ The local `npm run build` command creates a web export. Native release builds us
 Configure these exact product identifiers in Apple App Store Connect, Google Play Console, and RevenueCat:
 
 - `fxsnap_weekly`
+- `fxsnap_premium_monthly`
 - `fxsnap_quarterly`
 
-Create the entitlement `premium`, attach both products, then set:
+Create the existing `premium` entitlement and attach all three products, then set:
 
 - `EXPO_PUBLIC_REVENUECAT_IOS_API_KEY`
 - `EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY`
 - `EXPO_PUBLIC_REVENUECAT_ENTITLEMENT_ID`
+- `EXPO_PUBLIC_REVENUECAT_MONTHLY_PRODUCT_ID` if the monthly product uses a different identifier
 - `REVENUECAT_SECRET_API_KEY` on the server only
 
 Test purchases and restores in Apple Sandbox and Google Play license-test tracks. Do not use the public paywall in production until the backend entitlement endpoint returns verified active state.

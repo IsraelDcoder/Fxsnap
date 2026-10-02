@@ -75,11 +75,13 @@ Replace the placeholders in app.json and eas.json with your real Expo project ID
 
 ## 4. RevenueCat and Play Store
 
-1. Create the products `fxsnap_weekly` and `fxsnap_quarterly` in RevenueCat.
+1. Create the products `fxsnap_weekly`, `fxsnap_premium_monthly`, and `fxsnap_quarterly` in RevenueCat.
 2. Link them to the Google Play subscription products.
-3. Configure the entitlement `premium`.
+3. Attach all three products to the existing Premium entitlement.
 4. Set the public SDK keys in the Expo app environment and the secret key on the backend.
 5. Test with Google Play internal / license-test tracks.
+
+Set `EXPO_PUBLIC_REVENUECAT_MONTHLY_PRODUCT_ID` if the monthly store product uses an identifier other than `fxsnap_premium_monthly`. Prices are loaded from the RevenueCat offering and are not hardcoded in the paywall.
 
 ## 5. Production checklist
 

@@ -11,14 +11,13 @@ import { router } from 'expo-router';
 import * as Haptics from '@/services/haptics';
 import { useApp } from '@/context/AppContext';
 import { useColors } from '@/hooks/useColors';
-import { getAvailablePlans, type PlanOffering } from '@/services/billing';
+import { getAvailablePlans, type BillingPlan, type PlanOffering } from '@/services/billing';
 
 const FEATURES = [
-  'Unlimited chart analysis',
-  'AI-powered trade insights',
-  'Risk management tools',
-  'Strategy generator',
-  'Save & review analyses',
+  'Unlimited chart breakdowns in seconds',
+  'Exact Entry, SL & TP for every setup',
+  'AI reasoning behind every trade setup',
+  'Save & track your winning strategies',
 ];
 
 export default function PaywallScreen() {
@@ -32,7 +31,7 @@ export default function PaywallScreen() {
     clearPendingFeatureRoute();
     router.replace('/(tabs)/home');
   };
-  const [selectedPlan, setSelectedPlan] = useState('quarterly');
+  const [selectedPlan, setSelectedPlan] = useState<BillingPlan>('monthly');
   const [plans, setPlans] = useState<PlanOffering[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingPlans, setLoadingPlans] = useState(true);
@@ -79,12 +78,13 @@ export default function PaywallScreen() {
   if (isLoading || isSubscribed) return null;
 
   const selectedPlanMeta = plans.find((plan) => plan.plan === selectedPlan) ?? plans[0];
-  const selectedPlanLabel = selectedPlan === 'quarterly' ? '3-Month' : 'Weekly';
+  const selectedPlanLabel = selectedPlan === 'quarterly' ? '3-Month' : selectedPlan === 'monthly' ? 'Monthly' : 'Weekly';
+  const canPurchaseSelectedPlan = Boolean(selectedPlanMeta?.available);
 
   const handleSubscribe = async () => {
     setLoading(true);
     try {
-      const purchased = await purchasePlan(selectedPlan as 'weekly' | 'quarterly');
+      const purchased = await purchasePlan(selectedPlan);
       if (purchased) {
         const nextRoute = (consumePendingFeatureRoute() || '/home') as Parameters<typeof router.replace>[0];
         console.log('[PREMIUM GATE] Subscription successful; resuming route', { nextRoute });
@@ -118,8 +118,8 @@ export default function PaywallScreen() {
           <View style={[styles.crownBox, { backgroundColor: colors.surface, borderColor: colors.cardBorder }]}>
             <Feather name="zap" size={36} color="#FFD60A" />
           </View>
-          <Text style={[styles.title, { color: colors.text }]}>FXSnap Premium</Text>
-          <Text style={[styles.subtitle, { color: colors.textSecondary }]}>Unlock full access to all features</Text>
+          <Text style={[styles.title, { color: colors.text }]}>FXSNAP PREMIUM</Text>
+          <Text style={[styles.subtitle, { color: colors.textSecondary }]}>Your free analysis is done. Don't miss the next setup.</Text>
         </Animated.View>
 
         <Animated.View entering={FadeInUp.delay(200).duration(600)} style={[styles.featuresList, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
@@ -132,6 +132,8 @@ export default function PaywallScreen() {
             </View>
           ))}
         </Animated.View>
+
+        <Text style={[styles.socialProof, { color: colors.buy }]}>Join 1,586 traders today</Text>
 
         <Animated.View entering={FadeInUp.delay(300).duration(600)} style={styles.plans}>
           {loadingPlans ? (
@@ -148,6 +150,7 @@ export default function PaywallScreen() {
                   style={[
                     styles.planCard,
                     isSelected && styles.planCardSelected,
+                    !plan.available && styles.planCardUnavailable,
                     {
                       backgroundColor: isSelected ? colors.surface : colors.card,
                       borderColor: isSelected ? colors.primary : colors.cardBorder,
@@ -160,14 +163,16 @@ export default function PaywallScreen() {
                     },
                   ]}
                   onPress={() => {
+                    if (!plan.available) return;
                     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                     setSelectedPlan(plan.plan);
                   }}
+                  disabled={!plan.available}
                   activeOpacity={0.95}
                 >
-                  {plan.plan === 'quarterly' && (
+                  {plan.plan === 'monthly' && (
                     <View style={styles.planTag}>
-                      <Text style={styles.planTagText}>MOST POPULAR</Text>
+                      <Text style={styles.planTagText}>BEST VALUE</Text>
                     </View>
                   )}
                   <View style={styles.planInfo}>
@@ -191,16 +196,18 @@ export default function PaywallScreen() {
           <TouchableOpacity
             style={[
               styles.subscribeBtn,
-              (loading || !billingAvailable) && { opacity: 0.65 },
+              (loading || !billingAvailable || !canPurchaseSelectedPlan) && { opacity: 0.65 },
               { backgroundColor: colors.primary },
             ]}
             onPress={handleSubscribe}
-            disabled={loading || !billingAvailable}
+            disabled={loading || !billingAvailable || !canPurchaseSelectedPlan}
           >
             <Text style={[styles.subscribeBtnText, { color: colors.primaryForeground }]}>
               {loading ? 'Processing...' : billingAvailable ? `Start ${selectedPlanLabel} Plan` : 'Billing unavailable'}
             </Text>
           </TouchableOpacity>
+          <Text style={[styles.reassuranceText, { color: colors.textSecondary }]}>Cancel anytime.</Text>
+          <Text style={[styles.reassuranceText, { color: colors.textMuted }]}>No risk. Let your first win decide.</Text>
           <TouchableOpacity style={styles.cancelButton} onPress={dismissPaywall}>
             <Text style={[styles.cancelText, { color: colors.textSecondary }]}>Cancel</Text>
           </TouchableOpacity>
@@ -217,9 +224,6 @@ export default function PaywallScreen() {
             <Text style={[styles.restoreText, { color: colors.textSecondary }]}>Restore Purchase</Text>
           </TouchableOpacity>
           <Text style={[styles.legalText, { color: colors.textMuted }]}>If you need help, contact support@fxsnap.app with your app build information.</Text>
-          <Text style={[styles.legalText, { color: colors.textMuted }]}>
-            Cancel anytime. No hidden fees. Prices in USD.
-          </Text>
         </Animated.View>
     </ScreenWrapper>
   );
@@ -297,6 +301,12 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_500Medium',
     color: '#FFFFFF',
   },
+  socialProof: {
+    fontSize: 14,
+    fontFamily: 'Inter_700Bold',
+    textAlign: 'center',
+    marginTop: -10,
+  },
   plans: {
     gap: 12,
   },
@@ -320,6 +330,9 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: '#2A2A2A',
     position: 'relative',
+  },
+  planCardUnavailable: {
+    opacity: 0.45,
   },
   planCardSelected: {
     borderColor: '#00FF9D',
@@ -377,6 +390,12 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontFamily: 'Inter_700Bold',
     color: '#000',
+  },
+  reassuranceText: {
+    fontSize: 12,
+    fontFamily: 'Inter_500Medium',
+    textAlign: 'center',
+    marginTop: -8,
   },
   cancelButton: {
     width: '100%',
