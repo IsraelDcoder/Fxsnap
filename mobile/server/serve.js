@@ -1130,11 +1130,12 @@ IMPORTANT RULES:
 1. The analysis is based ONLY on the uploaded chart image.
 2. Do NOT assume real-time market data.
 3. Do NOT hallucinate unknown data (news, fundamentals, unseen candles).
-4. If the chart is unclear or not a valid trading chart → return "invalid_image".
-5. If there is no clear, high-probability setup → return "no_trade".
-6. You must be conservative. Avoid forcing trades.
-7. Confidence must reflect clarity of structure, not guesswork.
-8. Keep explanations short, precise, and professional.
+4. Set chart.is_chart=true when the image shows recognizable market-price chart content, including chart screenshots with platform controls, labels, or overlays.
+5. Return "invalid_image" only when the image is clearly not a trading chart, is blank/corrupted, or the chart content is completely unrecognizable.
+6. If a chart is recognizable but cropped, low-resolution, partially obscured, or has unreadable details, keep chart.is_chart=true, set chart_quality="poor", describe the limitation, and return "no_trade" rather than "invalid_image".
+7. If there is no clear, high-probability setup, return "no_trade". Do not confuse an unclear setup with an invalid image.
+8. You must be conservative. Avoid forcing trades. Confidence must reflect visible evidence, not guesswork.
+9. Keep explanations short, precise, and professional.
 
 ANALYSIS REQUIREMENTS:
 
@@ -1164,6 +1165,15 @@ OUTPUT FORMAT (STRICT JSON):
 
 {
   "status": "success | no_trade | invalid_image",
+
+  "chart": {
+    "is_chart": true | false,
+    "timeframe": "visible timeframe or empty string",
+    "chart_quality": "good | acceptable | poor",
+    "price_scale_visible": true | false,
+    "candles_visible": true | false,
+    "has_enough_candles": true | false
+  },
 
   "analysis": {
     "trend": "bullish | bearish | neutral",
@@ -2263,6 +2273,7 @@ module.exports.createRequestHandler = createRequestHandler;
 module.exports.parseJsonField = parseJsonField;
 module.exports.parseJsonPayload = parseJsonPayload;
 module.exports.canonicalizeRawAnalysis = canonicalizeRawAnalysis;
+module.exports.getTraderSystemPrompt = getTraderSystemPrompt;
 module.exports.normalizeAnalysis = normalizeAnalysis;
 module.exports.buildStructuredObservations = buildStructuredObservations;
 module.exports.evaluateDecisionEngine = evaluateDecisionEngine;

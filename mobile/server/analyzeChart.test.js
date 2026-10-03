@@ -5,7 +5,29 @@ const {
   evaluateDecisionEngine,
   applyMentorStrategy,
   enforceValidationRules,
+  getTraderSystemPrompt,
 } = require('./serve');
+
+test('recognizable low-quality charts are analyzed conservatively instead of rejected as non-charts', () => {
+  const result = applyMentorStrategy({
+    status: 'no_trade',
+    chart: { is_chart: true, chart_quality: 'poor', candles_visible: false },
+    analysis: { trend: 'neutral', market_structure: '', structure: '' },
+    zones: {},
+    strategy: {},
+    trade_setup: { type: 'none' },
+    confidence: 0,
+    reasons: [],
+  });
+
+  assert.equal(result.status, 'no_trade');
+});
+
+test('vision instructions reserve invalid_image for clearly non-chart or unrecognizable images', () => {
+  const prompt = getTraderSystemPrompt();
+  assert.match(prompt, /invalid_image" only when the image is clearly not a trading chart/i);
+  assert.match(prompt, /chart is recognizable.*no_trade/i);
+});
 
 test('canonical JSON parsing accepts object, string, and fenced JSON payloads', () => {
   const { canonicalizeRawAnalysis } = require('./serve');
