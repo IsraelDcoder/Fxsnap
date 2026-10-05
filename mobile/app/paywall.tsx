@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Alert, BackHandler, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, BackHandler, Platform, StyleSheet, Text, TouchableOpacity, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, {
   FadeInDown,
@@ -26,6 +26,8 @@ export default function PaywallScreen() {
   const insets = useSafeAreaInsets();
   const { purchasePlan, restorePurchases, billingAvailable, isSubscribed, isLoading, consumePendingFeatureRoute, clearPendingFeatureRoute } = useApp();
   const supportEmail = process.env.EXPO_PUBLIC_SUPPORT_EMAIL || 'support@fxsnap.app';
+  const { width: screenWidth, height: screenHeight } = useWindowDimensions();
+  const isCompact = screenHeight < 700 || screenWidth < 360;
 
   const dismissPaywall = () => {
     clearPendingFeatureRoute();
@@ -117,6 +119,8 @@ export default function PaywallScreen() {
     }
   };
 
+  const isSelectedPlan = (plan: BillingPlan) => selectedPlan === plan;
+
   return (
     <ScreenWrapper
       style={[styles.container, { backgroundColor: '#000000' }]}
@@ -132,8 +136,8 @@ export default function PaywallScreen() {
         <View style={styles.logoBox}>
           <Feather name="zap" size={52} color="#FFD60A" />
         </View>
-        <Text style={styles.title}>FXSNAP PREMIUM</Text>
-        <Text style={styles.subtitle}>Your complete AI trading assistant.</Text>
+        <Text style={[styles.title, isCompact && styles.compactTitle]}>FXSNAP PREMIUM</Text>
+        <Text style={[styles.subtitle, isCompact && styles.compactSubtitle]}>Your complete AI trading assistant.</Text>
       </Animated.View>
 
       <Animated.View entering={FadeInUp.delay(200).duration(600)} style={styles.featuresList}>
@@ -184,8 +188,9 @@ export default function PaywallScreen() {
           </View>
         ) : plans.length > 0 ? (
           plans.map((plan) => {
-            const isSelected = selectedPlan === plan.plan;
+            const isSelected = isSelectedPlan(plan.plan);
             const isMonthly = plan.plan === 'monthly';
+            const isQuarterly = plan.plan === 'quarterly';
             const planBadge = getPlanBadge(plan);
 
             return (
@@ -196,6 +201,7 @@ export default function PaywallScreen() {
                   isSelected && styles.planCardSelected,
                   !plan.available && styles.planCardUnavailable,
                   isMonthly && styles.monthlyPlanCard,
+                  isQuarterly && styles.quarterlyPlanCard,
                 ]}
                 onPress={() => {
                   if (!plan.available) return;
@@ -236,7 +242,7 @@ export default function PaywallScreen() {
           onPress={handleSubscribe}
           disabled={loading || !billingAvailable || !canPurchaseSelectedPlan}
         >
-          <Text style={styles.subscribeBtnText}>
+          <Text style={[styles.subscribeBtnText, isCompact && styles.compactSubscribeText]}>
             {loading ? 'Processing...' : billingAvailable ? `Start ${selectedPlanLabel} Plan` : 'Billing unavailable'}
           </Text>
           <Feather name="arrow-right" size={20} color="#000000" />
@@ -292,8 +298,8 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: 560,
     alignSelf: 'center',
-    paddingHorizontal: 24,
-    gap: 18,
+    paddingHorizontal: 20,
+    gap: 14,
   },
   hero: {
     alignItems: 'center',
@@ -310,27 +316,35 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   title: {
-    fontSize: 62,
-    lineHeight: 62,
+    fontSize: 34,
+    lineHeight: 38,
     fontFamily: 'Inter_700Bold',
     color: '#FFFFFF',
     textAlign: 'center',
-    letterSpacing: -2,
+    letterSpacing: -1,
+  },
+  compactTitle: {
+    fontSize: 28,
+    lineHeight: 32,
   },
   subtitle: {
-    fontSize: 28,
-    lineHeight: 36,
+    fontSize: 18,
+    lineHeight: 24,
     fontFamily: 'Inter_400Regular',
     color: '#F4F4F4',
     textAlign: 'center',
     fontStyle: 'italic',
   },
+  compactSubtitle: {
+    fontSize: 15,
+    lineHeight: 20,
+  },
   featuresList: {
-    gap: 18,
+    gap: 12,
     backgroundColor: '#191919',
     borderRadius: 20,
-    paddingVertical: 22,
-    paddingHorizontal: 18,
+    paddingVertical: 16,
+    paddingHorizontal: 14,
     borderWidth: 1,
     borderColor: '#2B2B2B',
   },
@@ -354,14 +368,14 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   featureTitle: {
-    fontSize: 18,
-    lineHeight: 24,
+    fontSize: 16,
+    lineHeight: 20,
     fontFamily: 'Inter_700Bold',
     color: '#FFFFFF',
   },
   featureSubtitle: {
-    fontSize: 15,
-    lineHeight: 20,
+    fontSize: 13,
+    lineHeight: 18,
     fontFamily: 'Inter_400Regular',
     color: '#B9B9B9',
   },
@@ -374,7 +388,7 @@ const styles = StyleSheet.create({
   },
   plans: {
     width: '100%',
-    gap: 16,
+    gap: 12,
     flexDirection: 'row',
     flexWrap: 'wrap',
     alignItems: 'stretch',
@@ -397,14 +411,12 @@ const styles = StyleSheet.create({
     color: '#8E8E93',
   },
   planCard: {
-    flexBasis: '30%',
-    flexGrow: 1,
-    minWidth: 120,
+    width: '48%',
     minHeight: 170,
     backgroundColor: '#141414',
     borderRadius: 18,
     paddingVertical: 18,
-    paddingHorizontal: 14,
+    paddingHorizontal: 12,
     borderWidth: 2,
     borderColor: '#2A2A2A',
     position: 'relative',
@@ -422,6 +434,10 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     shadowOffset: { width: 0, height: 0 },
     elevation: 8,
+  },
+  quarterlyPlanCard: {
+    width: '100%',
+    marginTop: 4,
   },
   planCardSelected: {
     borderColor: '#00FF9D',
@@ -509,7 +525,8 @@ const styles = StyleSheet.create({
   subscribeBtn: {
     width: '100%',
     minHeight: 62,
-    paddingHorizontal: 22,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
     backgroundColor: '#F5F5F5',
     borderRadius: 18,
     alignItems: 'center',
@@ -517,10 +534,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
   },
   subscribeBtnText: {
-    fontSize: 26,
-    lineHeight: 32,
+    fontSize: 24,
+    lineHeight: 30,
     fontFamily: 'Inter_700Bold',
     color: '#000000',
+  },
+  compactSubscribeText: {
+    fontSize: 18,
+    lineHeight: 24,
   },
   footerMeta: {
     flexDirection: 'row',
