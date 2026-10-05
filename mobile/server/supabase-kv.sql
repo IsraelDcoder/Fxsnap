@@ -33,50 +33,8 @@ begin
 end;
 $$;
 
-create or replace function public.fxsnap_kv_set_if_absent(p_key text, p_value jsonb, p_ttl_seconds integer)
-returns boolean
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-  inserted_count integer;
-begin
-  insert into public.fxsnap_kv (key, value, expires_at)
-  values (
-    p_key,
-    p_value,
-    case when p_ttl_seconds is null then null else now() + make_interval(secs => p_ttl_seconds) end
-  )
-  on conflict (key) do update
-    set value = excluded.value,
-        expires_at = excluded.expires_at
-    where public.fxsnap_kv.expires_at is not null
-      and public.fxsnap_kv.expires_at <= now();
-  get diagnostics inserted_count = row_count;
-  return inserted_count = 1;
-end;
-$$;
-
-create or replace function public.fxsnap_kv_delete_if_value(p_key text, p_value jsonb)
-returns boolean
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-  deleted_count integer;
-begin
-  delete from public.fxsnap_kv
-  where key = p_key and value = p_value;
-  get diagnostics deleted_count = row_count;
-  return deleted_count = 1;
-end;
-$$;
-
 revoke all on function public.fxsnap_kv_increment(text, integer) from public;
-revoke all on function public.fxsnap_kv_set_if_absent(text, jsonb, integer) from public;
-revoke all on function public.fxsnap_kv_delete_if_value(text, jsonb) from public;
 grant execute on function public.fxsnap_kv_increment(text, integer) to service_role;
-grant execute on function public.fxsnap_kv_set_if_absent(text, jsonb, integer) to service_role;
-grant execute on function public.fxsnap_kv_delete_if_value(text, jsonb) to service_role;
+
+drop function if exists public.fxsnap_kv_set_if_absent(text, jsonb, integer);
+drop function if exists public.fxsnap_kv_delete_if_value(text, jsonb);

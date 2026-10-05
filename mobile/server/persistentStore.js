@@ -120,39 +120,11 @@ async function appendJson(key, value, maxItems, ttlSeconds) {
   return setJson(key, list, ttlSeconds);
 }
 
-async function setJsonIfAbsent(key, value, ttlSeconds) {
-  if (await connect()) {
-    const options = { NX: true };
-    if (ttlSeconds) options.EX = ttlSeconds;
-    return (await redisClient.set(key, JSON.stringify(value), options)) === 'OK';
-  }
-  if (supabaseEnabled) return Boolean(await supabaseRpc('fxsnap_kv_set_if_absent', { p_key: key, p_value: value, p_ttl_seconds: ttlSeconds || null }));
-  pruneExpired();
-  if (memoryStore.has(key)) return false;
-  memoryStore.set(key, { value, expiresAt: ttlSeconds ? Date.now() + ttlSeconds * 1000 : null });
-  return true;
-}
-
-async function deleteJsonIfValue(key, value) {
-  if (await connect()) {
-    const script = "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end";
-    return (await redisClient.eval(script, { keys: [key], arguments: [JSON.stringify(value)] })) === 1;
-  }
-  if (supabaseEnabled) return Boolean(await supabaseRpc('fxsnap_kv_delete_if_value', { p_key: key, p_value: value }));
-  pruneExpired();
-  const entry = memoryStore.get(key);
-  if (!entry || JSON.stringify(entry.value) !== JSON.stringify(value)) return false;
-  memoryStore.delete(key);
-  return true;
-}
-
 module.exports = {
   enabled: Boolean(redisUrl || supabaseEnabled),
   connect,
   increment,
   getJson,
   setJson,
-  setJsonIfAbsent,
-  deleteJsonIfValue,
   appendJson,
 };

@@ -30,7 +30,6 @@ import type { AnalysisResult } from '@/context/AppContext';
 import { PairSelectionModal } from '@/components/PairSelectionModal';
 import { useColors } from '@/hooks/useColors';
 import { analyzeChartImage, type ChartAnalysisResult } from '../services/chartDetection';
-import { hasUsedFreeAnalysis } from '@/services/apiAuth';
 import { trackEvent } from '@/services/telemetry';
 
 type Stage = 'pick' | 'preview' | 'analyzing';
@@ -291,29 +290,17 @@ export default function AnalysisScreen() {
   const botPad = Platform.OS === 'web' ? 34 : insets.bottom;
 
   const checkAccessBeforeAnalysis = async (): Promise<boolean> => {
-    if (isLoading || isSubscribed) return true;
-    try {
-      const used = await hasUsedFreeAnalysis();
-      if (used) {
-        router.replace('/paywall');
-        return false;
-      }
-      return true;
-    } catch (error: unknown) {
-      setAnalysisError(error instanceof Error ? error.message : 'Unable to verify free analysis access.');
+    if (isLoading) return false;
+    if (!isSubscribed) {
+      router.replace('/paywall');
       return false;
     }
+    return true;
   };
 
   useEffect(() => {
     if (isLoading || isSubscribed) return;
-    let active = true;
-    void hasUsedFreeAnalysis().then((used) => {
-      if (active && used) router.replace('/paywall');
-    }).catch((error: unknown) => {
-      if (active) setAnalysisError(error instanceof Error ? error.message : 'Unable to verify free analysis access.');
-    });
-    return () => { active = false; };
+    router.replace('/paywall');
   }, [isLoading, isSubscribed]);
 
   const pickFromGallery = async () => {
@@ -421,24 +408,15 @@ export default function AnalysisScreen() {
         isSubscribed,
       });
 
-      if (chart.status === 'free_analysis_used') {
-        console.warn('[ANALYSIS] Premium entitlement missing or free-use limit reached', {
+      if (chart.status === 'premium_required') {
+        console.warn('[ANALYSIS] Premium entitlement required', {
           pair,
           isSubscribed,
           billingAvailable,
         });
-        setAnalysisError(chart.message || 'Your free analysis has already been used.');
+        setAnalysisError(chart.message || 'A Premium subscription is required for chart analysis.');
         setStage('preview');
         router.replace('/paywall');
-        return;
-      }
-
-      if (chart.status === 'free_access_unavailable') {
-        const message = chart.message || 'Free analysis is temporarily unavailable because durable entitlement storage is not configured. Your free analysis was not used.';
-        console.error('[ANALYSIS ERROR] stage=entitlement error=free_access_unavailable status=503 response=', { message });
-        setAnalysisError(message);
-        Alert.alert('Analysis temporarily unavailable', message);
-        setStage('preview');
         return;
       }
 

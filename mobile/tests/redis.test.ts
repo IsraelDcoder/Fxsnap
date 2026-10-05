@@ -19,11 +19,3 @@ test('memory fallback stores and retrieves values', async () => {
   assert.deepEqual(await store.getJson('test-key'), { ok: true });
 });
 
-test('free-analysis reservations are atomic and releasable in memory mode', async () => {
-  const key = `free-analysis-test-${Date.now()}`;
-  assert.equal(await store.setJsonIfAbsent(key, 'first', 60), true);
-  assert.equal(await store.setJsonIfAbsent(key, 'second', 60), false);
-  assert.equal(await store.deleteJsonIfValue(key, 'second'), false);
-  assert.equal(await store.deleteJsonIfValue(key, 'first'), true);
-  assert.equal(await store.setJsonIfAbsent(key, 'second', 60), true);
-});

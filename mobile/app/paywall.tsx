@@ -78,8 +78,18 @@ export default function PaywallScreen() {
   if (isLoading || isSubscribed) return null;
 
   const selectedPlanMeta = plans.find((plan) => plan.plan === selectedPlan) ?? plans[0];
-  const selectedPlanLabel = selectedPlan === 'quarterly' ? '3-Month' : selectedPlan === 'monthly' ? 'Monthly' : 'Weekly';
+  const selectedPlanLabel = selectedPlan === 'quarterly' ? '3 Months' : selectedPlan === 'monthly' ? 'Monthly' : 'Weekly';
   const canPurchaseSelectedPlan = Boolean(selectedPlanMeta?.available);
+
+  const getPlanDisplayPrice = (plan: PlanOffering) => plan.price || '—';
+  const getPlanDisplayPeriod = (plan: PlanOffering) => {
+    if (plan.plan === 'weekly') return '/ week';
+    if (plan.plan === 'quarterly') return '/ 3 months';
+    return '/ month';
+  };
+  const getPlanBadge = (plan: PlanOffering) => (
+    plan.plan === 'monthly' ? '3 DAYS FREE' : 'NO TRIAL'
+  );
 
   const handleSubscribe = async () => {
     setLoading(true);
@@ -108,123 +118,154 @@ export default function PaywallScreen() {
   };
 
   return (
-    <ScreenWrapper style={[styles.container, { backgroundColor: colors.background }]} contentContainerStyle={[styles.scrollContent, { paddingBottom: botPad + 24 }]}>
+    <ScreenWrapper
+      style={[styles.container, { backgroundColor: '#000000' }]}
+      contentContainerStyle={[styles.scrollContent, { paddingBottom: botPad + 24, alignItems: 'center' }]}
+    >
       <View style={styles.header}>
-        <TouchableOpacity style={[styles.closeBtn, { backgroundColor: colors.card }]} onPress={dismissPaywall}>
-          <Feather name="x" size={20} color={colors.textSecondary} />
+        <TouchableOpacity style={styles.closeBtn} onPress={dismissPaywall}>
+          <Feather name="x" size={26} color="#FFFFFF" />
         </TouchableOpacity>
       </View>
-        <Animated.View entering={FadeInDown.delay(100).duration(600)} style={styles.hero}>
-          <View style={[styles.crownBox, { backgroundColor: colors.surface, borderColor: colors.cardBorder }]}>
-            <Feather name="zap" size={36} color="#FFD60A" />
+
+      <Animated.View entering={FadeInDown.delay(100).duration(600)} style={styles.hero}>
+        <View style={styles.logoBox}>
+          <Feather name="zap" size={52} color="#FFD60A" />
+        </View>
+        <Text style={styles.title}>FXSNAP PREMIUM</Text>
+        <Text style={styles.subtitle}>Your complete AI trading assistant.</Text>
+      </Animated.View>
+
+      <Animated.View entering={FadeInUp.delay(200).duration(600)} style={styles.featuresList}>
+        <View style={styles.featureRow}>
+          <View style={styles.featureIconWrap}>
+            <Feather name="bar-chart-2" size={24} color="#3CEB8C" />
           </View>
-          <Text style={[styles.title, { color: colors.text }]}>FXSNAP PREMIUM</Text>
-          <Text style={[styles.subtitle, { color: colors.textSecondary }]}>Your free analysis is done. Don't miss the next setup.</Text>
-        </Animated.View>
+          <View style={styles.featureTextWrap}>
+            <Text style={styles.featureTitle}>Unlimited chart analysis</Text>
+            <Text style={styles.featureSubtitle}>Get AI breakdowns in seconds.</Text>
+          </View>
+        </View>
+        <View style={styles.featureRow}>
+          <View style={styles.featureIconWrap}>
+            <Feather name="target" size={24} color="#3CEB8C" />
+          </View>
+          <View style={styles.featureTextWrap}>
+            <Text style={styles.featureTitle}>Entry, SL & TP for every setup</Text>
+            <Text style={styles.featureSubtitle}>Get clear trade levels with AI reasoning.</Text>
+          </View>
+        </View>
+        <View style={styles.featureRow}>
+          <View style={styles.featureIconWrap}>
+            <Feather name="cpu" size={24} color="#3CEB8C" />
+          </View>
+          <View style={styles.featureTextWrap}>
+            <Text style={styles.featureTitle}>AI reasoning behind every trade</Text>
+            <Text style={styles.featureSubtitle}>Understand why each setup works.</Text>
+          </View>
+        </View>
+        <View style={styles.featureRow}>
+          <View style={styles.featureIconWrap}>
+            <Feather name="bookmark" size={24} color="#3CEB8C" />
+          </View>
+          <View style={styles.featureTextWrap}>
+            <Text style={styles.featureTitle}>Save & track your strategies</Text>
+            <Text style={styles.featureSubtitle}>Keep your best setups in one place.</Text>
+          </View>
+        </View>
+      </Animated.View>
 
-        <Animated.View entering={FadeInUp.delay(200).duration(600)} style={[styles.featuresList, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
-          {FEATURES.map((f) => (
-            <View key={f} style={styles.featureRow}>
-              <View style={[styles.featureCheck, { backgroundColor: colors.buy }]}>
-                <Feather name="check" size={14} color={colors.primaryForeground} />
-              </View>
-              <Text style={[styles.featureText, { color: colors.text }]}>{f}</Text>
-            </View>
-          ))}
-        </Animated.View>
+      <Text style={styles.socialProof}>Join 2,500+ traders today</Text>
 
-        <Text style={[styles.socialProof, { color: colors.buy }]}>Join 1,586 traders today</Text>
+      <Animated.View entering={FadeInUp.delay(300).duration(600)} style={styles.plans}>
+        {loadingPlans ? (
+          <View style={styles.loadingState}>
+            <Text style={styles.loadingText}>Loading subscription options…</Text>
+          </View>
+        ) : plans.length > 0 ? (
+          plans.map((plan) => {
+            const isSelected = selectedPlan === plan.plan;
+            const isMonthly = plan.plan === 'monthly';
+            const planBadge = getPlanBadge(plan);
 
-        <Animated.View entering={FadeInUp.delay(300).duration(600)} style={styles.plans}>
-          {loadingPlans ? (
-            <View style={[styles.loadingState, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}> 
-              <Text style={[styles.loadingText, { color: colors.textSecondary }]}>Loading subscription options…</Text>
-            </View>
-          ) : plans.length > 0 ? (
-            plans.map((plan) => {
-              const isSelected = selectedPlan === plan.plan;
-
-              return (
-                <TouchableOpacity
-                  key={plan.plan}
-                  style={[
-                    styles.planCard,
-                    isSelected && styles.planCardSelected,
-                    !plan.available && styles.planCardUnavailable,
-                    {
-                      backgroundColor: isSelected ? colors.surface : colors.card,
-                      borderColor: isSelected ? colors.primary : colors.cardBorder,
-                      transform: [{ scale: isSelected ? 1.02 : 1 }],
-                      shadowColor: isSelected ? colors.primary : '#000000',
-                      shadowOpacity: isSelected ? 0.25 : 0,
-                      shadowRadius: isSelected ? 14 : 0,
-                      shadowOffset: { width: 0, height: 0 },
-                      elevation: isSelected ? 6 : 0,
-                    },
-                  ]}
-                  onPress={() => {
-                    if (!plan.available) return;
-                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    setSelectedPlan(plan.plan);
-                  }}
-                  disabled={!plan.available}
-                  activeOpacity={0.95}
-                >
-                  {plan.plan === 'monthly' && (
-                    <View style={styles.planTag}>
-                      <Text style={styles.planTagText}>BEST VALUE</Text>
-                    </View>
-                  )}
-                  <View style={styles.planInfo}>
-                    <Text style={[styles.planName, { color: colors.textSecondary }]}>{plan.title}</Text>
-                    <Text style={[styles.planPrice, { color: colors.text }]}>
-                      {plan.price}
-                      <Text style={[styles.planPeriod, { color: colors.textSecondary }]}> / {plan.period}</Text>
-                    </Text>
+            return (
+              <TouchableOpacity
+                key={plan.plan}
+                style={[
+                  styles.planCard,
+                  isSelected && styles.planCardSelected,
+                  !plan.available && styles.planCardUnavailable,
+                  isMonthly && styles.monthlyPlanCard,
+                ]}
+                onPress={() => {
+                  if (!plan.available) return;
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setSelectedPlan(plan.plan);
+                }}
+                disabled={!plan.available}
+                activeOpacity={0.95}
+              >
+                {isMonthly && <View style={styles.planTag}><Text style={styles.planTagText}>BEST VALUE</Text></View>}
+                <Text style={styles.planBadge}>{planBadge}</Text>
+                <Text style={[styles.planName, isSelected && styles.planNameSelected]}>{plan.plan === 'weekly' ? 'Weekly' : plan.plan === 'monthly' ? 'Monthly' : '3 Months'}</Text>
+                <View style={styles.planRadioWrap}>
+                  <View style={[styles.planRadio, isSelected && styles.planRadioSelected]}>
+                    {isSelected && <View style={styles.planRadioDot} />}
                   </View>
-                </TouchableOpacity>
-              );
-            })
-          ) : (
-            <View style={[styles.loadingState, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}> 
-              <Text style={[styles.loadingText, { color: colors.textSecondary }]}>Billing options are not available right now.</Text>
-            </View>
-          )}
-        </Animated.View>
+                </View>
+                <Text style={[styles.planPrice, isSelected && styles.planPriceSelected]}>
+                  {getPlanDisplayPrice(plan)}
+                </Text>
+                <Text style={[styles.planPeriod, isSelected && styles.planPeriodSelected]}>{getPlanDisplayPeriod(plan)}</Text>
+              </TouchableOpacity>
+            );
+          })
+        ) : (
+          <View style={styles.loadingState}>
+            <Text style={styles.loadingText}>Billing options are not available right now.</Text>
+          </View>
+        )}
+      </Animated.View>
 
-        <Animated.View entering={FadeInUp.delay(400).duration(600)} style={styles.actions}>
-          <TouchableOpacity
-            style={[
-              styles.subscribeBtn,
-              (loading || !billingAvailable || !canPurchaseSelectedPlan) && { opacity: 0.65 },
-              { backgroundColor: colors.primary },
-            ]}
-            onPress={handleSubscribe}
-            disabled={loading || !billingAvailable || !canPurchaseSelectedPlan}
-          >
-            <Text style={[styles.subscribeBtnText, { color: colors.primaryForeground }]}>
-              {loading ? 'Processing...' : billingAvailable ? `Start ${selectedPlanLabel} Plan` : 'Billing unavailable'}
-            </Text>
-          </TouchableOpacity>
-          <Text style={[styles.reassuranceText, { color: colors.textSecondary }]}>Cancel anytime.</Text>
-          <Text style={[styles.reassuranceText, { color: colors.textMuted }]}>No risk. Let your first win decide.</Text>
-          <TouchableOpacity style={styles.cancelButton} onPress={dismissPaywall}>
-            <Text style={[styles.cancelText, { color: colors.textSecondary }]}>Cancel</Text>
-          </TouchableOpacity>
-          <TouchableOpacity onPress={async () => {
-            setLoading(true);
-            try {
-              const restored = await restorePurchases();
-              if (restored) dismissPaywall();
-              else Alert.alert('No active subscription', 'No active FXSnap Premium entitlement was found.');
-            } catch (error) {
-              Alert.alert('Restore failed', error instanceof Error ? error.message : 'Unable to restore purchases.');
-            } finally { setLoading(false); }
-          }}>
-            <Text style={[styles.restoreText, { color: colors.textSecondary }]}>Restore Purchase</Text>
-          </TouchableOpacity>
-          <Text style={[styles.legalText, { color: colors.textMuted }]}>If you need help, contact support@fxsnap.app with your app build information.</Text>
-        </Animated.View>
+      <Animated.View entering={FadeInUp.delay(400).duration(600)} style={styles.actions}>
+        <TouchableOpacity
+          style={[
+            styles.subscribeBtn,
+            (loading || !billingAvailable || !canPurchaseSelectedPlan) && { opacity: 0.65 },
+          ]}
+          onPress={handleSubscribe}
+          disabled={loading || !billingAvailable || !canPurchaseSelectedPlan}
+        >
+          <Text style={styles.subscribeBtnText}>
+            {loading ? 'Processing...' : billingAvailable ? `Start ${selectedPlanLabel} Plan` : 'Billing unavailable'}
+          </Text>
+          <Feather name="arrow-right" size={20} color="#000000" />
+        </TouchableOpacity>
+
+        <View style={styles.footerMeta}>
+          <View style={styles.metaItem}>
+            <Feather name="check-circle" size={18} color="#3CEB8C" />
+            <Text style={styles.metaText}>Cancel anytime</Text>
+          </View>
+          <View style={styles.metaDivider} />
+          <View style={styles.metaItem}>
+            <Feather name="users" size={18} color="#3CEB8C" />
+            <Text style={styles.metaText}>Join 2,500+ traders</Text>
+          </View>
+          <View style={styles.metaDivider} />
+          <View style={styles.metaItem}>
+            <Feather name="shield" size={18} color="#3CEB8C" />
+            <Text style={styles.metaText}>Secure payment</Text>
+          </View>
+        </View>
+
+        <Text style={styles.footerNote}>No risk. Let your first win decide.</Text>
+        <View style={styles.legalRow}>
+          <Text style={styles.legalText}>Terms of Service</Text>
+          <Text style={styles.legalDivider}>|</Text>
+          <Text style={styles.legalText}>Privacy Policy</Text>
+        </View>
+      </Animated.View>
     </ScreenWrapper>
   );
 }
@@ -240,187 +281,293 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
   },
   closeBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 48,
+    height: 48,
     alignItems: 'center',
     justifyContent: 'center',
+    marginLeft: 4,
   },
   scroll: { flex: 1 },
   scrollContent: {
+    width: '100%',
+    maxWidth: 560,
+    alignSelf: 'center',
     paddingHorizontal: 24,
-    gap: 24,
+    gap: 18,
   },
   hero: {
     alignItems: 'center',
-    gap: 12,
+    gap: 10,
   },
-  crownBox: {
-    width: 80,
-    height: 80,
-    borderRadius: 24,
-    backgroundColor: '#1A1800',
+  logoBox: {
+    width: 110,
+    height: 110,
+    borderRadius: 28,
+    backgroundColor: '#1B1B1B',
     borderWidth: 1,
-    borderColor: '#3D3400',
+    borderColor: '#2B2B2B',
     alignItems: 'center',
     justifyContent: 'center',
   },
   title: {
-    fontSize: 30,
+    fontSize: 62,
+    lineHeight: 62,
     fontFamily: 'Inter_700Bold',
     color: '#FFFFFF',
+    textAlign: 'center',
+    letterSpacing: -2,
   },
   subtitle: {
-    fontSize: 15,
+    fontSize: 28,
+    lineHeight: 36,
     fontFamily: 'Inter_400Regular',
-    color: '#8E8E93',
+    color: '#F4F4F4',
+    textAlign: 'center',
+    fontStyle: 'italic',
   },
   featuresList: {
-    gap: 10,
-    backgroundColor: '#1A1A1A',
-    borderRadius: 18,
-    padding: 18,
+    gap: 18,
+    backgroundColor: '#191919',
+    borderRadius: 20,
+    paddingVertical: 22,
+    paddingHorizontal: 18,
     borderWidth: 1,
-    borderColor: '#2A2A2A',
+    borderColor: '#2B2B2B',
   },
   featureRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    gap: 14,
   },
-  featureCheck: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: '#00E676',
+  featureIconWrap: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#132D20',
+    borderWidth: 2,
+    borderColor: '#2EDB82',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  featureText: {
-    fontSize: 15,
-    fontFamily: 'Inter_500Medium',
+  featureTextWrap: {
+    flex: 1,
+    gap: 2,
+  },
+  featureTitle: {
+    fontSize: 18,
+    lineHeight: 24,
+    fontFamily: 'Inter_700Bold',
     color: '#FFFFFF',
   },
+  featureSubtitle: {
+    fontSize: 15,
+    lineHeight: 20,
+    fontFamily: 'Inter_400Regular',
+    color: '#B9B9B9',
+  },
   socialProof: {
-    fontSize: 14,
+    fontSize: 17,
     fontFamily: 'Inter_700Bold',
     textAlign: 'center',
-    marginTop: -10,
+    color: '#39D98A',
+    marginTop: 4,
   },
   plans: {
-    gap: 12,
+    width: '100%',
+    gap: 16,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'stretch',
+    justifyContent: 'space-between',
   },
   loadingState: {
-    borderRadius: 16,
+    borderRadius: 18,
     borderWidth: 1,
     paddingVertical: 18,
     paddingHorizontal: 20,
     alignItems: 'center',
+    backgroundColor: '#1A1A1A',
+    borderColor: '#2A2A2A',
+    width: '100%',
   },
   loadingText: {
     fontSize: 14,
     fontFamily: 'Inter_500Medium',
     textAlign: 'center',
+    color: '#8E8E93',
   },
   planCard: {
-    alignItems: 'flex-start',
-    backgroundColor: '#1A1A1A',
-    borderRadius: 16,
-    padding: 18,
+    flexBasis: '30%',
+    flexGrow: 1,
+    minWidth: 120,
+    minHeight: 170,
+    backgroundColor: '#141414',
+    borderRadius: 18,
+    paddingVertical: 18,
+    paddingHorizontal: 14,
     borderWidth: 2,
     borderColor: '#2A2A2A',
     position: 'relative',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   planCardUnavailable: {
     opacity: 0.45,
+  },
+  monthlyPlanCard: {
+    borderColor: '#00FF9D',
+    backgroundColor: '#111111',
+    shadowColor: '#00FF9D',
+    shadowOpacity: 0.2,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 8,
   },
   planCardSelected: {
     borderColor: '#00FF9D',
   },
   planTag: {
     position: 'absolute',
-    top: -10,
-    right: 16,
+    top: -12,
+    left: '50%',
+    transform: [{ translateX: -45 }],
     backgroundColor: '#FFD60A',
-    paddingHorizontal: 10,
-    paddingVertical: 3,
-    borderRadius: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 10,
   },
   planTagText: {
     fontSize: 11,
     fontFamily: 'Inter_700Bold',
-    color: '#000',
-  },
-  planInfo: {
-    gap: 6,
-  },
-  planName: {
-    fontSize: 14,
-    fontFamily: 'Inter_600SemiBold',
-    letterSpacing: 0.2,
-    color: '#FFFFFF',
+    color: '#000000',
     textTransform: 'uppercase',
   },
+  planBadge: {
+    fontSize: 11,
+    fontFamily: 'Inter_700Bold',
+    color: '#9AE6B4',
+    textTransform: 'uppercase',
+    marginBottom: 8,
+    letterSpacing: 0.8,
+  },
+  planName: {
+    fontSize: 18,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#FFFFFF',
+    marginBottom: 8,
+  },
+  planNameSelected: {
+    color: '#FFFFFF',
+  },
+  planRadioWrap: {
+    position: 'absolute',
+    right: 14,
+    top: 18,
+  },
+  planRadio: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: '#7E7E7E',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  planRadioSelected: {
+    borderColor: '#3CEB8C',
+    backgroundColor: '#0D1E14',
+  },
+  planRadioDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#3CEB8C',
+  },
   planPrice: {
-    fontSize: 27,
+    fontSize: 34,
     fontFamily: 'Inter_700Bold',
     color: '#FFFFFF',
-    lineHeight: 32,
+    lineHeight: 34,
+  },
+  planPriceSelected: {
+    color: '#FFFFFF',
   },
   planPeriod: {
     fontSize: 14,
     fontFamily: 'Inter_500Medium',
-    color: '#8E8E93',
+    color: '#9A9A9A',
+    marginTop: 4,
+  },
+  planPeriodSelected: {
+    color: '#FFFFFF',
   },
   actions: {
-    gap: 14,
+    gap: 18,
     alignItems: 'center',
-    marginTop: 'auto',
+    marginTop: 4,
   },
   subscribeBtn: {
     width: '100%',
-    minHeight: 56,
-    paddingVertical: 12,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
+    minHeight: 62,
+    paddingHorizontal: 22,
+    backgroundColor: '#F5F5F5',
+    borderRadius: 18,
     alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'space-between',
+    flexDirection: 'row',
   },
   subscribeBtnText: {
-    fontSize: 17,
+    fontSize: 26,
+    lineHeight: 32,
     fontFamily: 'Inter_700Bold',
-    color: '#000',
+    color: '#000000',
   },
-  reassuranceText: {
-    fontSize: 12,
-    fontFamily: 'Inter_500Medium',
-    textAlign: 'center',
-    marginTop: -8,
-  },
-  cancelButton: {
+  footerMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     width: '100%',
-    minHeight: 44,
-    borderRadius: 12,
+    gap: 12,
+  },
+  metaItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flex: 1,
+    justifyContent: 'center',
+  },
+  metaText: {
+    fontSize: 13,
+    fontFamily: 'Inter_500Medium',
+    color: '#F5F5F5',
+  },
+  metaDivider: {
+    width: 1,
+    height: 18,
+    backgroundColor: '#3A3A3A',
+  },
+  footerNote: {
+    fontSize: 18,
+    fontFamily: 'Inter_400Regular',
+    color: '#F5F5F5',
+    textAlign: 'center',
+    marginTop: 4,
+  },
+  legalRow: {
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#2A2A2A',
-    backgroundColor: '#121212',
-  },
-  cancelText: {
-    fontSize: 14,
-    fontFamily: 'Inter_600SemiBold',
-    color: '#8E8E93',
-  },
-  restoreText: {
-    fontSize: 14,
-    fontFamily: 'Inter_400Regular',
-    color: '#8E8E93',
+    gap: 10,
+    marginTop: 2,
   },
   legalText: {
-    fontSize: 12,
+    fontSize: 14,
     fontFamily: 'Inter_400Regular',
-    color: '#48484A',
+    color: '#CFCFCF',
     textAlign: 'center',
+  },
+  legalDivider: {
+    fontSize: 14,
+    color: '#7A7A7A',
   },
 });

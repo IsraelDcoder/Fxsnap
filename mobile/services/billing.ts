@@ -4,7 +4,7 @@ import { getDeviceId } from '@/services/apiAuth';
 import { hasRevenueCatEntitlement, REVENUECAT_ENTITLEMENT_CANDIDATES } from '@/services/revenuecatEntitlements';
 
 export type BillingPlan = 'weekly' | 'monthly' | 'quarterly';
-export const PREMIUM_ENTITLEMENT_ID = process.env.EXPO_PUBLIC_RC_ENTITLEMENT_ID || 'Pro';
+export const PREMIUM_ENTITLEMENT_ID = process.env.EXPO_PUBLIC_RC_ENTITLEMENT_ID || 'premium';
 export const PREMIUM_ENTITLEMENT_IDS = REVENUECAT_ENTITLEMENT_CANDIDATES;
 
 const IOS_KEY = process.env.EXPO_PUBLIC_RC_IOS_KEY || '';

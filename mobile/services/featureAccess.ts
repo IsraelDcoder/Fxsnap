@@ -10,23 +10,14 @@ export function isPremiumFeatureRoute(path: string): boolean {
   return PREMIUM_FEATURE_ROUTES.has(path);
 }
 
-export function getFeatureAccessDecision(feature: string, isSubscribed: boolean, hasUsedFreeAnalysis: boolean): FeatureAccessDecision {
+export function getFeatureAccessDecision(feature: string, isSubscribed: boolean): FeatureAccessDecision {
   if (isSubscribed) return { allowed: true, requiresPaywall: false };
-  if ((feature === 'AI_ANALYSIS' || feature === 'TRADE_SETUP') && !hasUsedFreeAnalysis) return { allowed: true, requiresPaywall: false };
   if (feature === 'AI_ANALYSIS' || feature === 'TRADE_SETUP' || feature === 'STRATEGY_GENERATOR') return { allowed: false, requiresPaywall: true };
   return { allowed: true, requiresPaywall: false };
 }
 
-export function shouldAllowAnalysisAccess({ isSubscribed, hasUsedFreeAnalysis }: { isSubscribed: boolean; hasUsedFreeAnalysis: boolean }): boolean {
-  return isSubscribed || !hasUsedFreeAnalysis;
-}
-
-export function shouldShowPaywall({ isSubscribed, hasUsedFreeAnalysis }: { isSubscribed: boolean; hasUsedFreeAnalysis: boolean }): boolean {
-  return !isSubscribed && hasUsedFreeAnalysis;
-}
-
-export function shouldGuardFeatureRoute(path: string, isSubscribed: boolean, hasUsedFreeAnalysis = false): boolean {
-  if (path === '/analysis') return getFeatureAccessDecision('AI_ANALYSIS', isSubscribed, hasUsedFreeAnalysis).requiresPaywall;
-  if (path === '/strategy') return getFeatureAccessDecision('STRATEGY_GENERATOR', isSubscribed, hasUsedFreeAnalysis).requiresPaywall;
+export function shouldGuardFeatureRoute(path: string, isSubscribed: boolean): boolean {
+  if (path === '/analysis') return getFeatureAccessDecision('AI_ANALYSIS', isSubscribed).requiresPaywall;
+  if (path === '/strategy') return getFeatureAccessDecision('STRATEGY_GENERATOR', isSubscribed).requiresPaywall;
   return false;
 }

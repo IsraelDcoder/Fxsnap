@@ -2,7 +2,6 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router } from 'expo-router';
 import { addBillingListener, billingIsConfigured, configureBilling, getPremiumStatus, purchasePlan, restorePurchases, type BillingPlan } from '@/services/billing';
-import { hasUsedFreeAnalysis } from '@/services/apiAuth';
 import { getFeatureAccessDecision, type FeatureAccessDecision, type ProtectedFeature } from '@/services/featureAccess';
 import { setHapticsEnabled } from '@/services/haptics';
 import { createDailyRiskActivity, getLocalRiskDateKey, normalizeDailyRiskActivity, type DailyRiskActivity, type OpenRiskPosition } from '@/services/risk';
@@ -12,7 +11,7 @@ const DATA_VERSION_KEY = 'fxsnap:dataVersion';
 const BACKUP_VERSION = 1;
 const RISK_ACTIVITY_KEY = 'fxsnap:riskActivity';
 
-export type AnalysisStatus = 'success' | 'no_trade' | 'invalid_image' | 'ai_unavailable' | 'ai_invalid_response' | 'free_analysis_used' | 'free_access_unavailable';
+export type AnalysisStatus = 'success' | 'no_trade' | 'invalid_image' | 'ai_unavailable' | 'ai_invalid_response' | 'premium_required';
 
 export interface AnalysisResult {
   id: string;
@@ -376,19 +375,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
     const subscriptionActive = isSubscribed;
 
-    let freeAnalysisUsed = false;
-    if ((feature === 'AI_ANALYSIS' || feature === 'TRADE_SETUP') && !subscriptionActive) {
-      try {
-        freeAnalysisUsed = await hasUsedFreeAnalysis();
-      } catch {
-        return { allowed: false, requiresPaywall: false, error: 'Unable to verify free analysis access right now. Please try again.' };
-      }
-    }
-
-    const decision = getFeatureAccessDecision(feature, subscriptionActive, freeAnalysisUsed);
+    const decision = getFeatureAccessDecision(feature, subscriptionActive);
     console.log(`[ACCESS] Feature: ${feature}`);
     console.log(`[ACCESS] Subscription status: ${subscriptionActive}`);
-    console.log(`[ACCESS] Free analysis used: ${feature === 'AI_ANALYSIS' || feature === 'TRADE_SETUP' ? freeAnalysisUsed : 'not applicable'}`);
     console.log(`[ACCESS] Result: ${decision.allowed ? 'ALLOWED' : 'PAYWALL'}`);
     console.log(`[ACCESS] Navigation: ${decision.allowed ? route : '/paywall'}`);
 

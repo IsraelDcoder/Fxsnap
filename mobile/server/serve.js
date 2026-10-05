@@ -15,7 +15,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { z } = require('zod');
 const persistentStore = require('./persistentStore');
-const { createAuth, verifyAuth, verifyAuthIdentity } = require('./auth');
+const { createAuth, verifyAuth } = require('./auth');
 const marketService = require('./marketService');
 // Optional Twelve Data provider (server-side market data proxy)
 let marketProvider = null;
@@ -1524,12 +1524,6 @@ function requireAuth(req, res) {
   return deviceId;
 }
 
-function getFreeAnalysisId(req) {
-  const token = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
-  const identity = verifyAuthIdentity(AUTH_SECRET, token);
-  return identity?.freeAnalysisId || null;
-}
-
 function readJsonBody(req) {
   return new Promise((resolve, reject) => {
     let raw = '';
@@ -1862,37 +1856,15 @@ async function analyzeChart(req, res) {
       ? await getRevenueCatPremiumStatus(deviceId)
       : false;
     const hasPremiumAccess = verifiedPremium === true || (verifiedPremium === null && input.premiumAccess === true);
-    const freeAnalysisId = getFreeAnalysisId(req) || deviceId;
-    const accessKey = `fxsnap:freeAnalysis:used:${freeAnalysisId}`;
-    const reservationKey = `fxsnap:freeAnalysis:pending:${freeAnalysisId}`;
-    let reservation = null;
     if (!hasPremiumAccess) {
-      if (process.env.NODE_ENV === 'production' && !persistentStore.enabled) {
-        return sendJson(res, 503, { error: 'Free analysis access storage is not configured.' });
-      }
-      if (await persistentStore.getJson(accessKey)) {
-        return sendJson(res, 402, {
-          code: 'PREMIUM_REQUIRED',
-          reason: 'FREE_ANALYSIS_USED',
-          error: 'free_analysis_used',
-          message: 'Your free chart analysis has already been used.',
-        });
-      }
-      reservation = crypto.randomBytes(16).toString('hex');
-      if (!(await persistentStore.setJsonIfAbsent(reservationKey, reservation, 300))) {
-        if (await persistentStore.getJson(accessKey)) {
-          return sendJson(res, 402, {
-            code: 'PREMIUM_REQUIRED',
-            reason: 'FREE_ANALYSIS_USED',
-            error: 'free_analysis_used',
-            message: 'Your free chart analysis has already been used.',
-          });
-        }
-        return sendJson(res, 409, { error: 'analysis_in_progress' });
-      }
+      return sendJson(res, 402, {
+        code: 'PREMIUM_REQUIRED',
+        error: 'premium_required',
+        message: 'A Premium subscription is required for chart analysis.',
+      });
     }
 
-    try {
+    {
       let raw = null;
       let lastError = null;
       try {
@@ -1931,10 +1903,6 @@ async function analyzeChart(req, res) {
         finalResult.status = 'no_trade';
       }
 
-      if (!hasPremiumAccess && ['success', 'no_trade'].includes(finalResult.status)) {
-        await persistentStore.setJson(accessKey, { usedAt: new Date().toISOString() });
-      }
-
       if (finalResult.status === 'success' && finalResult.trade_setup.type !== 'none') {
         try {
         const generatedSignal = {
@@ -1961,27 +1929,10 @@ async function analyzeChart(req, res) {
       }
 
       return sendJson(res, 200, finalResult);
-    } finally {
-      if (reservation) await persistentStore.deleteJsonIfValue(reservationKey, reservation);
     }
   } catch (error) {
     console.error('[Chart AI] Error:', error);
     return sendJson(res, 200, aiUnavailableResponse(input, `Chart AI failed: ${(error instanceof Error ? error.message : 'unknown error')}`));
-  }
-}
-
-async function getAnalysisAccess(req, res) {
-  const deviceId = requireAuth(req, res); if (!deviceId) return;
-  try {
-    if (process.env.NODE_ENV === 'production' && !persistentStore.enabled) {
-      return sendJson(res, 503, { error: 'Free analysis access storage is not configured.' });
-    }
-    const freeAnalysisId = getFreeAnalysisId(req) || deviceId;
-    const used = Boolean(await persistentStore.getJson(`fxsnap:freeAnalysis:used:${freeAnalysisId}`));
-    return sendJson(res, 200, { used });
-  } catch (error) {
-    console.error('[Analysis access] Lookup failed:', error);
-    return sendJson(res, 503, { error: 'Unable to verify free analysis access.' });
   }
 }
 
@@ -2083,10 +2034,8 @@ function createRequestHandler() {
     if (pathname === '/api/session' && req.method === 'POST') {
       return readJsonBody(req).then((body) => {
         const deviceId = String(body.deviceId || '');
-        const freeAnalysisId = String(body.freeAnalysisId || deviceId);
         if (!/^[a-zA-Z0-9_-]{16,128}$/.test(deviceId)) return sendJson(res, 400, { error: 'Invalid device identity.' });
-        if (!/^[a-zA-Z0-9_-]{16,128}$/.test(freeAnalysisId)) return sendJson(res, 400, { error: 'Invalid free analysis identity.' });
-        return sendJson(res, 200, { token: createAuth(AUTH_SECRET, deviceId, undefined, freeAnalysisId), expiresIn: 30 * 24 * 60 * 60 });
+        return sendJson(res, 200, { token: createAuth(AUTH_SECRET, deviceId), expiresIn: 30 * 24 * 60 * 60 });
       }).catch((error) => sendJson(res, 400, { error: error.message }));
     }
 
@@ -2208,7 +2157,6 @@ function createRequestHandler() {
       }
     }
     if ((pathname === '/api/chart-analysis' || pathname === '/analyze-chart') && req.method === 'POST') return analyzeChart(req, res);
-    if (pathname === '/api/analysis-access' && req.method === 'GET') return getAnalysisAccess(req, res);
     if (pathname === '/api/events' && req.method === 'POST') return receiveEvent(req, res);
     if (pathname === '/api/entitlement' && req.method === 'GET') return getEntitlement(req, res);
     if (pathname === '/api/signals' && req.method === 'POST') return recordSignal(req, res);
