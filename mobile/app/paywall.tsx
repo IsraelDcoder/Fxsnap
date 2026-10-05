@@ -190,7 +190,6 @@ export default function PaywallScreen() {
           plans.map((plan) => {
             const isSelected = isSelectedPlan(plan.plan);
             const isMonthly = plan.plan === 'monthly';
-            const isQuarterly = plan.plan === 'quarterly';
             const planBadge = getPlanBadge(plan);
 
             return (
@@ -201,7 +200,6 @@ export default function PaywallScreen() {
                   isSelected && styles.planCardSelected,
                   !plan.available && styles.planCardUnavailable,
                   isMonthly && styles.monthlyPlanCard,
-                  isQuarterly && styles.quarterlyPlanCard,
                 ]}
                 onPress={() => {
                   if (!plan.available) return;
@@ -219,7 +217,12 @@ export default function PaywallScreen() {
                     {isSelected && <View style={styles.planRadioDot} />}
                   </View>
                 </View>
-                <Text style={[styles.planPrice, isSelected && styles.planPriceSelected]}>
+                <Text
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.65}
+                  style={[styles.planPrice, isSelected && styles.planPriceSelected]}
+                >
                   {getPlanDisplayPrice(plan)}
                 </Text>
                 <Text style={[styles.planPeriod, isSelected && styles.planPeriodSelected]}>{getPlanDisplayPeriod(plan)}</Text>
@@ -282,9 +285,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#000000',
   },
   header: {
+    width: '100%',
     alignItems: 'flex-end',
-    paddingHorizontal: 20,
-    paddingVertical: 12,
+    paddingVertical: 8,
   },
   closeBtn: {
     width: 48,
@@ -340,6 +343,7 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   featuresList: {
+    width: '100%',
     gap: 12,
     backgroundColor: '#191919',
     borderRadius: 20,
@@ -388,9 +392,9 @@ const styles = StyleSheet.create({
   },
   plans: {
     width: '100%',
-    gap: 12,
+    gap: 8,
     flexDirection: 'row',
-    flexWrap: 'wrap',
+    flexWrap: 'nowrap',
     alignItems: 'stretch',
     justifyContent: 'space-between',
   },
@@ -411,12 +415,13 @@ const styles = StyleSheet.create({
     color: '#8E8E93',
   },
   planCard: {
-    width: '48%',
-    minHeight: 170,
+    flex: 1,
+    minWidth: 0,
+    minHeight: 136,
     backgroundColor: '#141414',
     borderRadius: 18,
-    paddingVertical: 18,
-    paddingHorizontal: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 6,
     borderWidth: 2,
     borderColor: '#2A2A2A',
     position: 'relative',
@@ -434,10 +439,6 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     shadowOffset: { width: 0, height: 0 },
     elevation: 8,
-  },
-  quarterlyPlanCard: {
-    width: '100%',
-    marginTop: 4,
   },
   planCardSelected: {
     borderColor: '#00FF9D',
@@ -459,31 +460,31 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
   planBadge: {
-    fontSize: 11,
+    fontSize: 9,
     fontFamily: 'Inter_700Bold',
     color: '#9AE6B4',
     textTransform: 'uppercase',
     marginBottom: 8,
-    letterSpacing: 0.8,
+    letterSpacing: 0.3,
   },
   planName: {
-    fontSize: 18,
+    fontSize: 14,
     fontFamily: 'Inter_600SemiBold',
     color: '#FFFFFF',
-    marginBottom: 8,
+    marginBottom: 5,
   },
   planNameSelected: {
     color: '#FFFFFF',
   },
   planRadioWrap: {
     position: 'absolute',
-    right: 14,
-    top: 18,
+    right: 8,
+    top: 10,
   },
   planRadio: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
     borderWidth: 2,
     borderColor: '#7E7E7E',
     alignItems: 'center',
@@ -494,22 +495,22 @@ const styles = StyleSheet.create({
     backgroundColor: '#0D1E14',
   },
   planRadioDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
     backgroundColor: '#3CEB8C',
   },
   planPrice: {
-    fontSize: 34,
+    fontSize: 15,
     fontFamily: 'Inter_700Bold',
     color: '#FFFFFF',
-    lineHeight: 34,
+    lineHeight: 19,
   },
   planPriceSelected: {
     color: '#FFFFFF',
   },
   planPeriod: {
-    fontSize: 14,
+    fontSize: 11,
     fontFamily: 'Inter_500Medium',
     color: '#9A9A9A',
     marginTop: 4,
