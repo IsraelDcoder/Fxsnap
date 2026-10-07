@@ -397,6 +397,18 @@ export default function AnalysisResultScreen() {
           </Animated.View>
         </Animated.View>
 
+        {currentAnalysis.multiTimeframe && (
+          <Animated.View entering={FadeInUp.delay(300).duration(500)} style={[styles.levelsCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+            <Text style={[styles.cardTitle, { color: colors.text }]}>Multi-Timeframe Read</Text>
+            <DataRow label="4H Structure" value={`${currentAnalysis.multiTimeframe.h4.trend} · ${currentAnalysis.multiTimeframe.h4.structure || 'structure unclear'}`} delay={340} />
+            <View style={styles.divider} />
+            <DataRow label="15M Setup" value={`${currentAnalysis.multiTimeframe.m15.trend} · ${currentAnalysis.multiTimeframe.m15.confirmation || currentAnalysis.multiTimeframe.m15.structure || 'no confirmation'}`} delay={390} />
+            <View style={styles.divider} />
+            <DataRow label="Alignment" value={currentAnalysis.multiTimeframe.alignment.toUpperCase()} valueColor={currentAnalysis.multiTimeframe.alignment === 'aligned' ? colors.buy : colors.sell} delay={440} />
+            <Text style={[styles.chartNotes, { color: colors.textSecondary }]}>{currentAnalysis.multiTimeframe.summary}</Text>
+          </Animated.View>
+        )}
+
         {/* ── Trade setup (new shape) ── */}
         {hasTradeSetup && currentAnalysis.tradeSetup && (
           <Animated.View entering={FadeInUp.delay(500).duration(500)} style={styles.levelsCard}>

@@ -166,6 +166,22 @@ const TradeAnalysisSchema = z.object({
   message: z.string().trim().optional(),
   detectedPair: z.string().trim().optional().nullable(),
   timeframe: z.string().trim().optional().nullable(),
+  multiTimeframe: z.object({
+    alignment: z.enum(['aligned', 'conflicting', 'unclear']),
+    summary: z.string().trim().max(500),
+    h4: z.object({ chartValid: z.boolean(), trend: z.enum(['bullish', 'bearish', 'neutral']), structure: z.string().trim().max(300) }),
+    m15: z.object({ chartValid: z.boolean(), trend: z.enum(['bullish', 'bearish', 'neutral']), structure: z.string().trim().max(300), confirmation: z.string().trim().max(300) }),
+  }).optional(),
+  timeframes_detected: z.array(z.object({
+    timeframe: z.string().trim().max(12),
+    observations: z.record(z.unknown()),
+  })).length(2).optional(),
+  m15: z.object({
+    confirmation: z.string().trim().max(300).nullable().optional(),
+    bos: z.object({ detected: z.boolean().optional() }).optional(),
+    rsi: z.object({ visible: z.boolean().optional(), confirms: z.boolean().optional() }).optional(),
+    liquidity: z.object({ swept: z.boolean().optional() }).optional(),
+  }).optional(),
   chart: z.object({
     is_chart: z.boolean(),
     pair: z.string().trim().optional(),
@@ -218,6 +234,20 @@ const TradeAnalysisSchema = z.object({
   reasons: z.array(z.string().trim().max(300)),
   market_data_timestamp: z.string().optional().nullable(),
   market_data_source: z.string().trim().optional().nullable(),
+});
+const MultiTimeframeInputSchema = z.object({
+  pair: z.string().trim().min(1).max(20),
+  premiumAccess: z.boolean().optional(),
+  charts: z.object({
+    h4: z.object({
+      imageBase64: z.string().min(100).max(5_400_000),
+      mimeType: z.enum(['image/jpeg', 'image/png', 'image/webp']),
+    }),
+    m15: z.object({
+      imageBase64: z.string().min(100).max(5_400_000),
+      mimeType: z.enum(['image/jpeg', 'image/png', 'image/webp']),
+    }),
+  }),
 });
 
 function truncateText(value, maxLength = 2000) {
@@ -422,6 +452,23 @@ function canonicalizeRawAnalysis(raw) {
     message: ensureString(raw.message),
     detectedPair: ensureNullableString(raw.detectedPair || raw.pair),
     timeframe: ensureNullableString(raw.timeframe),
+    multiTimeframe: raw.multiTimeframe && typeof raw.multiTimeframe === 'object' ? {
+      alignment: canonicalizeEnum(raw.multiTimeframe.alignment, { aligned: 'aligned', conflicting: 'conflicting', unclear: 'unclear' }) || 'unclear',
+      summary: ensureString(raw.multiTimeframe.summary),
+      h4: {
+        chartValid: parseBoolean(raw.multiTimeframe.h4?.chartValid, false),
+        trend: canonicalizeEnum(raw.multiTimeframe.h4?.trend, { bullish: 'bullish', bearish: 'bearish', neutral: 'neutral' }) || 'neutral',
+        structure: ensureString(raw.multiTimeframe.h4?.structure),
+      },
+      m15: {
+        chartValid: parseBoolean(raw.multiTimeframe.m15?.chartValid, false),
+        trend: canonicalizeEnum(raw.multiTimeframe.m15?.trend, { bullish: 'bullish', bearish: 'bearish', neutral: 'neutral' }) || 'neutral',
+        structure: ensureString(raw.multiTimeframe.m15?.structure),
+        confirmation: ensureString(raw.multiTimeframe.m15?.confirmation),
+      },
+    } : undefined,
+    timeframes_detected: Array.isArray(raw.timeframes_detected) ? raw.timeframes_detected : undefined,
+    m15: raw.m15 && typeof raw.m15 === 'object' ? raw.m15 : undefined,
     chart: {
       ...DEFAULT_CHART,
       is_chart: parseBoolean(chartRaw.is_chart, status !== 'invalid_image'),
@@ -543,6 +590,12 @@ function normalizeAnalysis(raw) {
     message: typeof raw.message === 'string' ? raw.message.trim() : undefined,
     detectedPair: typeof raw.detectedPair === 'string' ? raw.detectedPair.trim() : null,
     timeframe: typeof raw.timeframe === 'string' ? raw.timeframe.trim() : null,
+    multiTimeframe: raw.multiTimeframe,
+    timeframes_detected: raw.multiTimeframe ? [
+      { timeframe: 'H4', observations: { trend: raw.multiTimeframe.h4.trend, structure: raw.multiTimeframe.h4.structure } },
+      { timeframe: 'M15', observations: { trend: raw.multiTimeframe.m15.trend, structure: raw.multiTimeframe.m15.structure, confirmation: raw.multiTimeframe.m15.confirmation } },
+    ] : Array.isArray(raw.timeframes_detected) ? raw.timeframes_detected : undefined,
+    m15: raw.m15 && typeof raw.m15 === 'object' ? raw.m15 : undefined,
     chart: {
       ...DEFAULT_CHART,
       ...(raw.chart || {}),
@@ -1768,6 +1821,59 @@ async function callOpenRouterTrader(imageBase64, mimeType, pair, timeoutMs = 450
   return callVisionModel(messages, timeoutMs);
 }
 
+function buildMultiTimeframeMessages(pair, charts) {
+  const instructions = `${getTraderSystemPrompt()}\n\nMULTI-TIMEFRAME MODE — analyze the two labeled images together in this single response. Do not treat them as separate requests or invent an intermediate timeframe. The 4H image establishes higher-timeframe trend and structure. The 15M image is for entry location and confirmation. Explain whether the 15M setup agrees with the 4H context. If either image is not a readable chart, set its chartValid to false and status to invalid_image. If directional evidence conflicts or is unclear, set status to no_trade, trade_setup.type to none, and multiTimeframe.alignment accordingly. Never force a trade.\n\nAccuracy gate: only set alignment to "aligned" when both images are readable, the 4H chart has explicit structural evidence, the 15M chart has explicit structural evidence, and the 15M chart contains an explicit confirmation signal (for example a bullish or bearish engulfing, pin bar, break of structure with retest, or other clearly visible entry confirmation). Do not infer alignment from generic trend labels alone. If evidence is missing, use "unclear" and return no_trade.`;
+  return [
+    { role: 'system', content: instructions },
+    {
+      role: 'user',
+      content: [
+        { type: 'text', text: `Analyze ${pair} as one multi-timeframe setup. First image is the 4H higher-timeframe chart:` },
+        { type: 'image_url', image_url: { url: `data:${charts.h4.mimeType};base64,${charts.h4.imageBase64}` } },
+        { type: 'text', text: 'Second image is the 15M entry-timeframe chart:' },
+        { type: 'image_url', image_url: { url: `data:${charts.m15.mimeType};base64,${charts.m15.imageBase64}` } },
+      ],
+    },
+  ];
+}
+
+function enforceMultiTimeframeAlignment(result) {
+  const multiTimeframe = result?.multiTimeframe;
+  if (!multiTimeframe) return result;
+
+  const { h4, m15 } = multiTimeframe;
+  const h4Evidence = Boolean(h4?.chartValid && h4?.trend !== 'neutral' && typeof h4?.structure === 'string' && h4.structure.trim());
+  const m15Evidence = Boolean(m15?.chartValid && m15?.trend !== 'neutral' && typeof m15?.structure === 'string' && m15.structure.trim() && typeof m15?.confirmation === 'string' && m15.confirmation.trim());
+  const directionsConflict = h4?.trend !== 'neutral' && m15?.trend !== 'neutral' && h4.trend !== m15.trend;
+
+  if (directionsConflict) {
+    multiTimeframe.alignment = 'conflicting';
+  } else if (multiTimeframe.alignment === 'aligned' && (!h4Evidence || !m15Evidence)) {
+    multiTimeframe.alignment = 'unclear';
+  }
+
+  if (multiTimeframe.alignment !== 'aligned') {
+    result.status = 'no_trade';
+    result.trade_setup = { ...DEFAULT_TRADE_SETUP };
+    result.marketBias = multiTimeframe.alignment === 'conflicting' ? 'mixed' : result.marketBias;
+    result.setupDirection = 'none';
+    result.setupStatus = 'NO_SETUP';
+    result.tradeStatus = 'no_setup';
+    result.decision = 'NO_TRADE';
+    result.tradeDecision = 'NONE';
+    result.entryReadiness = 0;
+    result.tradeTrigger = 'Wait for the 4H and 15M charts to align before considering a setup.';
+    const evidenceReason = !h4Evidence || !m15Evidence
+      ? 'The 4H and 15M charts do not provide explicit evidence on both charts; no trade is recommended.'
+      : 'The 4H and 15M charts conflict; no trade is recommended.';
+    result.reasons = Array.from(new Set([
+      ...(Array.isArray(result.reasons) ? result.reasons : []),
+      evidenceReason,
+    ]));
+  }
+  return result;
+}
+
 function aiUnavailableResponse(input, message) {
   const rawDetail = message || 'Chart AI is unavailable right now. Please try again shortly.';
   const detail = /quota|credit|billing|limit reached|rate limit|exceeded your current quota|insufficient_quota/i.test(rawDetail)
@@ -1934,6 +2040,94 @@ async function analyzeChart(req, res) {
   } catch (error) {
     console.error('[Chart AI] Error:', error);
     return sendJson(res, 200, aiUnavailableResponse(input, `Chart AI failed: ${(error instanceof Error ? error.message : 'unknown error')}`));
+  }
+}
+
+async function analyzeMultiTimeframeCharts(req, res) {
+  const deviceId = requireAuth(req, res); if (!deviceId) return;
+  if (!(await allowRequest(req, deviceId))) return sendJson(res, 429, { error: 'Too many requests. Try again shortly.' });
+
+  let body;
+  try {
+    body = await readJsonBody(req);
+  } catch (error) {
+    return sendJson(res, 400, { error: error.message || 'Invalid JSON body.' });
+  }
+  const inputResult = MultiTimeframeInputSchema.safeParse(body);
+  if (!inputResult.success) {
+    return sendJson(res, 400, { error: 'Upload valid 4H and 15M chart images to continue.', details: inputResult.error.flatten() });
+  }
+  const input = inputResult.data;
+
+  const hasOpenRouter = Boolean(process.env.OPENROUTER_API_KEY && !process.env.OPENROUTER_API_KEY.startsWith('replace_'));
+  if (!hasOpenRouter) return sendJson(res, 200, aiUnavailableResponse(input, 'Chart AI is not configured on the server. Set OPENROUTER_API_KEY.'));
+
+  const verifiedPremium = input.premiumAccess === true ? await getRevenueCatPremiumStatus(deviceId) : false;
+  const hasPremiumAccess = verifiedPremium === true || (verifiedPremium === null && input.premiumAccess === true);
+  if (!hasPremiumAccess) {
+    return sendJson(res, 402, {
+      code: 'PREMIUM_REQUIRED',
+      error: 'premium_required',
+      message: 'A Premium subscription is required for chart analysis.',
+    });
+  }
+
+  try {
+    const raw = await callVisionModel(buildMultiTimeframeMessages(input.pair, input.charts), 60000);
+    const canonical = canonicalizeRawAnalysis(raw);
+    if (!canonical) return sendJson(res, 200, aiInvalidResponse(input, 'The analysis engine returned an invalid response. Please try again.'));
+
+    const parsed = TradeAnalysisSchema.safeParse(canonical);
+    if (!parsed.success) {
+      console.error('[Multi-timeframe AI] Invalid AI shape:', parsed.success ? 'Missing multiTimeframe.' : parsed.error.flatten());
+      return sendJson(res, 200, aiInvalidResponse(input, 'The analysis engine returned an invalid multi-timeframe response. Please try again.'));
+    }
+    if (!parsed.data.multiTimeframe) {
+      console.error('[Multi-timeframe AI] Missing multiTimeframe output.');
+      return sendJson(res, 200, aiInvalidResponse(input, 'The analysis engine returned an invalid multi-timeframe response. Please try again.'));
+    }
+    if (parsed.data.status === 'invalid_image' || !parsed.data.multiTimeframe.h4.chartValid || !parsed.data.multiTimeframe.m15.chartValid) {
+      const invalidImage = aiUnavailableResponse(input, 'Both uploads must be readable trading charts. Check the 4H and 15M images and try again.');
+      return sendJson(res, 200, { ...invalidImage, status: 'invalid_image', availability: 'invalid_image', detectedPair: input.pair, timeframe: 'H4 + M15' });
+    }
+
+    const normalized = normalizeAnalysis(parsed.data);
+    if (!normalized) return sendJson(res, 200, aiInvalidResponse(input, 'The analysis engine returned an invalid response. Please try again.'));
+    normalized.detectedPair = normalized.detectedPair || input.pair;
+    normalized.timeframe = 'H4 + M15';
+    normalized.chart.pair = input.pair;
+    normalized.chart.timeframe = 'H4 + M15';
+
+    const finalResult = applyMentorStrategy(normalized);
+    finalResult.detectedPair = input.pair;
+    finalResult.timeframe = 'H4 + M15';
+    finalResult.chart.timeframe = 'H4 + M15';
+    enforceMultiTimeframeAlignment(finalResult);
+    if (finalResult.status === 'success' && finalResult.trade_setup.type !== 'none') {
+      try {
+        const id = crypto.randomBytes(10).toString('hex');
+        await persistentStore.setJson(`fxsnap:generatedSignal:${deviceId}:${id}`, {
+          deviceId,
+          pair: input.pair,
+          timeframe: 'H4 + M15',
+          direction: finalResult.trade_setup.type === 'buy' ? 'BUY' : 'SELL',
+          entry: finalResult.trade_setup.entry_zone,
+          sl: finalResult.trade_setup.stop_loss,
+          tp: finalResult.trade_setup.take_profit,
+          rr: finalResult.trade_setup.risk_reward,
+          confidence: finalResult.confidence,
+          strategyVersion: 'multi-timeframe-h4-m15-v1',
+          provider: 'openrouter',
+          generatedAt: new Date().toISOString(),
+        }, 60 * 60 * 24 * 365);
+      } catch (error) {
+        console.error('[Multi-timeframe AI] Failed to persist generated signal:', error);
+      }
+    }
+    return sendJson(res, 200, finalResult);
+  } catch (error) {
+    console.error('[Multi-timeframe AI] Provider failed:', error);
+    return sendJson(res, 200, aiUnavailableResponse(input, `Chart AI could not analyze both charts. ${(error instanceof Error ? error.message : 'unknown provider error')}`));
   }
 }
 
@@ -2189,6 +2383,7 @@ function createRequestHandler() {
       }
     }
     if ((pathname === '/api/chart-analysis' || pathname === '/analyze-chart') && req.method === 'POST') return analyzeChart(req, res);
+    if (pathname === '/api/multi-timeframe-analysis' && req.method === 'POST') return analyzeMultiTimeframeCharts(req, res);
     if (pathname === '/api/events' && req.method === 'POST') return receiveEvent(req, res);
     if (pathname === '/api/entitlement' && req.method === 'GET') return getEntitlement(req, res);
     if (pathname === '/api/signals' && req.method === 'POST') return recordSignal(req, res);
@@ -2258,5 +2453,9 @@ module.exports.normalizeAnalysis = normalizeAnalysis;
 module.exports.buildStructuredObservations = buildStructuredObservations;
 module.exports.evaluateDecisionEngine = evaluateDecisionEngine;
 module.exports.applyMentorStrategy = applyMentorStrategy;
+module.exports.analyzeMarketFromCandles = analyzeMarketFromCandles;
+module.exports.buildMultiTimeframeMessages = buildMultiTimeframeMessages;
+module.exports.MultiTimeframeInputSchema = MultiTimeframeInputSchema;
+module.exports.enforceMultiTimeframeAlignment = enforceMultiTimeframeAlignment;
 module.exports.enforceValidationRules = enforceValidationRules;
 

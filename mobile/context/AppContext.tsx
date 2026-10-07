@@ -78,6 +78,12 @@ export interface AnalysisResult {
   whyNotNow?: string[];
   dataLimitations?: string[];
   rrIssues?: string[];
+  multiTimeframe?: {
+    alignment: 'aligned' | 'conflicting' | 'unclear';
+    summary: string;
+    h4: { trend: 'bullish' | 'bearish' | 'neutral'; structure: string };
+    m15: { trend: 'bullish' | 'bearish' | 'neutral'; structure: string; confirmation: string };
+  };
   // Legacy chart validation fields (kept for backward compatibility)
   chartAnalysis?: {
     confidence: number;

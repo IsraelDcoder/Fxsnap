@@ -86,6 +86,17 @@ export interface ChartAnalysisResult {
     rawScore?: number;
   };
   confidence: number;
+  multiTimeframe?: {
+    alignment: 'aligned' | 'conflicting' | 'unclear';
+    summary: string;
+    h4: { trend: 'bullish' | 'bearish' | 'neutral'; structure: string };
+    m15: { trend: 'bullish' | 'bearish' | 'neutral'; structure: string; confirmation: string };
+  };
+}
+
+export interface MultiTimeframeChartImage {
+  imageBase64: string;
+  mimeType: string;
 }
 
 function emptyAnalysis(status: AnalysisStatus, message: string): ChartAnalysisResult {
@@ -140,11 +151,31 @@ export async function analyzeChartImage(
   pair?: string,
   premiumAccess = false
 ): Promise<ChartAnalysisResult> {
+  return sendChartAnalysis('/analyze-chart', { imageBase64, mimeType, pair, premiumAccess });
+}
+
+export async function analyzeMultiTimeframeCharts(
+  h4Chart: MultiTimeframeChartImage,
+  m15Chart: MultiTimeframeChartImage,
+  pair: string,
+  premiumAccess = false,
+): Promise<ChartAnalysisResult> {
+  return sendChartAnalysis('/api/multi-timeframe-analysis', {
+    pair,
+    premiumAccess,
+    charts: {
+      h4: h4Chart,
+      m15: m15Chart,
+    },
+  });
+}
+
+async function sendChartAnalysis(path: string, body: Record<string, unknown>): Promise<ChartAnalysisResult> {
   try {
-    const response = await fetch(`${API_URL}/analyze-chart`, {
+    const response = await fetch(`${API_URL}${path}`, {
       method: 'POST',
       headers: await getApiHeaders(),
-      body: JSON.stringify({ imageBase64, mimeType, pair, premiumAccess }),
+      body: JSON.stringify(body),
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
@@ -201,6 +232,19 @@ export async function analyzeChartImage(
       whyNotNow: Array.isArray(payload.whyNotNow) ? payload.whyNotNow.map(String) : [],
       dataLimitations: Array.isArray(payload.dataLimitations) ? payload.dataLimitations.map(String) : [],
       confidence: Math.max(0, Math.min(100, Number(payload.confidence) || 0)),
+      multiTimeframe: payload.multiTimeframe && typeof payload.multiTimeframe === 'object' ? {
+        alignment: ['aligned', 'conflicting', 'unclear'].includes(payload.multiTimeframe.alignment) ? payload.multiTimeframe.alignment : 'unclear',
+        summary: typeof payload.multiTimeframe.summary === 'string' ? payload.multiTimeframe.summary : '',
+        h4: {
+          trend: ['bullish', 'bearish', 'neutral'].includes(payload.multiTimeframe.h4?.trend) ? payload.multiTimeframe.h4.trend : 'neutral',
+          structure: typeof payload.multiTimeframe.h4?.structure === 'string' ? payload.multiTimeframe.h4.structure : '',
+        },
+        m15: {
+          trend: ['bullish', 'bearish', 'neutral'].includes(payload.multiTimeframe.m15?.trend) ? payload.multiTimeframe.m15.trend : 'neutral',
+          structure: typeof payload.multiTimeframe.m15?.structure === 'string' ? payload.multiTimeframe.m15.structure : '',
+          confirmation: typeof payload.multiTimeframe.m15?.confirmation === 'string' ? payload.multiTimeframe.m15.confirmation : '',
+        },
+      } : undefined,
     };
   } catch (error) {
     console.error('[Chart Detection] Error:', error);

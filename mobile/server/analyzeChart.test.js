@@ -6,7 +6,102 @@ const {
   applyMentorStrategy,
   enforceValidationRules,
   getTraderSystemPrompt,
+  buildMultiTimeframeMessages,
+  MultiTimeframeInputSchema,
+  enforceMultiTimeframeAlignment,
+  canonicalizeRawAnalysis,
+  normalizeAnalysis,
 } = require('./serve');
+
+test('multi-timeframe request requires two bounded supported chart images', () => {
+  const chart = { imageBase64: 'x'.repeat(100), mimeType: 'image/jpeg' };
+  const valid = MultiTimeframeInputSchema.safeParse({ pair: 'XAUUSD', premiumAccess: true, charts: { h4: chart, m15: chart } });
+  const missingChart = MultiTimeframeInputSchema.safeParse({ pair: 'XAUUSD', charts: { h4: chart } });
+  const unsupportedImage = MultiTimeframeInputSchema.safeParse({ pair: 'XAUUSD', charts: { h4: chart, m15: { ...chart, mimeType: 'image/gif' } } });
+
+  assert.equal(valid.success, true);
+  assert.equal(missingChart.success, false);
+  assert.equal(unsupportedImage.success, false);
+});
+
+test('both labeled charts are sent together in one multimodal AI message', () => {
+  const image = 'eA==';
+  const messages = buildMultiTimeframeMessages('XAUUSD', {
+    h4: { imageBase64: image, mimeType: 'image/jpeg' },
+    m15: { imageBase64: image, mimeType: 'image/png' },
+  });
+
+  assert.equal(messages.length, 2);
+  assert.equal(messages[1].content.filter((part) => part.type === 'image_url').length, 2);
+  assert.match(messages[1].content[0].text, /4H higher-timeframe/);
+  assert.match(messages[1].content[2].text, /15M entry-timeframe/);
+  assert.match(messages[0].content, /analyze the two labeled images together/i);
+  assert.match(messages[0].content, /do not treat them as separate requests or invent an intermediate timeframe/i);
+});
+
+test('multi-timeframe fields survive canonicalization for the unified result', () => {
+  const raw = {
+    status: 'no_trade',
+    multiTimeframe: {
+      alignment: 'aligned',
+      summary: 'The 15M pullback is holding in 4H demand.',
+      h4: { trend: 'bullish', structure: 'Higher highs and higher lows.' },
+      m15: { trend: 'bullish', structure: 'Pullback into support.', confirmation: 'Bullish engulfing.' },
+    },
+    timeframes_detected: [
+      { timeframe: 'H4', observations: { trend: 'bullish' } },
+      { timeframe: 'M15', observations: { trend: 'bullish' } },
+    ],
+    m15: { confirmation: 'Bullish engulfing.', bos: { detected: true }, rsi: { visible: false }, liquidity: { swept: false } },
+  };
+  const canonical = canonicalizeRawAnalysis(raw);
+  const normalized = normalizeAnalysis(canonical);
+
+  assert.equal(normalized.multiTimeframe.h4.trend, 'bullish');
+  assert.equal(normalized.multiTimeframe.m15.confirmation, 'Bullish engulfing.');
+  assert.deepEqual(normalized.timeframes_detected.map((item) => item.timeframe), ['H4', 'M15']);
+});
+
+test('conflicting H4 and M15 direction always suppresses the trade setup', () => {
+  const result = enforceMultiTimeframeAlignment({
+    status: 'success',
+    trade_setup: { type: 'buy', entry_zone: '2350', stop_loss: '2340', take_profit: '2380', risk_reward: 3 },
+    marketBias: 'bullish',
+    tradeDecision: 'BUY',
+    multiTimeframe: {
+      alignment: 'aligned',
+      h4: { chartValid: true, trend: 'bearish', structure: 'Lower highs and lower lows.' },
+      m15: { chartValid: true, trend: 'bullish', structure: 'Pullback setup.', confirmation: 'Bullish engulfing.' },
+    },
+    reasons: [],
+  });
+
+  assert.equal(result.multiTimeframe.alignment, 'conflicting');
+  assert.equal(result.status, 'no_trade');
+  assert.equal(result.trade_setup.type, 'none');
+  assert.equal(result.marketBias, 'mixed');
+  assert.equal(result.tradeDecision, 'NONE');
+});
+
+test('aligned labels cannot produce a trade without explicit evidence on both charts', () => {
+  const result = enforceMultiTimeframeAlignment({
+    status: 'success',
+    trade_setup: { type: 'buy', entry_zone: '2350', stop_loss: '2340', take_profit: '2380', risk_reward: 3 },
+    marketBias: 'bullish',
+    tradeDecision: 'BUY',
+    multiTimeframe: {
+      alignment: 'aligned',
+      h4: { chartValid: true, trend: 'bullish', structure: '' },
+      m15: { chartValid: true, trend: 'bullish', structure: '', confirmation: '' },
+    },
+    reasons: [],
+  });
+
+  assert.equal(result.multiTimeframe.alignment, 'unclear');
+  assert.equal(result.status, 'no_trade');
+  assert.equal(result.trade_setup.type, 'none');
+  assert.match(result.reasons.join(' '), /explicit evidence/i);
+});
 
 test('recognizable low-quality charts are analyzed conservatively instead of rejected as non-charts', () => {
   const result = applyMentorStrategy({
