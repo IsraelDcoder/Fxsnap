@@ -7,9 +7,21 @@ create table if not exists public.fxsnap_kv (
   expires_at timestamptz
 );
 
+create table if not exists public.fxsnap_push_devices (
+  device_id text primary key,
+  expo_token text not null unique,
+  platform text not null check (platform in ('ios', 'android')),
+  preferences jsonb not null default '{"dailyBrief": true, "inactivity": true, "weekly": true}'::jsonb,
+  registered_at timestamptz not null default now(),
+  last_notification_at timestamptz
+);
+
 alter table public.fxsnap_kv enable row level security;
+alter table public.fxsnap_push_devices enable row level security;
 revoke all on table public.fxsnap_kv from anon, authenticated;
+revoke all on table public.fxsnap_push_devices from anon, authenticated;
 grant all on table public.fxsnap_kv to service_role;
+grant all on table public.fxsnap_push_devices to service_role;
 
 create or replace function public.fxsnap_kv_increment(p_key text, p_ttl_seconds integer)
 returns integer

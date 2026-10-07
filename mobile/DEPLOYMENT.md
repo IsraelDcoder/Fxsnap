@@ -36,17 +36,26 @@ git push -u origin main
    - REVENUECAT_SECRET_API_KEY
    - REVENUECAT_ENTITLEMENT_ID
    - FXSNAP_AUTH_SECRET
-   - REDIS_URL (preferred durable server-side store)
-   - SUPABASE_URL (alternative durable store; use with SUPABASE_SERVICE_ROLE_KEY)
+
+   - EXPO_ACCESS_TOKEN (Expo access token used only by the backend to submit push messages)
+   - NOTIFICATION_CRON_SECRET (long random secret required by the notification dispatch job)
+   - SUPABASE_URL (required durable server-side store)
    - SUPABASE_SERVICE_ROLE_KEY (server-only; never expose this to the mobile app)
    - SUPABASE_KV_TABLE (optional, defaults to `fxsnap_kv`)
 4. Deploy.
 
 The mobile app targets `https://fxsnap.vercel.app` for all API requests. Deploy the backend at that URL before releasing a mobile build.
 
-### Supabase storage alternative
+### Push notifications
 
-If Redis is not available, run `server/supabase-kv.sql` once in the Supabase SQL editor. Then add `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` to the Vercel Production environment. The backend uses Supabase for rate limits, signals, and event storage. Keep the service-role key server-side only.
+1. Configure Android and iOS push credentials for the Expo project in EAS. Remote pushes require an EAS development or production build; they are not supported by Expo Go on Android.
+2. Set `EXPO_ACCESS_TOKEN` and `NOTIFICATION_CRON_SECRET` in the backend's production environment. Do not add either value to an `EXPO_PUBLIC_*` variable.
+3. Configure an external cron service to send a daily `POST` request to `/api/notifications/dispatch` with the `x-notification-secret` header set to `NOTIFICATION_CRON_SECRET`. The endpoint sends at most one campaign per device in each seven-day period.
+4. Users opt in from Settings. Campaign delivery uses app-open and successful chart-analysis activity; users can separately disable Daily Brief, inactivity, and weekly activity campaigns.
+
+### Supabase storage setup
+
+Run `server/supabase-kv.sql` once in the Supabase SQL editor. This creates the shared key-value table and the per-device `fxsnap_push_devices` table used for Expo tokens and notification preferences. Set `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` in the Vercel Production environment. Push token registration and campaign dispatch require these Supabase credentials; Redis is not used for push notifications. Keep the service-role key server-side only.
 
 ```bash
 cd mobile

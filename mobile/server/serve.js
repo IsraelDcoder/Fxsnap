@@ -13,6 +13,18 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+
+function loadEnvFile() {
+  const envPath = path.resolve(__dirname, '..', '.env');
+  if (!fs.existsSync(envPath)) return;
+  for (const line of fs.readFileSync(envPath, 'utf8').split(/\r?\n/)) {
+    const match = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/);
+    if (match && !process.env[match[1]]) process.env[match[1]] = match[2].replace(/^['"]|['"]$/g, '');
+  }
+}
+
+loadEnvFile();
+
 const { z } = require('zod');
 const persistentStore = require('./persistentStore');
 const { createAuth, verifyAuth } = require('./auth');
@@ -51,17 +63,6 @@ try {
 } catch (error) {
   console.warn('[news] Failed to initialize news providers:', error && error.message ? error.message : error);
 }
-
-function loadEnvFile() {
-  const envPath = path.resolve(__dirname, '..', '.env');
-  if (!fs.existsSync(envPath)) return;
-  for (const line of fs.readFileSync(envPath, 'utf8').split(/\r?\n/)) {
-    const match = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/);
-    if (match && !process.env[match[1]]) process.env[match[1]] = match[2].replace(/^['"]|['"]$/g, '');
-  }
-}
-
-loadEnvFile();
 
 const STATIC_ROOT = path.resolve(__dirname, '..', 'static-build');
 const TEMPLATE_PATH = path.resolve(__dirname, 'templates', 'landing-page.html');
@@ -1505,8 +1506,8 @@ function sendJson(res, status, body) {
   res.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
     'access-control-allow-origin': process.env.ALLOWED_ORIGIN || '*',
-    'access-control-allow-headers': 'content-type, authorization, x-device-id',
-    'access-control-allow-methods': 'GET, POST, OPTIONS',
+    'access-control-allow-headers': 'content-type, authorization, x-device-id, x-notification-secret',
+    'access-control-allow-methods': 'GET, POST, DELETE, OPTIONS',
   });
   res.end(JSON.stringify(body));
 }
@@ -2037,6 +2038,37 @@ function createRequestHandler() {
         if (!/^[a-zA-Z0-9_-]{16,128}$/.test(deviceId)) return sendJson(res, 400, { error: 'Invalid device identity.' });
         return sendJson(res, 200, { token: createAuth(AUTH_SECRET, deviceId), expiresIn: 30 * 24 * 60 * 60 });
       }).catch((error) => sendJson(res, 400, { error: error.message }));
+    }
+
+    if (pathname === '/api/push-token' && (req.method === 'POST' || req.method === 'DELETE')) {
+      const deviceId = requireAuth(req, res);
+      if (!deviceId) return;
+      if (!persistentStore.supabaseEnabled) return sendJson(res, 503, { error: 'Push notifications require Supabase storage.' });
+      const notifications = require('./notificationService');
+      if (req.method === 'DELETE') {
+        return notifications.unregisterPushToken(deviceId)
+          .then(() => sendJson(res, 200, { registered: false }))
+          .catch((error) => sendJson(res, 500, { error: error.message }));
+      }
+      return readJsonBody(req).then(async (body) => {
+        if (typeof body.token !== 'string' || typeof body.platform !== 'string') {
+          return sendJson(res, 400, { error: 'A push token and platform are required.' });
+        }
+        await notifications.registerPushToken(deviceId, body);
+        return sendJson(res, 200, { registered: true });
+      }).catch((error) => sendJson(res, 400, { error: error.message }));
+    }
+    if (pathname === '/api/notifications/dispatch' && req.method === 'POST') {
+      if (!persistentStore.supabaseEnabled) return sendJson(res, 503, { error: 'Push notifications require Supabase storage.' });
+      const secret = process.env.NOTIFICATION_CRON_SECRET || '';
+      const supplied = String(req.headers['x-notification-secret'] || '');
+      if (!secret || secret.startsWith('replace_') || Buffer.byteLength(secret) !== Buffer.byteLength(supplied) || !crypto.timingSafeEqual(Buffer.from(secret), Buffer.from(supplied))) {
+        return sendJson(res, 401, { error: 'Invalid notification dispatch credential.' });
+      }
+      const notifications = require('./notificationService');
+      return notifications.sendScheduledCampaigns(new Date(), getRevenueCatPremiumStatus)
+        .then((result) => sendJson(res, 200, result))
+        .catch((error) => sendJson(res, 500, { error: error.message || 'Notification dispatch failed.' }));
     }
 
     if (pathname === '/api/strategy' && req.method === 'POST') return generateStrategy(req, res);

@@ -24,7 +24,8 @@
     "android": {
       "package": "com.fxsnap.mobile",
       "permissions": [
-        "CAMERA"
+        "CAMERA",
+        "POST_NOTIFICATIONS"
       ],
       "blockedPermissions": [
         "android.permission.READ_EXTERNAL_STORAGE",
@@ -38,6 +39,12 @@
     },
     "plugins": [
       "expo-router",
+      [
+        "expo-notifications",
+        {
+          "defaultChannel": "fxsnap-retention"
+        }
+      ],
       "expo-font",
       "expo-web-browser",
       [

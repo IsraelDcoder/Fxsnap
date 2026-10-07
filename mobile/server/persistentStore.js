@@ -1,10 +1,10 @@
 const memoryStore = new Map();
 const redisUrl = process.env.REDIS_URL || process.env.REDIS_URI || null;
-const redisClient = redisUrl ? require('redis').createClient({ url: redisUrl }) : null;
 const supabaseUrl = (process.env.SUPABASE_URL || process.env.SUPABASE_PROJECT_URL || '').replace(/\/$/, '');
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const supabaseTable = process.env.SUPABASE_KV_TABLE || 'fxsnap_kv';
 const supabaseEnabled = Boolean(supabaseUrl && supabaseServiceKey);
+const redisClient = redisUrl && !supabaseEnabled ? require('redis').createClient({ url: redisUrl }) : null;
 let redisConnecting = null;
 if (redisClient) redisClient.on('error', (error) => console.error('[Redis] Connection error:', error.message));
 
@@ -73,12 +73,12 @@ async function connect() {
 }
 
 async function increment(key, windowSeconds) {
+  if (supabaseEnabled) return Number(await supabaseRpc('fxsnap_kv_increment', { p_key: key, p_ttl_seconds: windowSeconds }));
   if (await connect()) {
     const value = await redisClient.incr(key);
     await redisClient.expire(key, windowSeconds);
     return value;
   }
-  if (supabaseEnabled) return Number(await supabaseRpc('fxsnap_kv_increment', { p_key: key, p_ttl_seconds: windowSeconds }));
   pruneExpired();
   const normalizedKey = getTtlKey(key, windowSeconds);
   const current = memoryStore.get(normalizedKey) || { value: 0, expiresAt: Date.now() + windowSeconds * 1000 };
@@ -89,11 +89,11 @@ async function increment(key, windowSeconds) {
 }
 
 async function getJson(key) {
+  if (supabaseEnabled) return supabaseGet(key);
   if (await connect()) {
     const value = await redisClient.get(key);
     return value === null ? null : JSON.parse(value);
   }
-  if (supabaseEnabled) return supabaseGet(key);
   pruneExpired();
   const entry = memoryStore.get(key);
   if (!entry) return null;
@@ -101,13 +101,13 @@ async function getJson(key) {
 }
 
 async function setJson(key, value, ttlSeconds) {
+  if (supabaseEnabled) return supabaseSet(key, value, ttlSeconds);
   if (await connect()) {
     const serialized = JSON.stringify(value);
     if (ttlSeconds) await redisClient.set(key, serialized, { EX: ttlSeconds });
     else await redisClient.set(key, serialized);
     return true;
   }
-  if (supabaseEnabled) return supabaseSet(key, value, ttlSeconds);
   pruneExpired();
   memoryStore.set(key, { value, expiresAt: ttlSeconds ? Date.now() + ttlSeconds * 1000 : null });
   return true;
@@ -122,6 +122,7 @@ async function appendJson(key, value, maxItems, ttlSeconds) {
 
 module.exports = {
   enabled: Boolean(redisUrl || supabaseEnabled),
+  supabaseEnabled,
   connect,
   increment,
   getJson,

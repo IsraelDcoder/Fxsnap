@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -16,6 +16,9 @@ import { Stack, usePathname } from 'expo-router';
 import { useApp } from '@/context/AppContext';
 import * as SplashScreen from 'expo-splash-screen';
 import * as Sentry from '@sentry/react-native';
+import * as Notifications from 'expo-notifications';
+import { registerForegroundNotificationHandler, getNotificationResponseRoute, syncRegisteredPushNotifications } from '@/services/notifications';
+import { trackEvent } from '@/services/telemetry';
 
 SplashScreen.preventAutoHideAsync();
 const sentryDsn = process.env.EXPO_PUBLIC_SENTRY_DSN?.trim();
@@ -32,12 +35,46 @@ const queryClient = new QueryClient();
 function RootLayoutNav({ fontsReady }: { fontsReady: boolean }) {
   const { onboardingComplete, isLoading } = useApp();
   const pathname = usePathname();
+  const handledNotificationResponse = useRef<string | null>(null);
 
   useEffect(() => {
     if (fontsReady && !isLoading && pathname !== '/') {
       void SplashScreen.hideAsync();
     }
   }, [fontsReady, isLoading, pathname]);
+
+  useEffect(() => {
+    if (!isLoading && onboardingComplete) trackEvent('app_open');
+  }, [isLoading, onboardingComplete]);
+
+  useEffect(() => {
+    if (!isLoading && onboardingComplete) {
+      void syncRegisteredPushNotifications().catch(() => undefined);
+    }
+  }, [isLoading, onboardingComplete]);
+
+  useEffect(() => {
+    const handleResponse = async (response: Notifications.NotificationResponse | null) => {
+      const route = getNotificationResponseRoute(response);
+      if (!response || !route || handledNotificationResponse.current === response.notification.request.identifier) return;
+      handledNotificationResponse.current = response.notification.request.identifier;
+      const { router } = await import('expo-router');
+      router.push(route);
+      await Notifications.clearLastNotificationResponseAsync();
+    };
+    const subscription = registerForegroundNotificationHandler((route, identifier) => {
+      if (handledNotificationResponse.current === identifier) return;
+      handledNotificationResponse.current = identifier;
+      void import('expo-router').then(({ router }) => router.push(route));
+      void Notifications.clearLastNotificationResponseAsync();
+    });
+    const openLastNotification = async () => {
+      const response = await Notifications.getLastNotificationResponseAsync();
+      await handleResponse(response);
+    };
+    void openLastNotification();
+    return () => subscription.remove();
+  }, []);
 
   return (
     <Stack screenOptions={{ headerShown: false, animation: 'fade' }}>

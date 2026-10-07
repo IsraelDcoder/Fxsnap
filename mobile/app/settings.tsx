@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Alert,
   KeyboardAvoidingView,
@@ -23,6 +23,14 @@ import * as Haptics from '@/services/haptics';
 import * as Clipboard from 'expo-clipboard';
 import { useApp } from '@/context/AppContext';
 import { useColors } from '@/hooks/useColors';
+import {
+  getNotificationPreferences,
+  clearNotificationPreferences,
+  requestAndRegisterPushNotifications,
+  saveNotificationPreferences,
+  unregisterPushToken,
+  type NotificationPreferences,
+} from '@/services/notifications';
 
 export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
@@ -59,6 +67,8 @@ export default function SettingsScreen() {
           text: 'Delete',
           style: 'destructive',
           onPress: async () => {
+            await unregisterPushToken().catch(() => undefined);
+            await clearNotificationPreferences();
             await deleteAccount();
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
             Alert.alert('Account deleted', 'Your local FXSnap data has been removed.');
@@ -73,6 +83,43 @@ export default function SettingsScreen() {
   const botPad = Platform.OS === 'web' ? 34 : insets.bottom;
 
   const [displayNameInput, setDisplayNameInput] = useState(settings.displayName);
+  const [notificationPreferences, setNotificationPreferences] = useState<NotificationPreferences>({
+    enabled: false,
+    dailyBrief: true,
+    inactivity: true,
+    weekly: true,
+  });
+
+  useEffect(() => {
+    void getNotificationPreferences().then(setNotificationPreferences);
+  }, []);
+
+  const updateNotificationPreferences = async (next: NotificationPreferences) => {
+    const previous = notificationPreferences;
+    setNotificationPreferences(next);
+    await saveNotificationPreferences(next);
+    if (!next.enabled) {
+      try {
+        await unregisterPushToken();
+      } catch {
+        Alert.alert('Notifications not fully disabled', 'FXSnap could not update your notification settings on the server.');
+      }
+      return;
+    }
+    try {
+      const result = await requestAndRegisterPushNotifications(next);
+      if (!result.granted) {
+        const disabled = { ...next, enabled: false };
+        setNotificationPreferences(disabled);
+        await saveNotificationPreferences(disabled);
+        Alert.alert('Permission required', 'Allow notifications for FXSnap in your device settings to receive updates.');
+      }
+    } catch {
+      setNotificationPreferences(previous);
+      await saveNotificationPreferences(previous);
+      Alert.alert('Unable to enable notifications', 'Please try again when you have a network connection.');
+    }
+  };
 
   const saveDisplayName = () => {
     updateSettings({ displayName: displayNameInput.trim().slice(0, 40) });
@@ -254,6 +301,29 @@ export default function SettingsScreen() {
           <Animated.View entering={FadeInDown.delay(320).duration(500)}>
             <SectionHeader title="App Preferences" />
             <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+              <Row icon="bell" label="Push notifications">
+                <Switch
+                  value={notificationPreferences.enabled}
+                  onValueChange={(enabled) => void updateNotificationPreferences({ ...notificationPreferences, enabled })}
+                  trackColor={{ false: '#E6E8EC', true: '#FFD84D' }}
+                  thumbColor="#FFFFFF"
+                />
+              </Row>
+              {notificationPreferences.enabled && <>
+                <View style={[styles.rowDivider, { backgroundColor: colors.cardBorder }]} />
+                <Row icon="book-open" label="Daily Brief">
+                  <Switch value={notificationPreferences.dailyBrief} onValueChange={(dailyBrief) => void updateNotificationPreferences({ ...notificationPreferences, dailyBrief })} trackColor={{ false: '#E6E8EC', true: '#FFD84D' }} thumbColor="#FFFFFF" />
+                </Row>
+                <View style={[styles.rowDivider, { backgroundColor: colors.cardBorder }]} />
+                <Row icon="clock" label="Return reminders">
+                  <Switch value={notificationPreferences.inactivity} onValueChange={(inactivity) => void updateNotificationPreferences({ ...notificationPreferences, inactivity })} trackColor={{ false: '#E6E8EC', true: '#FFD84D' }} thumbColor="#FFFFFF" />
+                </Row>
+                <View style={[styles.rowDivider, { backgroundColor: colors.cardBorder }]} />
+                <Row icon="trending-up" label="Weekly activity">
+                  <Switch value={notificationPreferences.weekly} onValueChange={(weekly) => void updateNotificationPreferences({ ...notificationPreferences, weekly })} trackColor={{ false: '#E6E8EC', true: '#FFD84D' }} thumbColor="#FFFFFF" />
+                </Row>
+              </>}
+              <View style={[styles.rowDivider, { backgroundColor: colors.cardBorder }]} />
               <Row icon="zap" label="Haptic Feedback">
                 <Switch
                   value={settings.hapticsEnabled}

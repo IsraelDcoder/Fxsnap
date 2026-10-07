@@ -20,6 +20,10 @@ Saved analyses, strategies, settings, and backups may be stored locally on your 
 
 FXSnap uses an app-scoped identifier to maintain anonymous API sessions and associate requests needed to provide app services. This identifier is not an advertising identifier. Subscription purchases and paid entitlements continue to be managed through RevenueCat.
 
+## Push notifications
+
+If you opt in, FXSnap stores your Expo push token, device platform, notification preferences, and app activity events such as app opens and completed chart analyses. This information is used to send the notification categories you select, with no more than one campaign per device in a seven-day period. You can disable notifications or individual categories in Settings. Disabling notifications removes the device's registered push token from the FXSnap service.
+
 ## Data deletion and contact
 
 To request deletion of data held by a deployed FXSnap service, contact the app operator through the support address published in the store listing. Local data can be removed by deleting the app data or using the in-app deletion control when available.
