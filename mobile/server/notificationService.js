@@ -1,8 +1,17 @@
-const { Expo } = require('expo-server-sdk');
 const persistentStore = require('./persistentStore');
 const supabasePushStore = require('./supabasePushStore');
 
-const expo = new Expo({ accessToken: process.env.EXPO_ACCESS_TOKEN });
+let expoClientPromise;
+async function getExpoClient() {
+  if (!expoClientPromise) {
+    expoClientPromise = import('expo-server-sdk').then(({ Expo }) => {
+      const expo = new Expo({ accessToken: process.env.EXPO_ACCESS_TOKEN });
+      return { Expo, expo };
+    });
+  }
+  return expoClientPromise;
+}
+
 const CAMPAIGN_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000;
 const ROUTES = new Set(['/daily-brief', '/analysis', '/saved']);
 
@@ -15,6 +24,7 @@ function getStartOfWeek(date) {
 }
 
 async function registerPushToken(deviceId, payload) {
+  const { Expo } = await getExpoClient();
   if (!Expo.isExpoPushToken(payload.token)) throw new Error('Invalid Expo push token.');
   if (!['ios', 'android'].includes(payload.platform)) throw new Error('Unsupported push platform.');
   const preferences = payload.preferences;
@@ -34,6 +44,7 @@ async function unregisterPushToken(deviceId) {
 }
 
 async function getRegisteredTokens() {
+  const { Expo } = await getExpoClient();
   const entries = await supabasePushStore.list();
   return entries.filter((entry) => entry && entry.deviceId && Expo.isExpoPushToken(entry.token));
 }
@@ -69,6 +80,7 @@ function buildCampaign(entry, events, now, isSubscribed) {
 
 async function sendCampaign({ type, title, body, route, token, deviceId }) {
   if (!ROUTES.has(route)) throw new Error('Unsupported notification route.');
+  const { Expo, expo } = await getExpoClient();
   if (!Expo.isExpoPushToken(token)) return { sent: false, reason: 'Invalid Expo push token.' };
   const [ticket] = await expo.sendPushNotificationsAsync([{
     to: token,
