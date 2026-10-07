@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from 'react';
+import { Platform } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -54,6 +55,7 @@ function RootLayoutNav({ fontsReady }: { fontsReady: boolean }) {
   }, [isLoading, onboardingComplete]);
 
   useEffect(() => {
+    if (Platform.OS === 'web') return;
     const handleResponse = async (response: Notifications.NotificationResponse | null) => {
       const route = getNotificationResponseRoute(response);
       if (!response || !route || handledNotificationResponse.current === response.notification.request.identifier) return;

@@ -31,6 +31,7 @@ import { PairSelectionModal } from '@/components/PairSelectionModal';
 import { useColors } from '@/hooks/useColors';
 import { analyzeChartImage, type ChartAnalysisResult } from '../services/chartDetection';
 import { trackEvent } from '@/services/telemetry';
+import { recordRatingEligibleAnalysis } from '@/services/ratingPrompt';
 
 type Stage = 'pick' | 'preview' | 'analyzing';
 
@@ -453,6 +454,7 @@ export default function AnalysisScreen() {
       });
       setCurrentAnalysis(result);
       trackEvent('analysis_succeeded', { pair, status: chart.status, confidence: chart.confidence });
+      await recordRatingEligibleAnalysis();
 
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       router.replace('/analysis-result');

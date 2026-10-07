@@ -23,6 +23,7 @@ import * as Haptics from '@/services/haptics';
 import * as Clipboard from 'expo-clipboard';
 import { useApp } from '@/context/AppContext';
 import { useColors } from '@/hooks/useColors';
+import { RatingPromptModal } from '@/components/RatingPromptModal';
 import {
   getNotificationPreferences,
   clearNotificationPreferences,
@@ -40,7 +41,6 @@ export default function SettingsScreen() {
   const privacyPolicyUrl = process.env.EXPO_PUBLIC_PRIVACY_POLICY_URL || 'https://fxsnap.app/privacy';
   const termsUrl = process.env.EXPO_PUBLIC_TERMS_URL || 'https://fxsnap.app/terms';
   const supportEmail = process.env.EXPO_PUBLIC_SUPPORT_EMAIL || 'support@fxsnap.app';
-  const rateUrl = process.env.EXPO_PUBLIC_RATE_URL || 'https://play.google.com/store/apps/details?id=com.fxsnap';
   const subscriptionManagerUrl = process.env.EXPO_PUBLIC_SUBSCRIPTION_URL || 'https://play.google.com/store/account/subscriptions';
 
   const openUrl = async (url: string, fallbackMessage: string) => {
@@ -54,7 +54,6 @@ export default function SettingsScreen() {
   const openPrivacyPolicy = async () => openUrl(privacyPolicyUrl, 'Please visit the privacy page in your browser.');
   const openTerms = async () => openUrl(termsUrl, 'Please visit the terms page in your browser.');
   const openSupportEmail = async () => openUrl(`mailto:${supportEmail}`, 'Please copy the support email address to contact us.');
-  const openRateApp = async () => openUrl(rateUrl, 'Please visit the app store to rate FXSnap.');
   const openSubscriptionManager = async () => openUrl(subscriptionManagerUrl, 'Please use Google Play to manage your subscription.');
 
   const confirmDeleteAccount = () => {
@@ -83,6 +82,7 @@ export default function SettingsScreen() {
   const botPad = Platform.OS === 'web' ? 34 : insets.bottom;
 
   const [displayNameInput, setDisplayNameInput] = useState(settings.displayName);
+  const [ratingPromptVisible, setRatingPromptVisible] = useState(false);
   const [notificationPreferences, setNotificationPreferences] = useState<NotificationPreferences>({
     enabled: false,
     dailyBrief: true,
@@ -289,7 +289,7 @@ export default function SettingsScreen() {
                   </View>
                   <Text style={[styles.rowLabel, { color: colors.text }]}>Manage subscription</Text>
                 </View>
-                <Feather name="external-link" size={18} color={colors.textMuted} />
+                <Feather name="chevron-right" size={18} color={colors.textMuted} />
               </TouchableOpacity>
               <Text style={[styles.cardNote, { color: colors.textSecondary }]}>
                 Subscription billing is handled through Google Play. Use the manage link above to update, cancel, or restore your subscription.
@@ -391,14 +391,14 @@ export default function SettingsScreen() {
                 <Feather name="external-link" size={18} color={colors.textMuted} />
               </TouchableOpacity>
               <View style={[styles.rowDivider, { backgroundColor: colors.cardBorder }]} />
-              <TouchableOpacity style={styles.navigationRow} onPress={openRateApp}>
+              <TouchableOpacity style={styles.navigationRow} onPress={() => setRatingPromptVisible(true)}>
                 <View style={styles.rowLeft}>
                   <View style={[styles.rowIcon, { backgroundColor: colors.surface, borderColor: colors.cardBorder, borderWidth: 1 }]}>
                     <Feather name="star" size={16} color={colors.textMuted} />
                   </View>
                   <Text style={[styles.rowLabel, { color: colors.text }]}>Rate FXSnap</Text>
                 </View>
-                <Feather name="external-link" size={18} color={colors.textMuted} />
+                <Feather name="chevron-right" size={18} color={colors.textMuted} />
               </TouchableOpacity>
               <View style={[styles.rowDivider, { backgroundColor: colors.cardBorder }]} />
               <TouchableOpacity style={styles.destructiveRow} onPress={confirmDeleteAccount}>
@@ -452,6 +452,7 @@ export default function SettingsScreen() {
           </Text>
         </ScrollView>
       </View>
+      <RatingPromptModal visible={ratingPromptVisible} onDismiss={() => setRatingPromptVisible(false)} />
     </KeyboardAvoidingView>
   );
 }

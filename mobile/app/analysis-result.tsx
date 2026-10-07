@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Platform,
@@ -29,6 +29,8 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { useApp } from '@/context/AppContext';
 import type { AnalysisResult } from '@/context/AppContext';
 import AnalysisShareCard from '../components/AnalysisShareCard';
+import { RatingPromptModal } from '@/components/RatingPromptModal';
+import { consumeRatingPrompt } from '@/services/ratingPrompt';
 import { useColors } from '@/hooks/useColors';
 
 // ─── Staggered data row ───────────────────────────────────────────────────────
@@ -122,8 +124,22 @@ export default function AnalysisResultScreen() {
   const [toastMessage, setToastMessage] = useState('');
   const [shareDisabled, setShareDisabled] = useState(false);
   const [shareError, setShareError] = useState(false);
+  const [ratingPromptVisible, setRatingPromptVisible] = useState(false);
   const shareCardRef = useRef<View | null>(null);
   const shareReadyRef = React.useRef(false);
+
+  useEffect(() => {
+    let active = true;
+    const timer = setTimeout(() => {
+      void consumeRatingPrompt().then((shouldShow) => {
+        if (active && shouldShow) setRatingPromptVisible(true);
+      });
+    }, 1400);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [currentAnalysis?.id]);
 
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
   const botPad = Platform.OS === 'web' ? 34 : insets.bottom;
@@ -584,6 +600,7 @@ export default function AnalysisResultScreen() {
       </View>
 
       <Toast visible={toastVisible} message={toastMessage} />
+      <RatingPromptModal visible={ratingPromptVisible} onDismiss={() => setRatingPromptVisible(false)} />
     </View>
   );
 }
