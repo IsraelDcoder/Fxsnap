@@ -247,7 +247,7 @@ export default function OnboardingScreen() {
 
   const handleClose = async () => {
     await completeOnboarding();
-    router.replace('/home');
+    router.replace('/analysis');
   };
 
   useEffect(() => {

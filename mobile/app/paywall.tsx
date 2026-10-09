@@ -7,7 +7,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import ScreenWrapper from '@/components/ScreenWrapper';
 import { Feather } from '@expo/vector-icons';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import * as Haptics from '@/services/haptics';
 import { useApp } from '@/context/AppContext';
 import { useColors } from '@/hooks/useColors';
@@ -24,6 +24,8 @@ export default function PaywallScreen() {
   // ScreenWrapper handles safe area and scrolling
   const colors = useColors();
   const insets = useSafeAreaInsets();
+  const { source } = useLocalSearchParams<{ source?: string }>();
+  const isFreeAnalysisOffer = source === 'free-analysis';
   const { purchasePlan, restorePurchases, billingAvailable, isSubscribed, isLoading, consumePendingFeatureRoute, clearPendingFeatureRoute } = useApp();
   const supportEmail = process.env.EXPO_PUBLIC_SUPPORT_EMAIL || 'support@fxsnap.app';
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
@@ -31,7 +33,7 @@ export default function PaywallScreen() {
 
   const dismissPaywall = () => {
     clearPendingFeatureRoute();
-    router.replace('/(tabs)/home');
+    router.replace(isFreeAnalysisOffer ? '/analysis-result' : '/(tabs)/home');
   };
   const [selectedPlan, setSelectedPlan] = useState<BillingPlan>('monthly');
   const [plans, setPlans] = useState<PlanOffering[]>([]);
@@ -65,7 +67,7 @@ export default function PaywallScreen() {
 
   useEffect(() => {
     if (!isLoading && isSubscribed) router.replace('/home');
-  }, [isLoading, isSubscribed]);
+  }, [isLoading, isSubscribed, isFreeAnalysisOffer]);
 
   useEffect(() => {
     const onBack = () => {
@@ -89,16 +91,12 @@ export default function PaywallScreen() {
     if (plan.plan === 'quarterly') return '/ 3 months';
     return '/ month';
   };
-  const getPlanBadge = (plan: PlanOffering) => (
-    plan.plan === 'monthly' ? '3 DAYS FREE' : 'NO TRIAL'
-  );
-
   const handleSubscribe = async () => {
     setLoading(true);
     try {
       const purchased = await purchasePlan(selectedPlan);
       if (purchased) {
-        const nextRoute = (consumePendingFeatureRoute() || '/home') as Parameters<typeof router.replace>[0];
+        const nextRoute = (consumePendingFeatureRoute() || (isFreeAnalysisOffer ? '/analysis-result' : '/home')) as Parameters<typeof router.replace>[0];
         console.log('[PREMIUM GATE] Subscription successful; resuming route', { nextRoute });
         router.replace(nextRoute);
         return;
@@ -136,8 +134,8 @@ export default function PaywallScreen() {
         <View style={styles.logoBox}>
           <Feather name="zap" size={52} color="#FFD60A" />
         </View>
-        <Text style={[styles.title, isCompact && styles.compactTitle]}>FXSNAP PREMIUM</Text>
-        <Text style={[styles.subtitle, isCompact && styles.compactSubtitle]}>Your complete AI trading assistant.</Text>
+        <Text style={[styles.title, isCompact && styles.compactTitle]}>{isFreeAnalysisOffer ? 'Want this for every chart?' : 'FXSNAP PREMIUM'}</Text>
+        <Text style={[styles.subtitle, isCompact && styles.compactSubtitle]}>{isFreeAnalysisOffer ? 'Get unlimited analyses with Premium.' : 'Your complete AI trading assistant.'}</Text>
       </Animated.View>
 
       <Animated.View entering={FadeInUp.delay(200).duration(600)} style={styles.featuresList}>
@@ -190,7 +188,6 @@ export default function PaywallScreen() {
           plans.map((plan) => {
             const isSelected = isSelectedPlan(plan.plan);
             const isMonthly = plan.plan === 'monthly';
-            const planBadge = getPlanBadge(plan);
 
             return (
               <TouchableOpacity
@@ -210,7 +207,6 @@ export default function PaywallScreen() {
                 activeOpacity={0.95}
               >
                 {isMonthly && <View style={styles.planTag}><Text style={styles.planTagText}>BEST VALUE</Text></View>}
-                <Text style={styles.planBadge}>{planBadge}</Text>
                 <Text style={[styles.planName, isSelected && styles.planNameSelected]}>{plan.plan === 'weekly' ? 'Weekly' : plan.plan === 'monthly' ? 'Monthly' : '3 Months'}</Text>
                 <View style={styles.planRadioWrap}>
                   <View style={[styles.planRadio, isSelected && styles.planRadioSelected]}>
@@ -246,7 +242,7 @@ export default function PaywallScreen() {
           disabled={loading || !billingAvailable || !canPurchaseSelectedPlan}
         >
           <Text style={[styles.subscribeBtnText, isCompact && styles.compactSubscribeText]}>
-            {loading ? 'Processing...' : billingAvailable ? `Start ${selectedPlanLabel} Plan` : 'Billing unavailable'}
+            {loading ? 'Processing...' : billingAvailable ? isFreeAnalysisOffer ? 'Get unlimited analyses' : `Start ${selectedPlanLabel} Plan` : 'Billing unavailable'}
           </Text>
           <Feather name="arrow-right" size={20} color="#000000" />
         </TouchableOpacity>
@@ -458,14 +454,6 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_700Bold',
     color: '#000000',
     textTransform: 'uppercase',
-  },
-  planBadge: {
-    fontSize: 9,
-    fontFamily: 'Inter_700Bold',
-    color: '#9AE6B4',
-    textTransform: 'uppercase',
-    marginBottom: 8,
-    letterSpacing: 0.3,
   },
   planName: {
     fontSize: 14,

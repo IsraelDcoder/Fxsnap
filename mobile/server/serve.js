@@ -27,7 +27,7 @@ loadEnvFile();
 
 const { z } = require('zod');
 const persistentStore = require('./persistentStore');
-const { createAuth, verifyAuth } = require('./auth');
+const { createAuth, verifyAuth, verifyFreeAnalysisIdentity } = require('./auth');
 const marketService = require('./marketService');
 // Optional Twelve Data provider (server-side market data proxy)
 let marketProvider = null;
@@ -160,6 +160,8 @@ const DEFAULT_TRADE_SETUP = {
   risk_reward: null,
 };
 const DEFAULT_REASONS = [];
+const FREE_ANALYSIS_KEY_PREFIX = 'fxsnap:free-analysis:v1:';
+const FREE_ANALYSIS_LOCK_TTL_SECONDS = 150;
 
 const TradeAnalysisSchema = z.object({
   status: z.enum(ANALYSIS_STATUS),
@@ -1572,6 +1574,10 @@ function verifyToken(req) {
   const token = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
   return verifyAuth(AUTH_SECRET, token);
 }
+function getFreeAnalysisIdentity(req, fallbackDeviceId) {
+  const token = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+  return verifyFreeAnalysisIdentity(AUTH_SECRET, token) || fallbackDeviceId;
+}
 function requireAuth(req, res) {
   const deviceId = verifyToken(req);
   if (!deviceId) { sendJson(res, 401, { error: 'A valid anonymous session is required.' }); return null; }
@@ -1935,6 +1941,7 @@ function aiInvalidResponse(input, message) {
  */
 async function analyzeChart(req, res) {
   const deviceId = requireAuth(req, res); if (!deviceId) return;
+  const freeAnalysisIdentity = getFreeAnalysisIdentity(req, deviceId);
   if (!(await allowRequest(req, deviceId))) return sendJson(res, 429, { error: 'Too many requests. Try again shortly.' });
 
   let input = {};
@@ -1944,6 +1951,7 @@ async function analyzeChart(req, res) {
     return sendJson(res, 400, { error: error.message || 'Invalid JSON body.' });
   }
 
+  let freeAnalysisLockKey = null;
   try {
     const imageBase64 = typeof input.imageBase64 === 'string' ? input.imageBase64 : typeof input.image === 'string' ? input.image : '';
     const mime = typeof input.mimeType === 'string' ? input.mimeType : 'image/jpeg';
@@ -1959,16 +1967,33 @@ async function analyzeChart(req, res) {
       return sendJson(res, 200, aiUnavailableResponse(input, 'Chart AI is not configured on the server. Set OPENROUTER_API_KEY.'));
     }
 
-    const verifiedPremium = input.premiumAccess === true
-      ? await getRevenueCatPremiumStatus(deviceId)
-      : false;
+    const verifiedPremium = await getRevenueCatPremiumStatus(deviceId);
     const hasPremiumAccess = verifiedPremium === true || (verifiedPremium === null && input.premiumAccess === true);
     if (!hasPremiumAccess) {
-      return sendJson(res, 402, {
-        code: 'PREMIUM_REQUIRED',
-        error: 'premium_required',
-        message: 'A Premium subscription is required for chart analysis.',
-      });
+      if (!persistentStore.enabled) return sendJson(res, 503, { error: 'Free analysis requires durable server storage.' });
+      const freeAnalysisKey = `${FREE_ANALYSIS_KEY_PREFIX}${freeAnalysisIdentity}`;
+      if (await persistentStore.getJson(freeAnalysisKey)) {
+        return sendJson(res, 402, {
+          code: 'PREMIUM_REQUIRED',
+          error: 'premium_required',
+          message: 'Your free analysis has been used. Get unlimited breakdowns with Premium.',
+        });
+      }
+      const lockKey = `${freeAnalysisKey}:pending`;
+      const claimCount = await persistentStore.increment(lockKey, FREE_ANALYSIS_LOCK_TTL_SECONDS);
+      if (claimCount !== 1) {
+        return sendJson(res, 409, { code: 'ANALYSIS_IN_PROGRESS', error: 'Your free analysis is already running. Please wait for it to finish.' });
+      }
+      freeAnalysisLockKey = lockKey;
+      if (await persistentStore.getJson(freeAnalysisKey)) {
+        await persistentStore.deleteKey(freeAnalysisLockKey, FREE_ANALYSIS_LOCK_TTL_SECONDS);
+        freeAnalysisLockKey = null;
+        return sendJson(res, 402, {
+          code: 'PREMIUM_REQUIRED',
+          error: 'premium_required',
+          message: 'Your free analysis has been used. Get unlimited breakdowns with Premium.',
+        });
+      }
     }
 
     {
@@ -2035,11 +2060,21 @@ async function analyzeChart(req, res) {
         }
       }
 
+      if (freeAnalysisLockKey && ['success', 'no_trade'].includes(finalResult.status)) {
+        await persistentStore.setJson(`${FREE_ANALYSIS_KEY_PREFIX}${freeAnalysisIdentity}`, { usedAt: new Date().toISOString() });
+        finalResult.freeAnalysisUsed = true;
+      }
       return sendJson(res, 200, finalResult);
     }
   } catch (error) {
     console.error('[Chart AI] Error:', error);
     return sendJson(res, 200, aiUnavailableResponse(input, `Chart AI failed: ${(error instanceof Error ? error.message : 'unknown error')}`));
+  } finally {
+    if (freeAnalysisLockKey) {
+      await persistentStore.deleteKey(freeAnalysisLockKey, FREE_ANALYSIS_LOCK_TTL_SECONDS).catch((error) => {
+        console.error('[Chart AI] Failed to release free-analysis claim:', error);
+      });
+    }
   }
 }
 
@@ -2193,6 +2228,24 @@ async function getRevenueCatPremiumStatus(deviceId) {
   }
 }
 
+async function getAnalysisAccess(req, res) {
+  const deviceId = requireAuth(req, res); if (!deviceId) return;
+  const freeAnalysisIdentity = getFreeAnalysisIdentity(req, deviceId);
+  if (!persistentStore.enabled) return sendJson(res, 503, { error: 'Analysis access requires durable server storage.' });
+  try {
+    const freeAnalysisKey = `${FREE_ANALYSIS_KEY_PREFIX}${freeAnalysisIdentity}`;
+    const [used, pending, premium] = await Promise.all([
+      persistentStore.getJson(freeAnalysisKey),
+      persistentStore.getCounter(`${freeAnalysisKey}:pending`, FREE_ANALYSIS_LOCK_TTL_SECONDS),
+      getRevenueCatPremiumStatus(deviceId),
+    ]);
+    const freeAnalysisAvailable = !used && pending < 1;
+    return sendJson(res, 200, { canAnalyze: premium === true || freeAnalysisAvailable, freeAnalysisAvailable });
+  } catch (error) {
+    return sendJson(res, 503, { error: error.message || 'Unable to check analysis access.' });
+  }
+}
+
 async function recordSignal(req, res) {
   const deviceId = requireAuth(req, res); if (!deviceId) return;
   const result = z.object({ id: z.string().min(8).max(100), pair: z.string().regex(/^[A-Z]{6}$/), direction: z.enum(['BUY', 'SELL']), entry: z.number(), sl: z.number(), tp: z.number(), generatedAt: z.string().datetime() }).safeParse(await readJsonBody(req));
@@ -2230,7 +2283,9 @@ function createRequestHandler() {
       return readJsonBody(req).then((body) => {
         const deviceId = String(body.deviceId || '');
         if (!/^[a-zA-Z0-9_-]{16,128}$/.test(deviceId)) return sendJson(res, 400, { error: 'Invalid device identity.' });
-        return sendJson(res, 200, { token: createAuth(AUTH_SECRET, deviceId), expiresIn: 30 * 24 * 60 * 60 });
+        const freeAnalysisId = String(body.freeAnalysisId || deviceId);
+        if (!/^[a-zA-Z0-9_-]{16,128}$/.test(freeAnalysisId)) return sendJson(res, 400, { error: 'Invalid free-analysis device identity.' });
+        return sendJson(res, 200, { token: createAuth(AUTH_SECRET, deviceId, undefined, freeAnalysisId), expiresIn: 30 * 24 * 60 * 60 });
       }).catch((error) => sendJson(res, 400, { error: error.message }));
     }
 
@@ -2385,6 +2440,7 @@ function createRequestHandler() {
     if ((pathname === '/api/chart-analysis' || pathname === '/analyze-chart') && req.method === 'POST') return analyzeChart(req, res);
     if (pathname === '/api/multi-timeframe-analysis' && req.method === 'POST') return analyzeMultiTimeframeCharts(req, res);
     if (pathname === '/api/events' && req.method === 'POST') return receiveEvent(req, res);
+    if (pathname === '/api/analysis-access' && req.method === 'GET') return getAnalysisAccess(req, res);
     if (pathname === '/api/entitlement' && req.method === 'GET') return getEntitlement(req, res);
     if (pathname === '/api/signals' && req.method === 'POST') return recordSignal(req, res);
     if (pathname.startsWith('/api/signals/') && req.method === 'PATCH') return updateSignalOutcome(req, res);

@@ -88,6 +88,13 @@ async function increment(key, windowSeconds) {
   return current.value;
 }
 
+async function getCounter(key, ttlSeconds) {
+  if (supabaseEnabled) return Number(await supabaseGet(key) || 0);
+  if (await connect()) return Number(await redisClient.get(key) || 0);
+  pruneExpired();
+  return memoryStore.get(getTtlKey(key, ttlSeconds))?.value || 0;
+}
+
 async function getJson(key) {
   if (supabaseEnabled) return supabaseGet(key);
   if (await connect()) {
@@ -113,6 +120,22 @@ async function setJson(key, value, ttlSeconds) {
   return true;
 }
 
+async function deleteKey(key, ttlSeconds) {
+  if (supabaseEnabled) {
+    const response = await fetch(`${supabaseUrl}/rest/v1/${supabaseTable}?key=eq.${encodeURIComponent(key)}`, {
+      method: 'DELETE',
+      headers: supabaseHeaders(),
+    });
+    if (!response.ok) throw new Error(`Supabase delete failed with ${response.status}.`);
+    return true;
+  }
+  if (await connect()) {
+    await redisClient.del(key);
+    return true;
+  }
+  return memoryStore.delete(ttlSeconds ? getTtlKey(key, ttlSeconds) : key);
+}
+
 async function appendJson(key, value, maxItems, ttlSeconds) {
   const current = (await getJson(key)) || [];
   const list = [...current, value];
@@ -125,7 +148,9 @@ module.exports = {
   supabaseEnabled,
   connect,
   increment,
+  getCounter,
   getJson,
   setJson,
+  deleteKey,
   appendJson,
 };

@@ -3,7 +3,7 @@ import test from 'node:test';
 import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
-const { createAuth, verifyAuth } = require('../server/auth.js');
+const { createAuth, verifyAuth, verifyFreeAnalysisIdentity } = require('../server/auth.js');
 const { API_BASE_URL, resolveApiBaseUrl } = require('../services/apiAuth.ts');
 const { normalizeChartAnalysisError } = require('../services/chartDetection.ts');
 const { hasRevenueCatEntitlement } = require('../services/revenuecatEntitlements.ts');
@@ -21,6 +21,13 @@ test('signed anonymous tokens round-trip and reject tampering', () => {
 test('expired tokens are rejected', () => {
   const token = createAuth('test-secret', 'device-1234567890', -1);
   assert.equal(verifyAuth('test-secret', token), null);
+});
+
+test('signed sessions bind a stable free-analysis identity separately from the app user ID', () => {
+  const token = createAuth('test-secret', 'app-session-device-123', undefined, 'ios-vendor-device-123');
+  assert.equal(verifyAuth('test-secret', token), 'app-session-device-123');
+  assert.equal(verifyFreeAnalysisIdentity('test-secret', token), 'ios-vendor-device-123');
+  assert.equal(verifyFreeAnalysisIdentity('wrong-secret', token), null);
 });
 
 test('legacy signed sessions remain valid when their free-analysis identity claim is ignored', () => {
@@ -72,6 +79,7 @@ test('premium routes are centrally recognized and must gate before navigation', 
   assert.equal(isPremiumFeatureRoute('/lot-size-calculator'), false);
   assert.equal(isPremiumFeatureRoute('/daily-brief'), false);
   assert.equal(shouldGuardFeatureRoute('/analysis', false), true);
+  assert.equal(shouldGuardFeatureRoute('/analysis', false, true), false);
   assert.equal(shouldGuardFeatureRoute('/analysis', true), false);
   assert.equal(shouldGuardFeatureRoute('/strategy', false), true);
   assert.equal(shouldGuardFeatureRoute('/strategy', true), false);
@@ -89,9 +97,11 @@ test('the multi-timeframe selector includes every requested market', () => {
   }
 });
 
-test('AI Analysis and Strategy Generator require the existing active subscription', () => {
+test('only an available free analysis bypasses the premium gate for AI analysis', () => {
   assert.deepEqual(getFeatureAccessDecision('AI_ANALYSIS', false), { allowed: false, requiresPaywall: true });
+  assert.deepEqual(getFeatureAccessDecision('AI_ANALYSIS', false, true), { allowed: true, requiresPaywall: false });
   assert.deepEqual(getFeatureAccessDecision('TRADE_SETUP', false), { allowed: false, requiresPaywall: true });
+  assert.deepEqual(getFeatureAccessDecision('TRADE_SETUP', false, true), { allowed: false, requiresPaywall: true });
   assert.deepEqual(getFeatureAccessDecision('STRATEGY_GENERATOR', false), { allowed: false, requiresPaywall: true });
   assert.deepEqual(getFeatureAccessDecision('AI_ANALYSIS', true), { allowed: true, requiresPaywall: false });
   assert.deepEqual(getFeatureAccessDecision('TRADE_SETUP', true), { allowed: true, requiresPaywall: false });

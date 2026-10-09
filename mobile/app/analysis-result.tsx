@@ -20,7 +20,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import * as Haptics from '@/services/haptics';
 import * as Clipboard from 'expo-clipboard';
 import * as Sharing from 'expo-sharing';
@@ -119,6 +119,7 @@ function Toast({ visible, message }: { visible: boolean; message: string }) {
 export default function AnalysisResultScreen() {
   const insets = useSafeAreaInsets();
   const colors = useColors();
+  const { postFreePaywall } = useLocalSearchParams<{ postFreePaywall?: string }>();
   const { currentAnalysis, saveAnalysis, savedAnalyses } = useApp();
   const [toastVisible, setToastVisible] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
@@ -129,6 +130,7 @@ export default function AnalysisResultScreen() {
   const shareReadyRef = React.useRef(false);
 
   useEffect(() => {
+    if (postFreePaywall === '1') return;
     let active = true;
     const timer = setTimeout(() => {
       void consumeRatingPrompt().then((shouldShow) => {
@@ -139,7 +141,15 @@ export default function AnalysisResultScreen() {
       active = false;
       clearTimeout(timer);
     };
-  }, [currentAnalysis?.id]);
+  }, [currentAnalysis?.id, postFreePaywall]);
+
+  useEffect(() => {
+    if (postFreePaywall !== '1') return;
+    const timer = setTimeout(() => {
+      router.push({ pathname: '/paywall', params: { source: 'free-analysis' } });
+    }, 4000);
+    return () => clearTimeout(timer);
+  }, [postFreePaywall]);
 
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
   const botPad = Platform.OS === 'web' ? 34 : insets.bottom;

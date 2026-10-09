@@ -3,6 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router } from 'expo-router';
 import { addBillingListener, billingIsConfigured, configureBilling, getPremiumStatus, purchasePlan, restorePurchases, type BillingPlan } from '@/services/billing';
 import { getFeatureAccessDecision, type FeatureAccessDecision, type ProtectedFeature } from '@/services/featureAccess';
+import { getServerAnalysisAccess } from '@/services/apiAuth';
 import { setHapticsEnabled } from '@/services/haptics';
 import { createDailyRiskActivity, getLocalRiskDateKey, normalizeDailyRiskActivity, type DailyRiskActivity, type OpenRiskPosition } from '@/services/risk';
 
@@ -380,8 +381,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
 
     const subscriptionActive = isSubscribed;
+    const freeAnalysisAvailable = !subscriptionActive && feature === 'AI_ANALYSIS'
+      ? await getServerAnalysisAccess()
+      : false;
 
-    const decision = getFeatureAccessDecision(feature, subscriptionActive);
+    const decision = getFeatureAccessDecision(feature, subscriptionActive, freeAnalysisAvailable !== false);
     console.log(`[ACCESS] Feature: ${feature}`);
     console.log(`[ACCESS] Subscription status: ${subscriptionActive}`);
     console.log(`[ACCESS] Result: ${decision.allowed ? 'ALLOWED' : 'PAYWALL'}`);

@@ -18,7 +18,7 @@ Saved analyses, strategies, settings, and backups may be stored locally on your 
 
 ## Device identifier and API sessions
 
-FXSnap uses an app-scoped identifier to maintain anonymous API sessions and associate requests needed to provide app services. This identifier is not an advertising identifier. Subscription purchases and paid entitlements continue to be managed through RevenueCat.
+FXSnap uses an app-scoped identifier to maintain anonymous API sessions and associate requests needed to provide app services. A platform-provided device identifier (Android ID or iOS IDFV) is sent to the server to enforce the one-time free chart analysis across reinstalls. These identifiers are not advertising identifiers. Subscription purchases and paid entitlements continue to be managed through RevenueCat.
 
 ## Push notifications
 

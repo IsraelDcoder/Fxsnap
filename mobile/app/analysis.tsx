@@ -282,7 +282,7 @@ function buildAnalysisResult(chart: ChartAnalysisResult, pair: string, imageUri?
 export default function AnalysisScreen() {
   const insets = useSafeAreaInsets();
   const colors = useColors();
-  const { setCurrentAnalysis, isSubscribed, isLoading, billingAvailable } = useApp();
+  const { setCurrentAnalysis, isSubscribed, isLoading, billingAvailable, checkFeatureAccess } = useApp();
   const [stage, setStage] = useState<Stage>('pick');
   const [mode, setMode] = useState<AnalysisMode>('quick');
   const [imageUri, setImageUri] = useState<string | null>(null);
@@ -296,18 +296,15 @@ export default function AnalysisScreen() {
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
   const botPad = Platform.OS === 'web' ? 34 : insets.bottom;
 
-  const checkAccessBeforeAnalysis = async (): Promise<boolean> => {
+  const checkAccessBeforeAnalysis = async (feature: 'AI_ANALYSIS' | 'TRADE_SETUP' = 'AI_ANALYSIS'): Promise<boolean> => {
     if (isLoading) return false;
-    if (!isSubscribed) {
-      router.replace('/paywall');
-      return false;
-    }
-    return true;
+    const decision = await checkFeatureAccess(feature, '/analysis');
+    return decision.allowed;
   };
 
   useEffect(() => {
-    if (isLoading || isSubscribed) return;
-    router.replace('/paywall');
+    if (isLoading) return;
+    void checkFeatureAccess('AI_ANALYSIS', '/analysis');
   }, [isLoading, isSubscribed]);
 
   const pickFromGallery = async () => {
@@ -384,7 +381,7 @@ export default function AnalysisScreen() {
   };
 
   const startMultiTimeframeMode = async () => {
-    if (!(await checkAccessBeforeAnalysis())) return;
+    if (!(await checkAccessBeforeAnalysis('TRADE_SETUP'))) return;
     setMode('multiTimeframe');
     setStage('pick');
     setSelectedPair(null);
@@ -459,7 +456,9 @@ export default function AnalysisScreen() {
     trackEvent('analysis_succeeded', { pair, status: chart.status, confidence: chart.confidence });
     await recordRatingEligibleAnalysis();
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    router.replace('/analysis-result');
+    router.replace(chart.freeAnalysisUsed
+      ? { pathname: '/analysis-result', params: { postFreePaywall: '1' } }
+      : '/analysis-result');
   };
 
   const handlePairSelected = async (pair: string) => {
@@ -515,7 +514,7 @@ export default function AnalysisScreen() {
 
   const handleMultiTimeframeAnalysis = async () => {
     if (!selectedPair || !timeframeCharts.h4 || !timeframeCharts.m15 || isLoading) return;
-    if (!(await checkAccessBeforeAnalysis())) return;
+    if (!(await checkAccessBeforeAnalysis('TRADE_SETUP'))) return;
     setStage('analyzing');
     setAnalysisError(null);
     trackEvent('analysis_started', { mode: 'multi_timeframe' });
