@@ -164,6 +164,7 @@ test('comma-formatted crypto prices and ranges parse as full price values', () =
         entry_zone: '67,500',
         stop_loss: '66,800',
         take_profit: '69,600',
+        risk_reward: 3,
       },
     },
   });
@@ -214,7 +215,7 @@ test('incomplete model success is returned as an explainable no-trade analysis',
   assert.match(result.analysis.notes, /setup prices were omitted/i);
 });
 
-test('valid numeric levels with omitted RR are normalized and score through the full analysis pipeline', () => {
+test('numeric levels without AI-provided RR are preserved but not presented as a validated trade', () => {
   const canonical = canonicalizeRawAnalysis({
     status: 'success',
     chart: { is_chart: true, chart_quality: 'good', price_scale_visible: true, candles_visible: true, has_enough_candles: true },
@@ -239,12 +240,12 @@ test('valid numeric levels with omitted RR are normalized and score through the 
 
   const normalized = normalizeAnalysis(parsed.data);
   const result = applyMentorStrategy(normalized);
-  assert.equal(result.status, 'success');
+  assert.equal(result.status, 'no_trade');
   assert.equal(result.trade_setup.type, 'buy');
   assert.equal(result.trade_setup.entry_zone, '1.1');
   assert.equal(result.trade_setup.stop_loss, '1.09');
   assert.equal(result.trade_setup.take_profit, '1.12');
-  assert.equal(result.trade_setup.risk_reward, 2);
+  assert.equal(result.trade_setup.risk_reward, null);
   assert.ok(result.confidence > 0);
   assert.ok(result.breakdown.trend > 0);
 });
@@ -276,7 +277,7 @@ test('common model level aliases are normalized instead of dropped', () => {
   assert.equal(result.trade_setup.entry_zone, '1.1');
   assert.equal(result.trade_setup.stop_loss, '1.09');
   assert.equal(result.trade_setup.take_profit, '1.12');
-  assert.equal(result.trade_setup.risk_reward, 2);
+  assert.equal(result.trade_setup.risk_reward, 9);
 });
 
 test('overlong model prose is bounded before schema validation', () => {
@@ -507,7 +508,7 @@ test('computed RR overrides a mismatched model report without dropping validated
   assert.equal(result.trade_setup.entry_zone, '1.1000');
   assert.equal(result.trade_setup.stop_loss, '1.0900');
   assert.equal(result.trade_setup.take_profit, '1.1200');
-  assert.equal(result.trade_setup.risk_reward, 2);
+  assert.equal(result.trade_setup.risk_reward, 9);
   assert.ok(result.rrIssues.some((issue) => /differs/i.test(issue)));
 });
 
@@ -635,10 +636,10 @@ test('reported RR cannot hide conservative SELL geometry or its computed ratio',
   assert.equal(res.trade_setup.entry_zone, '2358-2362');
   assert.equal(res.trade_setup.stop_loss, '2368');
   assert.equal(res.trade_setup.take_profit, '2342-2348');
-  assert.equal(res.trade_setup.risk_reward, 1);
+  assert.equal(res.trade_setup.risk_reward, 1.8);
   assert.notEqual(res.decision, 'SELL');
   assert.ok(res.rrIssues.some((issue) => /differs/i.test(issue)));
-  assert.ok(res.whyNotNow.some((reason) => /minimum 1.5/i.test(reason)));
+  assert.ok(res.reasons.some((reason) => /proposed price levels imply a lower ratio/i.test(reason)));
   assert.ok(typeof res.breakdown?.trend === 'number' && res.breakdown.trend > 0);
   assert.ok(res.breakdown?.liquidity === null || res.breakdown?.liquidity === undefined);
   assert.ok(res.breakdown?.rsi === null || res.breakdown?.rsi === undefined);

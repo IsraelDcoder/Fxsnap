@@ -682,7 +682,7 @@ export default function AnalysisResultScreen() {
               <TradeLevelRow label="Stop Loss" value={stopLevel} color="#FF6262" /><View style={styles.tableDivider} />
               <TradeLevelRow label="Take Profit 1" value={tp1Level} color="#39E58C" /><View style={styles.tableDivider} />
               <TradeLevelRow label="Take Profit 2" value={usableTargetLevels.length > 1 ? (hasFullAnalysisAccess ? tp2Level : '••••••') : 'Not provided'} color="#39E58C" locked={!hasFullAnalysisAccess && usableTargetLevels.length > 1} onPress={() => openLockedContent('tp2')} /><View style={styles.tableDivider} />
-                <TradeLevelRow label="Risk : Reward" value={hasFullAnalysisAccess ? (riskReward === '—' ? riskReward : riskReward.includes(':') ? riskReward : `1:${riskReward}`) : '••••'} color="#39E58C" locked={!hasFullAnalysisAccess} onPress={() => openLockedContent('risk-reward')} />
+                <TradeLevelRow label="Risk : Reward (AI)" value={hasFullAnalysisAccess ? (riskReward === '—' ? riskReward : riskReward.includes(':') ? riskReward : `1:${riskReward}`) : '••••'} color="#39E58C" locked={!hasFullAnalysisAccess} onPress={() => openLockedContent('risk-reward')} />
             </View>
             <View style={styles.levelsCard}>
               <TouchableOpacity style={styles.aiHeading} onPress={() => {

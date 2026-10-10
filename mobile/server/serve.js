@@ -570,18 +570,6 @@ function canonicalizeRawAnalysis(raw) {
     tradeRaw.risk_reward ?? tradeRaw.riskReward ?? tradeRaw.rr ?? raw.risk_reward ?? raw.riskReward ?? raw.rr,
   );
 
-  if ((riskReward == null || riskReward <= 0) && rawTradeType !== 'none') {
-    const computed = computeRRFromLevels({
-      entry: entryZone,
-      sl: stopLoss,
-      tp: takeProfit,
-      direction: rawTradeType,
-    });
-    if (computed.rr != null && computed.rr > 0 && computed.issues.length === 0) {
-      riskReward = computed.rr;
-    }
-  }
-
   const message = boundedString(raw.message, '', 1000);
   const reasons = parseBoundedStringArray(raw.reasons, 20, 300);
 
@@ -1021,9 +1009,9 @@ function evaluateDecisionEngine(obs) {
     }
 
     const hasLevelGeometry = Boolean(entryRange && slRange && tpRange && computed?.rr != null);
-    const rrValue = computed?.rr ?? null;
+    const rrValue = reportedRR;
 
-    if (hasLevelGeometry && rrValue != null && rrValue > 0) {
+    if (hasLevelGeometry) {
       trade_setup = {
         type: dir === 'buy' ? 'buy' : dir === 'sell' ? 'sell' : 'none',
         entry_zone: String(rawTrade.entry_zone || 'none'),
@@ -1031,14 +1019,17 @@ function evaluateDecisionEngine(obs) {
         take_profit: String(rawTrade.take_profit || 'none'),
         risk_reward: rrValue,
       };
-      validations.candidate_setup = true;
-      if (rrValue < 1.5) {
+      if (rrValue != null && rrValue > 0) validations.candidate_setup = true;
+      if (rrValue == null || rrValue <= 0) {
+        failed.push('The AI did not provide a valid risk/reward value for the proposed price levels.');
+      } else if (rrValue < 1.5) {
         failed.push('Risk/reward does not meet the minimum 1.5 threshold for a trade.');
       }
+      if (computed.rr != null && computed.rr < 1.5 && rrValue >= 1.5) {
+        failed.push('The AI-reported risk/reward meets the threshold, but the proposed price levels imply a lower ratio; verify the levels before trading.');
+      }
     } else if (entryRange && slRange && tpRange) {
-      failed.push(rrValue != null && rrValue < 1.5
-        ? 'Risk/reward does not meet the minimum 1.5 threshold for a trade.'
-        : 'The setup is directional but not yet fully validated for entry quality and risk/reward.');
+      failed.push('The proposed price levels are not geometrically valid for this trade direction.');
     }
   }
 
@@ -1100,7 +1091,7 @@ function evaluateDecisionEngine(obs) {
 
   if (!clearDirectionalRead && !validations.candidate_setup) {
     result.status = 'no_trade';
-  } else if (rrTooLow) {
+  } else if (rrTooLow || failed.some((condition) => /proposed price levels imply a lower ratio/i.test(condition))) {
     result.status = 'no_trade';
     if (!result.failed_conditions.includes('Risk/reward does not meet the minimum threshold for a trade.')) {
       result.failed_conditions.push('Risk/reward does not meet the minimum threshold for a trade.');
