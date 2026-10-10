@@ -999,15 +999,13 @@ function evaluateDecisionEngine(obs) {
       rrIssues.push(...computed.issues);
     }
     if (ratioMismatch) {
-      const message = 'Reported risk/reward does not match the ratio calculated from the proposed levels.';
-      rrIssues.push(message);
-      failed.push(message);
+      rrIssues.push('Reported risk/reward differs from the ratio calculated from the proposed levels; the calculated ratio is used.');
     }
 
-    const hasLevelGeometry = Boolean(entryRange && slRange && tpRange && computed?.rr != null && !ratioMismatch);
+    const hasLevelGeometry = Boolean(entryRange && slRange && tpRange && computed?.rr != null);
     const rrValue = computed?.rr ?? null;
 
-    if (hasLevelGeometry && rrValue != null && rrValue >= 1.5) {
+    if (hasLevelGeometry && rrValue != null && rrValue > 0) {
       trade_setup = {
         type: dir === 'buy' ? 'buy' : dir === 'sell' ? 'sell' : 'none',
         entry_zone: String(rawTrade.entry_zone || 'none'),
@@ -1016,6 +1014,9 @@ function evaluateDecisionEngine(obs) {
         risk_reward: rrValue,
       };
       validations.candidate_setup = true;
+      if (rrValue < 1.5) {
+        failed.push('Risk/reward does not meet the minimum 1.5 threshold for a trade.');
+      }
     } else if (entryRange && slRange && tpRange) {
       failed.push(rrValue != null && rrValue < 1.5
         ? 'Risk/reward does not meet the minimum 1.5 threshold for a trade.'
@@ -1064,7 +1065,7 @@ function evaluateDecisionEngine(obs) {
   score = Math.max(0, Math.min(100, Math.round(score)));
 
   const clearDirectionalRead = Boolean(validations.trend || validations.structure || hasDirectionalEvidence);
-  const setupReady = Boolean(trade_setup.type !== 'none' && trade_setup.risk_reward != null && Number(trade_setup.risk_reward) > 0 && validations.candidate_setup);
+  const setupReady = Boolean(trade_setup.type !== 'none' && trade_setup.risk_reward != null && Number(trade_setup.risk_reward) >= 1.5 && validations.candidate_setup);
 
   validations.all_required_conditions_met = clearDirectionalRead && (setupReady || (!setupReady && !failed.some((f) => /invalid|not clearly visible|directional structure/i.test(f))));
 

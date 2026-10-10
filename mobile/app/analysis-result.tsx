@@ -262,6 +262,12 @@ export default function AnalysisResultScreen() {
     : priceChangeFavorable ? '#39E58C' : '#FF6262';
   const riskReward = formatRiskReward(currentAnalysis?.tradeSetup?.riskReward);
   const confidence = currentAnalysis?.marketConfidence ?? currentAnalysis?.confidence ?? 0;
+  const entryReadiness = Math.round(Math.max(0, Math.min(100, currentAnalysis?.entryReadiness ?? 0)));
+  const readinessLabel = currentAnalysis?.tradeStatus === 'actionable'
+    ? 'Ready'
+    : currentAnalysis?.tradeStatus?.startsWith('waiting')
+      ? 'Waiting'
+      : 'No setup';
   const chartPaths = buildSmoothChartPaths(currentAnalysis?.priceSeries);
   const confidenceLabel = confidence >= 70 ? 'High' : confidence >= 40 ? 'Medium' : 'Low';
   const reasoning = currentAnalysis ? currentAnalysis.reasoning?.length ? currentAnalysis.reasoning.slice(0, 5) : [
@@ -665,7 +671,7 @@ export default function AnalysisResultScreen() {
           <>
             <Animated.View entering={FadeInUp.duration(350)} style={styles.verdictCard}>
               <View style={styles.verdictTop}><Text style={styles.sectionTitle}>MARKET READ</Text><View style={[styles.verdictBadge, { backgroundColor: `${directionColor}20` }]}><View style={[styles.verdictDot, { backgroundColor: directionColor }]} /><Text style={[styles.verdictText, { color: directionColor }]}>{isNoTrade ? marketReadLabel : currentAnalysis.direction || marketReadLabel}</Text></View></View>
-              <View style={styles.confidenceLine}><Text style={styles.bodyMuted}>Trade readiness</Text><Text style={styles.confidenceText}>{isAnalysisUnavailable ? 'Unavailable' : isNoTrade ? 'No validated setup' : 'Setup validated'}</Text></View>
+              <View style={styles.confidenceLine}><Text style={styles.bodyMuted}>Trade readiness</Text><Text style={styles.confidenceText}>{isAnalysisUnavailable ? 'Unavailable' : `${entryReadiness}% · ${readinessLabel}`}</Text></View>
               <View style={styles.confidenceLine}><Text style={styles.bodyMuted}>Evidence score</Text><Text style={styles.confidenceText}>{confidenceLabel} · {confidence}%</Text></View>
               <View style={styles.confidenceTrack}><View style={[styles.confidenceProgress, { width: `${Math.max(0, Math.min(confidence, 100))}%`, backgroundColor: directionColor }]} /></View>
             </Animated.View>

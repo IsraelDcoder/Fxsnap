@@ -457,7 +457,7 @@ test('NO TRADE always includes an explanation when the model supplies none', () 
   assert.ok(result.reasons.some((reason) => /directional structure is not clearly visible/i.test(reason)));
 });
 
-test('mismatched model-reported RR is rejected while computed RR is authoritative', () => {
+test('computed RR overrides a mismatched model report without dropping validated levels', () => {
   const normalized = {
     status: 'success',
     chart: { is_chart: true, timeframe: 'H1', candles_visible: true, price_scale_visible: true, has_enough_candles: true },
@@ -472,9 +472,13 @@ test('mismatched model-reported RR is rejected while computed RR is authoritativ
 
   const result = applyMentorStrategy(normalized);
 
-  assert.equal(result.status, 'no_trade');
-  assert.equal(result.trade_setup.type, 'none');
-  assert.ok(result.rrIssues.some((issue) => /does not match/i.test(issue)));
+  assert.equal(result.status, 'success');
+  assert.equal(result.trade_setup.type, 'buy');
+  assert.equal(result.trade_setup.entry_zone, '1.1000');
+  assert.equal(result.trade_setup.stop_loss, '1.0900');
+  assert.equal(result.trade_setup.take_profit, '1.1200');
+  assert.equal(result.trade_setup.risk_reward, 2);
+  assert.ok(result.rrIssues.some((issue) => /differs/i.test(issue)));
 });
 
 test('insufficient RR should block trade', () => {
@@ -495,7 +499,11 @@ test('insufficient RR should block trade', () => {
   // With strict RR enforcement the final status should be no_trade, but a fallback candidate may be preserved for DEVELOPING workflows
   assert.equal(res.status, 'no_trade');
   assert.equal(res.marketBias, 'bullish');
-  assert.equal(res.trade_setup.type, 'none');
+  assert.equal(res.trade_setup.type, 'buy');
+  assert.equal(res.trade_setup.entry_zone, '1.1000');
+  assert.equal(res.trade_setup.stop_loss, '1.0955');
+  assert.equal(res.trade_setup.take_profit, '1.1020');
+  assert.ok(res.trade_setup.risk_reward < 1.5);
   assert.ok(res.reasons.some((r) => /risk.reward|risk\/reward/i.test(r)) || res.rrIssues.length > 0);
 });
 
@@ -560,7 +568,7 @@ test('fallback candidate created from range strings when full validations missin
   assert.ok(['BUY', 'SELL', 'WAIT', 'NO_TRADE'].includes(res.decision));
 });
 
-test('reported RR that contradicts conservative SELL geometry is rejected', () => {
+test('reported RR cannot hide conservative SELL geometry or its computed ratio', () => {
   const normalized = {
     status: 'success',
     detectedPair: 'XAUUSD',
@@ -593,9 +601,14 @@ test('reported RR that contradicts conservative SELL geometry is rejected', () =
   const res = applyMentorStrategy(normalized);
   assert.equal(res.marketBias, 'bearish');
   assert.ok(res.marketConfidence > 0);
-  assert.equal(res.trade_setup.type, 'none');
-  assert.equal(res.decision, 'NO_TRADE');
-  assert.ok(res.rrIssues.some((issue) => /does not match/i.test(issue)));
+  assert.equal(res.trade_setup.type, 'sell');
+  assert.equal(res.trade_setup.entry_zone, '2358-2362');
+  assert.equal(res.trade_setup.stop_loss, '2368');
+  assert.equal(res.trade_setup.take_profit, '2342-2348');
+  assert.equal(res.trade_setup.risk_reward, 1);
+  assert.notEqual(res.decision, 'SELL');
+  assert.ok(res.rrIssues.some((issue) => /differs/i.test(issue)));
+  assert.ok(res.whyNotNow.some((reason) => /minimum 1.5/i.test(reason)));
   assert.ok(typeof res.breakdown?.trend === 'number' && res.breakdown.trend > 0);
   assert.ok(res.breakdown?.liquidity === null || res.breakdown?.liquidity === undefined);
   assert.ok(res.breakdown?.rsi === null || res.breakdown?.rsi === undefined);
