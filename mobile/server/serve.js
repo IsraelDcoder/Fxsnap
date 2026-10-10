@@ -533,24 +533,42 @@ function canonicalizeRawAnalysis(raw) {
   const analysisRaw = parseJsonField(raw.analysis) || {};
   const zonesRaw = parseJsonField(raw.zones) || {};
   const strategyRaw = parseJsonField(raw.strategy) || {};
-  const tradeRaw = parseJsonField(raw.trade_setup) || {};
-  const takeProfitLevels = parseTakeProfitLevels(tradeRaw.take_profit_levels, tradeRaw.take_profit);
+  const tradeRaw = parseJsonField(raw.trade_setup ?? raw.tradeSetup ?? raw.trade) || {};
+  const rawTakeProfit = tradeRaw.take_profit ?? tradeRaw.takeProfit ?? tradeRaw.take_profit_price
+    ?? tradeRaw.tp ?? tradeRaw.target ?? raw.take_profit ?? raw.takeProfit ?? raw.tp ?? raw.target;
+  const takeProfitLevels = parseTakeProfitLevels(
+    tradeRaw.take_profit_levels ?? tradeRaw.takeProfitLevels ?? tradeRaw.targets,
+    rawTakeProfit,
+  );
   const reasoning = parseBoundedStringArray(raw.reasoning, 5, 300).length
     ? parseBoundedStringArray(raw.reasoning, 5, 300)
     : parseBoundedStringArray(analysisRaw.reasoning, 5, 300);
-  const rawTradeType = canonicalizeEnumOr(tradeRaw.type, {
-    buy: 'buy',
-    sell: 'sell',
-    none: 'none',
-    long: 'buy',
-    short: 'sell',
-    no_trade: 'none',
-    no_setup: 'none',
-  }, ['buy', 'sell', 'none'], 'none');
-  const entryZone = boundedString(ensurePriceString(tradeRaw.entry_zone), 'none');
-  const stopLoss = boundedString(ensurePriceString(tradeRaw.stop_loss), 'none');
-  const takeProfit = boundedString(ensurePriceString(takeProfitLevels[0] || tradeRaw.take_profit), 'none');
-  let riskReward = parseRiskReward(tradeRaw.risk_reward);
+  const rawTradeType = canonicalizeEnumOr(
+    tradeRaw.type ?? tradeRaw.trade_type ?? tradeRaw.direction
+      ?? raw.trade_type ?? raw.trade_direction ?? raw.direction ?? raw.signal,
+    {
+      buy: 'buy',
+      sell: 'sell',
+      none: 'none',
+      long: 'buy',
+      short: 'sell',
+      no_trade: 'none',
+      no_setup: 'none',
+    },
+    ['buy', 'sell', 'none'],
+    'none',
+  );
+  const entryZone = boundedString(ensurePriceString(
+    tradeRaw.entry_zone ?? tradeRaw.entry ?? tradeRaw.entry_price ?? raw.entry_zone ?? raw.entry ?? raw.entry_price,
+  ), 'none');
+  const stopLoss = boundedString(ensurePriceString(
+    tradeRaw.stop_loss ?? tradeRaw.stopLoss ?? tradeRaw.stop_loss_price ?? tradeRaw.sl ?? tradeRaw.stop
+      ?? raw.stop_loss ?? raw.stopLoss ?? raw.sl,
+  ), 'none');
+  const takeProfit = boundedString(ensurePriceString(takeProfitLevels[0] || rawTakeProfit), 'none');
+  let riskReward = parseRiskReward(
+    tradeRaw.risk_reward ?? tradeRaw.riskReward ?? tradeRaw.rr ?? raw.risk_reward ?? raw.riskReward ?? raw.rr,
+  );
 
   if ((riskReward == null || riskReward <= 0) && rawTradeType !== 'none') {
     const computed = computeRRFromLevels({

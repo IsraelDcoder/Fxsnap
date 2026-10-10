@@ -249,6 +249,36 @@ test('valid numeric levels with omitted RR are normalized and score through the 
   assert.ok(result.breakdown.trend > 0);
 });
 
+test('common model level aliases are normalized instead of dropped', () => {
+  const canonical = canonicalizeRawAnalysis({
+    status: 'success',
+    chart: { is_chart: true, chart_quality: 'good', price_scale_visible: true, candles_visible: true, has_enough_candles: true },
+    analysis: {
+      trend: 'bullish',
+      structure: 'Higher highs and higher lows',
+      market_structure: 'An uptrend with a pullback to support.',
+    },
+    zones: { support: '1.0950', resistance: '1.1200' },
+    direction: 'BUY',
+    trade_setup: {
+      entry: 1.1,
+      sl: 1.09,
+      tp: 1.12,
+      rr: 9,
+    },
+  });
+  const parsed = TradeAnalysisSchema.safeParse(canonical);
+  assert.equal(parsed.success, true);
+
+  const result = applyMentorStrategy(normalizeAnalysis(parsed.data));
+  assert.equal(result.status, 'success');
+  assert.equal(result.trade_setup.type, 'buy');
+  assert.equal(result.trade_setup.entry_zone, '1.1');
+  assert.equal(result.trade_setup.stop_loss, '1.09');
+  assert.equal(result.trade_setup.take_profit, '1.12');
+  assert.equal(result.trade_setup.risk_reward, 2);
+});
+
 test('overlong model prose is bounded before schema validation', () => {
   const canonical = canonicalizeRawAnalysis({
     status: 'no_trade',
