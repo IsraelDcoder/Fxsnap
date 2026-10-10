@@ -647,6 +647,59 @@ test('reported RR cannot hide conservative SELL geometry or its computed ratio',
   assert.ok(res.dataLimitations.some((item) => /rsi|volume|liquidity|timeframe/i.test(String(item))));
 });
 
+test('XAUUSD and BTCUSD keep AI-provided levels visible when geometry blocks the trade', () => {
+  const cases = [
+    {
+      pair: 'XAUUSD',
+      direction: 'buy',
+      entry: '2350',
+      stop: '2360',
+      target: '2380',
+      trend: 'bullish',
+      structure: 'Higher highs and higher lows.',
+    },
+    {
+      pair: 'BTCUSD',
+      direction: 'sell',
+      entry: '65000',
+      stop: '64000',
+      target: '62000',
+      trend: 'bearish',
+      structure: 'Lower highs and lower lows.',
+    },
+  ];
+
+  for (const item of cases) {
+    const result = applyMentorStrategy({
+      status: 'success',
+      detectedPair: item.pair,
+      chart: { is_chart: true, candles_visible: true, price_scale_visible: true, has_enough_candles: true },
+      analysis: { trend: item.trend, market_structure: item.structure, structure: item.structure },
+      zones: { support: 'visible support', resistance: 'visible resistance' },
+      strategy: {},
+      trade_setup: {
+        type: item.direction,
+        entry_zone: item.entry,
+        stop_loss: item.stop,
+        take_profit: item.target,
+        risk_reward: 3,
+      },
+      confidence: 70,
+      reasons: [],
+    });
+
+    assert.equal(result.status, 'no_trade', item.pair);
+    assert.equal(result.trade_setup.type, item.direction, item.pair);
+    assert.equal(result.trade_setup.entry_zone, item.entry, item.pair);
+    assert.equal(result.trade_setup.stop_loss, item.stop, item.pair);
+    assert.equal(result.trade_setup.take_profit, item.target, item.pair);
+    assert.equal(result.tradeStatus, 'no_setup', item.pair);
+    assert.equal(result.entryReadiness, 0, item.pair);
+    assert.ok(result.rrIssues.length > 0, item.pair);
+    assert.ok(result.whyNotNow.some((reason) => /geometrically invalid/i.test(reason)), item.pair);
+  }
+});
+
 test('neutral market remains no_setup while preserving explainable reasons', () => {
   const normalized = {
     status: 'success',

@@ -15,7 +15,7 @@ function buildBiasConfidence(norm, derived) {
 const { parseRiskReward: rrParse } = require('./rr');
 
 function computeSetupConfidence(norm, derived, evalRes) {
-  if (!evalRes.trade_setup || evalRes.trade_setup.type === 'none') return 0;
+  if (!evalRes.trade_setup || evalRes.trade_setup.type === 'none' || evalRes.candidate === false) return 0;
   const rr = typeof evalRes.trade_setup.risk_reward === 'number'
     ? evalRes.trade_setup.risk_reward
     : rrParse(evalRes.trade_setup.risk_reward);

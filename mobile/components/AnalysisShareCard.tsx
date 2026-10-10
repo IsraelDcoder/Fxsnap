@@ -12,12 +12,22 @@ type Props = {
 
 const AnalysisShareCard = React.forwardRef(function AnalysisShareCard(props: Props, ref: any) {
   const { analysis, colors, isPremium = false, onReady } = props;
+  const layoutReadyRef = React.useRef(false);
+  const imagePendingRef = React.useRef(Boolean(analysis?.imageUri));
   const readyRef = React.useRef(false);
 
-  const handleLayout = () => {
-    if (!onReady || readyRef.current) return;
+  const signalReady = () => {
+    if (!onReady || !layoutReadyRef.current || imagePendingRef.current || readyRef.current) return;
     readyRef.current = true;
     setTimeout(onReady, 180);
+  };
+  const handleLayout = () => {
+    layoutReadyRef.current = true;
+    signalReady();
+  };
+  const handleImageLoadEnd = () => {
+    imagePendingRef.current = false;
+    signalReady();
   };
 
   const isBuy = analysis?.direction === 'BUY';
@@ -51,7 +61,7 @@ const AnalysisShareCard = React.forwardRef(function AnalysisShareCard(props: Pro
 
       <Text style={[styles.sharePair, { color: colors.text }]}>{analysis.pair}</Text>
 
-      {analysis.imageUri ? <Image source={{ uri: analysis.imageUri }} style={styles.shareChart} resizeMode="cover" /> : null}
+      {analysis.imageUri ? <Image source={{ uri: analysis.imageUri }} style={styles.shareChart} resizeMode="cover" onLoadEnd={handleImageLoadEnd} /> : null}
 
       <View style={styles.shareConfidenceRow}>
         <View>

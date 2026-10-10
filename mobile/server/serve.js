@@ -1005,22 +1005,24 @@ function evaluateDecisionEngine(obs) {
       rrIssues.push(...computed.issues);
     }
     if (ratioMismatch) {
-      rrIssues.push('Reported risk/reward differs from the ratio calculated from the proposed levels; the calculated ratio is used.');
+      rrIssues.push('AI-reported risk/reward differs from the ratio implied by the proposed levels; verify the setup before trading.');
     }
 
     const hasLevelGeometry = Boolean(entryRange && slRange && tpRange && computed?.rr != null);
     const rrValue = reportedRR;
 
-    if (hasLevelGeometry) {
+    if (['buy', 'sell'].includes(dir) && (entryRange || slRange || tpRange)) {
       trade_setup = {
-        type: dir === 'buy' ? 'buy' : dir === 'sell' ? 'sell' : 'none',
-        entry_zone: String(rawTrade.entry_zone || 'none'),
-        stop_loss: String(rawTrade.stop_loss || 'none'),
-        take_profit: String(rawTrade.take_profit || 'none'),
+        type: dir,
+        entry_zone: entryRange ? String(rawTrade.entry_zone) : 'none',
+        stop_loss: slRange ? String(rawTrade.stop_loss) : 'none',
+        take_profit: tpRange ? String(rawTrade.take_profit) : 'none',
         risk_reward: rrValue,
       };
-      if (rrValue != null && rrValue > 0) validations.candidate_setup = true;
-      if (rrValue == null || rrValue <= 0) {
+      if (hasLevelGeometry && rrValue != null && rrValue > 0) validations.candidate_setup = true;
+      if (!hasLevelGeometry) {
+        failed.push('The AI-provided levels are incomplete or geometrically invalid; no trade was validated.');
+      } else if (rrValue == null || rrValue <= 0) {
         failed.push('The AI did not provide a valid risk/reward value for the proposed price levels.');
       } else if (rrValue < 1.5) {
         failed.push('Risk/reward does not meet the minimum 1.5 threshold for a trade.');
@@ -1028,8 +1030,6 @@ function evaluateDecisionEngine(obs) {
       if (computed.rr != null && computed.rr < 1.5 && rrValue >= 1.5) {
         failed.push('The AI-reported risk/reward meets the threshold, but the proposed price levels imply a lower ratio; verify the levels before trading.');
       }
-    } else if (entryRange && slRange && tpRange) {
-      failed.push('The proposed price levels are not geometrically valid for this trade direction.');
     }
   }
 
@@ -1076,7 +1076,7 @@ function evaluateDecisionEngine(obs) {
   const clearDirectionalRead = Boolean(validations.trend || validations.structure || hasDirectionalEvidence);
   const setupReady = Boolean(trade_setup.type !== 'none' && trade_setup.risk_reward != null && Number(trade_setup.risk_reward) >= 1.5 && validations.candidate_setup);
 
-  validations.all_required_conditions_met = clearDirectionalRead && (setupReady || (!setupReady && !failed.some((f) => /invalid|not clearly visible|directional structure/i.test(f))));
+  validations.all_required_conditions_met = clearDirectionalRead && (setupReady || (!setupReady && trade_setup.type === 'none' && !failed.some((f) => /invalid|not clearly visible|directional structure/i.test(f))));
 
   const rrTooLow = trade_setup && trade_setup.type !== 'none' && (trade_setup.risk_reward == null || Number(trade_setup.risk_reward) < 1.5);
   const result = {
@@ -1091,7 +1091,9 @@ function evaluateDecisionEngine(obs) {
 
   if (!clearDirectionalRead && !validations.candidate_setup) {
     result.status = 'no_trade';
-  } else if (rrTooLow || failed.some((condition) => /proposed price levels imply a lower ratio/i.test(condition))) {
+  } else if (!validations.candidate_setup && trade_setup.type !== 'none'
+    || rrTooLow
+    || failed.some((condition) => /proposed price levels imply a lower ratio/i.test(condition))) {
     result.status = 'no_trade';
     if (!result.failed_conditions.includes('Risk/reward does not meet the minimum threshold for a trade.')) {
       result.failed_conditions.push('Risk/reward does not meet the minimum threshold for a trade.');
@@ -1102,7 +1104,7 @@ function evaluateDecisionEngine(obs) {
 }
 
 function determineSetupStatus(evalRes, derived) {
-  if (!evalRes.trade_setup || evalRes.trade_setup.type === 'none') return 'NO_SETUP';
+  if (!evalRes.trade_setup || evalRes.trade_setup.type === 'none' || evalRes.candidate !== true) return 'NO_SETUP';
   if (derived.confirmationStatus === 'CONFIRMED') return 'CONFIRMED';
   if (evalRes.trade_setup && evalRes.trade_setup.type !== 'none') return 'DEVELOPING';
   return 'INVALIDATED';
@@ -1194,7 +1196,7 @@ function buildExplainableOutcome(obs, evalRes) {
     (bosComp != null ? bosComp : 0) +
     (rsiComp != null ? rsiComp : 0);
   const setupQuality = Math.max(0, Math.min(100, Math.round(rawScore)));
-  const entryQuality = (evalRes.trade_setup && evalRes.trade_setup.type !== 'none') ? Math.round(Math.max(0, Math.min(100, setupQuality - 12))) : 0;
+  const entryQuality = evalRes.candidate === true ? Math.round(Math.max(0, Math.min(100, setupQuality - 12))) : 0;
 
   const derived = {
     marketBias,

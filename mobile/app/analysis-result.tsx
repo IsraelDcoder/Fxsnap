@@ -41,6 +41,7 @@ import { BlurView } from 'expo-blur';
 import { trackEvent } from '@/services/telemetry';
 import { canViewFullAnalysis } from '@/services/featureAccess';
 import { getInstrument } from '@/services/instruments';
+import { shareAnalysisCardOnWeb } from '@/services/shareAnalysisCard';
 
 type ResultTab = 'analysis' | 'insights';
 
@@ -72,6 +73,12 @@ function formatLevelPrice(value: string | number | undefined, pair: string) {
     ? instrument.kind === 'forex' ? instrument.decimals + 1 : instrument.decimals
     : quote === 'JPY' || base === 'JPY' ? 3 : 5;
   return Number(text).toFixed(decimals);
+}
+
+function firstAvailableLevel(...values: (string | number | undefined)[]) {
+  return values.find((value) => value != null
+    && String(value).trim() !== ''
+    && !['none', 'not_clear', 'unknown'].includes(String(value).trim().toLowerCase()));
 }
 
 function formatRiskReward(value: unknown) {
@@ -205,6 +212,10 @@ export default function AnalysisResultScreen() {
   const shareReadyRef = React.useRef(false);
 
   useEffect(() => {
+    shareReadyRef.current = false;
+  }, [currentAnalysis?.id]);
+
+  useEffect(() => {
     let active = true;
     const timer = setTimeout(() => {
       void consumeRatingPrompt().then((shouldShow) => {
@@ -236,18 +247,25 @@ export default function AnalysisResultScreen() {
   const alreadySaved = savedAnalyses.some((a) => a.id === currentAnalysis?.id);
   const pair = currentAnalysis?.pair ?? '';
   const [baseCurrency, quoteCurrency] = pairCurrencies(pair);
-  const targetLevels = currentAnalysis?.takeProfitLevels?.length
-    ? currentAnalysis.takeProfitLevels
-    : currentAnalysis?.tradeSetup?.takeProfit
-      ? currentAnalysis.tradeSetup.takeProfit.split(/[,|]/).map((level) => level.trim()).filter(Boolean)
-      : currentAnalysis?.tp
-        ? [currentAnalysis.tp]
-        : [];
-  const usableTargetLevels = targetLevels.filter((level) => !['none', 'not_clear', 'unknown'].includes(level.trim().toLowerCase()));
-  const entryLevel = formatLevelPrice(currentAnalysis?.entry ?? currentAnalysis?.tradeSetup?.entryZone, pair);
-  const stopLevel = formatLevelPrice(currentAnalysis?.sl ?? currentAnalysis?.tradeSetup?.stopLoss, pair);
+  const targetLevels = [
+    ...(currentAnalysis?.takeProfitLevels ?? []),
+    ...(currentAnalysis?.tradeSetup?.takeProfit?.split(/[,|]/).map((level) => level.trim()) ?? []),
+    ...(currentAnalysis?.tp ? [currentAnalysis.tp] : []),
+  ].filter((level, index, levels) => firstAvailableLevel(level) != null && levels.indexOf(level) === index).slice(0, 2);
+  const usableTargetLevels = targetLevels;
+  const entryLevel = formatLevelPrice(firstAvailableLevel(currentAnalysis?.entry, currentAnalysis?.tradeSetup?.entryZone), pair);
+  const stopLevel = formatLevelPrice(firstAvailableLevel(currentAnalysis?.sl, currentAnalysis?.tradeSetup?.stopLoss), pair);
   const tp1Level = formatLevelPrice(usableTargetLevels[0], pair);
   const tp2Level = formatLevelPrice(usableTargetLevels[1], pair);
+  const shareAnalysis = currentAnalysis && !hasFullAnalysisAccess ? {
+    ...currentAnalysis,
+    entry: entryLevel,
+    tp: tp1Level,
+    takeProfitLevels: usableTargetLevels.slice(0, 1),
+    tradeSetup: currentAnalysis.tradeSetup
+      ? { ...currentAnalysis.tradeSetup, takeProfit: tp1Level, riskReward: '—' }
+      : undefined,
+  } : currentAnalysis;
   const stopDistance = currentAnalysis?.slPips ?? getPipDistance(entryLevel, stopLevel, pair);
   const currentPrice = currentAnalysis?.priceSeries?.at(-1);
   const entryPrice = entryLevel.match(/-?\d+(?:\.\d+)?/g)?.map(Number).filter(Number.isFinite)[0];
@@ -322,22 +340,23 @@ export default function AnalysisResultScreen() {
   };
 
   const handleShare = async () => {
-    if (!currentAnalysis) return;
+    if (!currentAnalysis || !shareAnalysis) return;
 
     trackEvent('share_tapped', { pair: currentAnalysis.pair, timeframe: currentAnalysis.timeframe || 'unknown' });
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setShareError(false);
 
-    if (Platform.OS === 'web' || !shareCardRef.current) {
-      await handleCopy();
-      showToast('Image sharing is unavailable on web. Analysis copied.');
-      return;
-    }
-
+    let capturedUri: string | undefined;
     try {
       setShareDisabled(true);
-      console.log('[Share] Started');
-      // Wait for the share card onReady signal (polled), timeout after 2s
+      if (Platform.OS === 'web') {
+        const result = await shareAnalysisCardOnWeb(shareAnalysis, hasFullAnalysisAccess);
+        if (result === 'shared') showToast('FXSnap analysis card shared');
+        if (result === 'downloaded') showToast('FXSnap analysis card downloaded');
+        return;
+      }
+
+      if (!shareCardRef.current) throw new Error('Share card is not available.');
       const waitForReady = async (timeout = 2000) => {
         const start = Date.now();
         while (!shareReadyRef.current && Date.now() - start < timeout) {
@@ -347,35 +366,31 @@ export default function AnalysisResultScreen() {
         }
         return shareReadyRef.current;
       };
-      const ready = await waitForReady(2000);
-      console.log('[Share] Rendering card', { ready });
+      const ready = await waitForReady(5000);
       if (!ready) throw new Error('Share card did not finish layout.');
 
-      console.log('[Share] Capturing image');
-      const capturedUri = await captureRef(shareCardRef.current, {
+      capturedUri = await captureRef(shareCardRef.current, {
         format: 'png',
         quality: 1,
         result: 'tmpfile',
       });
-      console.log('[Share] Image generated', capturedUri);
       if (!capturedUri || typeof capturedUri !== 'string') throw new Error('Capture did not return a file URI.');
 
       const info = await FileSystem.getInfoAsync(capturedUri);
-      console.log('[Share] File exists', info);
       if (!info.exists || !(info.size && info.size > 0)) throw new Error('Captured share file is missing or empty.');
 
       const shareUri = capturedUri.startsWith('file://') ? capturedUri : `file://${capturedUri}`;
       if (!(await Sharing.isAvailableAsync())) throw new Error('Native sharing is unavailable.');
-      console.log('[Share] File URI', shareUri);
-      console.log('[Share] Opening native share sheet');
       await Sharing.shareAsync(shareUri, { mimeType: 'image/png', dialogTitle: 'Share FXSnap analysis' });
       showToast('Share card ready to share');
-      try { await FileSystem.deleteAsync(capturedUri, { idempotent: true }); } catch { /* cache cleanup is best effort */ }
     } catch (error) {
       console.error('[Share] Failed', error);
       setShareError(true);
       showToast("Couldn't create the share card. Try again.");
     } finally {
+      if (capturedUri) {
+        try { await FileSystem.deleteAsync(capturedUri, { idempotent: true }); } catch { /* cache cleanup is best effort */ }
+      }
       setShareDisabled(false);
     }
   };
@@ -721,19 +736,12 @@ export default function AnalysisResultScreen() {
         {shareError ? <View style={styles.shareErrorBox}><Text style={styles.shareErrorTitle}>Couldn't create the share card.</Text><TouchableOpacity style={styles.shareRetryBtn} onPress={() => void handleShare()}><Text style={styles.shareRetryText}>Try again</Text></TouchableOpacity></View> : null}
       </ScrollView>
 
-      {/* Keep the card mounted and fully rendered off-screen so view-shot captures opaque pixels. */}
+      {/* Keep the card attached to the native view tree, behind the result screen, for capture. */}
       <View style={styles.hiddenShareContainer}>
         <AnalysisShareCard
+          key={currentAnalysis.id}
           ref={shareCardRef}
-          analysis={hasFullAnalysisAccess ? currentAnalysis : {
-            ...currentAnalysis,
-            entry: entryLevel,
-            tp: tp1Level,
-            takeProfitLevels: usableTargetLevels.slice(0, 1),
-            tradeSetup: currentAnalysis.tradeSetup
-              ? { ...currentAnalysis.tradeSetup, takeProfit: tp1Level, riskReward: '—' }
-              : undefined,
-          }}
+          analysis={shareAnalysis}
           isPremium={hasFullAnalysisAccess}
           colors={colors}
           onReady={() => {
@@ -1035,9 +1043,12 @@ const styles = StyleSheet.create({
   hiddenShareContainer: {
     position: 'absolute',
     top: 0,
-    left: -1200,
+    left: 0,
     width: 1080,
     height: 1400,
+    zIndex: -1,
+    pointerEvents: 'none',
+    backgroundColor: '#000000',
   },
   shareCard: {
     width: 1080,
