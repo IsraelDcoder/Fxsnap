@@ -266,8 +266,9 @@ export default function AnalysisResultScreen() {
   const readinessLabel = currentAnalysis?.tradeStatus === 'actionable'
     ? 'Ready'
     : currentAnalysis?.tradeStatus?.startsWith('waiting')
-      ? 'Waiting'
-      : 'No setup';
+      ? 'Waiting for confirmation'
+      : 'Entry not identified';
+  const readinessText = isAnalysisUnavailable ? 'Unavailable' : `${entryReadiness}% · ${readinessLabel}`;
   const chartPaths = buildSmoothChartPaths(currentAnalysis?.priceSeries);
   const confidenceLabel = confidence >= 70 ? 'High' : confidence >= 40 ? 'Medium' : 'Low';
   const reasoning = currentAnalysis ? currentAnalysis.reasoning?.length ? currentAnalysis.reasoning.slice(0, 5) : [
@@ -390,7 +391,7 @@ export default function AnalysisResultScreen() {
       lines.push(`Pair: ${currentAnalysis.pair}`);
       lines.push(`Evidence score (not win probability): ${currentAnalysis.confidence}%`);
       lines.push(`Directional bias: ${marketReadLabel}`);
-      lines.push('Trade readiness: No validated setup');
+      lines.push(`Trade readiness: ${readinessText}`);
       if (!hasFullAnalysisAccess) lines.push('AI reasoning: Unlock full analysis in FXSnap.');
       if (hasFullAnalysisAccess && currentAnalysis.analysis?.notes) lines.push(`Notes: ${currentAnalysis.analysis.notes}`);
       if (hasFullAnalysisAccess && currentAnalysis.whyNotNow?.length) {
@@ -671,7 +672,7 @@ export default function AnalysisResultScreen() {
           <>
             <Animated.View entering={FadeInUp.duration(350)} style={styles.verdictCard}>
               <View style={styles.verdictTop}><Text style={styles.sectionTitle}>MARKET READ</Text><View style={[styles.verdictBadge, { backgroundColor: `${directionColor}20` }]}><View style={[styles.verdictDot, { backgroundColor: directionColor }]} /><Text style={[styles.verdictText, { color: directionColor }]}>{isNoTrade ? marketReadLabel : currentAnalysis.direction || marketReadLabel}</Text></View></View>
-              <View style={styles.confidenceLine}><Text style={styles.bodyMuted}>Trade readiness</Text><Text style={styles.confidenceText}>{isAnalysisUnavailable ? 'Unavailable' : `${entryReadiness}% · ${readinessLabel}`}</Text></View>
+              <View style={styles.confidenceLine}><Text style={styles.bodyMuted}>Trade readiness</Text><Text style={styles.confidenceText}>{readinessText}</Text></View>
               <View style={styles.confidenceLine}><Text style={styles.bodyMuted}>Evidence score</Text><Text style={styles.confidenceText}>{confidenceLabel} · {confidence}%</Text></View>
               <View style={styles.confidenceTrack}><View style={[styles.confidenceProgress, { width: `${Math.max(0, Math.min(confidence, 100))}%`, backgroundColor: directionColor }]} /></View>
             </Animated.View>
