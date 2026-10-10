@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { calculateMetrics, evaluateTrade } from '../services/backtest';
+import { calculateMetrics, evaluateTrade, runBacktest } from '../services/backtest';
 import type { CandleData } from '../services/backtest';
 
 const candle = (close: number, high = close, low = close): CandleData => ({ timestamp: new Date().toISOString(), open: close, high, low, close });
@@ -26,4 +26,16 @@ test('reports win rate, expectancy, and drawdown', () => {
   assert.equal(metrics.winRate, 0.5);
   assert.equal(metrics.expectancyR, 1 / 3);
   assert.equal(metrics.maxDrawdownR, 1);
+});
+
+test('in-sample trades cannot resolve using candles beyond the chronological split', () => {
+  const candles = Array.from({ length: 10 }, (_, index) => candle(100, index === 7 ? 102 : 100, 100));
+  const result = runBacktest(candles, (history) => history.length === 7
+    ? { direction: 'BUY', confidence: 80, isLowConfidence: false }
+    : null, { warmupCandles: 1, stopPips: 1, rewardRisk: 1, pipSize: 1, splitRatio: 0.7 });
+
+  assert.equal(result.trades.length, 1);
+  assert.equal(result.trades[0].outcome, 'open');
+  assert.equal(result.inSample.wins, 0);
+  assert.equal(result.inSample.open, 1);
 });

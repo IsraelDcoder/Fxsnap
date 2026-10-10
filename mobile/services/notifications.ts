@@ -78,23 +78,37 @@ export async function requestAndRegisterPushNotifications(preferences?: Notifica
   }
   const projectId = Constants.easConfig?.projectId ?? Constants.expoConfig?.extra?.eas?.projectId;
   if (!projectId) throw new Error('Expo project ID is missing from app configuration.');
-  const token = (await Notifications.getExpoPushTokenAsync({ projectId })).data;
+  let token: string;
+  try {
+    token = (await Notifications.getExpoPushTokenAsync({ projectId })).data;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`Expo push-token request failed: ${detail}`);
+  }
   const deviceId = await getDeviceId();
   await AsyncStorage.setItem(PUSH_TOKEN_KEY, token);
 
-  const response = await fetch(`${API_BASE_URL}/api/push-token`, {
-    method: 'POST',
-    headers: { ...(await getApiHeaders()), 'content-type': 'application/json' },
-    body: JSON.stringify({
-      token,
-      platform: Platform.OS,
-      deviceId,
-      preferences: resolvedPreferences,
-    }),
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/api/push-token`, {
+      method: 'POST',
+      headers: { ...(await getApiHeaders()), 'content-type': 'application/json' },
+      body: JSON.stringify({
+        token,
+        platform: Platform.OS,
+        deviceId,
+        preferences: resolvedPreferences,
+      }),
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`FXSnap push-registration request failed: ${detail}`);
+  }
 
   if (!response.ok) {
-    throw new Error(`Push token registration failed with ${response.status}`);
+    const payload = await response.json().catch(() => null);
+    const detail = payload && typeof payload.error === 'string' ? payload.error : '';
+    throw new Error(`Push token registration failed (${response.status})${detail ? `: ${detail}` : ''}`);
   }
 
   return { granted: true, token };

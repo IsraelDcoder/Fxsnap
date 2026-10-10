@@ -13,7 +13,7 @@
     "build:all": "npx eas build --platform all --profile production",
     "serve": "node server/serve.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test tests/**/*.test.ts",
+    "test": "tsx --test tests/**/*.test.ts && node --test --test-force-exit server/*.test.js",
     "deploy:vercel": "vercel --prod"
   },
   "devDependencies": {

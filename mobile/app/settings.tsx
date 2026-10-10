@@ -32,6 +32,7 @@ import {
   unregisterPushToken,
   type NotificationPreferences,
 } from '@/services/notifications';
+import { getNotificationEnableErrorMessage } from '@/services/notificationErrors';
 
 export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
@@ -114,10 +115,10 @@ export default function SettingsScreen() {
         await saveNotificationPreferences(disabled);
         Alert.alert('Permission required', 'Allow notifications for FXSnap in your device settings to receive updates.');
       }
-    } catch {
+    } catch (error) {
       setNotificationPreferences(previous);
       await saveNotificationPreferences(previous);
-      Alert.alert('Unable to enable notifications', 'Please try again when you have a network connection.');
+      Alert.alert('Unable to enable notifications', getNotificationEnableErrorMessage(error));
     }
   };
 

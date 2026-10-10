@@ -358,23 +358,12 @@ function parseTakeProfitLevels(explicitLevels, fallbackLevel) {
     .slice(0, 2);
 }
 
-function validatedTakeProfitLevels(tradeSetup, proposedLevels) {
+function validatedTakeProfitLevels(tradeSetup) {
   if (!tradeSetup || tradeSetup.type === 'none') return [];
   const primary = String(tradeSetup.take_profit || '').trim();
   const primaryPrice = parsePriceOrRange(primary);
   if (!primary || !primaryPrice) return [];
-
-  const levels = [primary];
-  const entryPrice = parsePriceOrRange(tradeSetup.entry_zone)?.mid;
-  const secondary = proposedLevels?.[1];
-  const secondaryPrice = secondary ? parsePriceOrRange(secondary)?.mid : null;
-  if (entryPrice == null || secondaryPrice == null) return levels;
-
-  const isFurtherTarget = tradeSetup.type === 'buy'
-    ? secondaryPrice > primaryPrice.mid && secondaryPrice > entryPrice
-    : secondaryPrice < primaryPrice.mid && secondaryPrice < entryPrice;
-  if (isFurtherTarget) levels.push(secondary);
-  return levels;
+  return [primary];
 }
 
 function parseIndicatorList(value) {
@@ -961,16 +950,23 @@ function evaluateDecisionEngine(obs) {
       tp: rawTrade.take_profit,
       direction: dir,
     });
+    const reportedRR = Number.isFinite(rr) ? rr : null;
+    const ratioMismatch = computed.rr != null && reportedRR != null
+      && Math.abs(computed.rr - reportedRR) > Math.max(0.1, computed.rr * 0.05);
 
     if (computed && Array.isArray(computed.issues) && computed.issues.length > 0) {
       rrIssues.push(...computed.issues);
     }
+    if (ratioMismatch) {
+      const message = 'Reported risk/reward does not match the ratio calculated from the proposed levels.';
+      rrIssues.push(message);
+      failed.push(message);
+    }
 
-    const hasLevelGeometry = (dir === 'buy' && entryRange && slRange && tpRange && slRange.mid < entryRange.mid && tpRange.mid > entryRange.mid)
-      || (dir === 'sell' && entryRange && slRange && tpRange && slRange.mid > entryRange.mid && tpRange.mid < entryRange.mid);
-    const rrValue = Number.isFinite(computed && typeof computed.rr === 'number' ? computed.rr : rr) ? (computed?.rr ?? rr) : null;
+    const hasLevelGeometry = Boolean(entryRange && slRange && tpRange && computed?.rr != null && !ratioMismatch);
+    const rrValue = computed?.rr ?? null;
 
-    if (hasLevelGeometry && rrValue != null && rrValue > 0) {
+    if (hasLevelGeometry && rrValue != null && rrValue >= 1.5) {
       trade_setup = {
         type: dir === 'buy' ? 'buy' : dir === 'sell' ? 'sell' : 'none',
         entry_zone: String(rawTrade.entry_zone || 'none'),
@@ -979,16 +975,10 @@ function evaluateDecisionEngine(obs) {
         risk_reward: rrValue,
       };
       validations.candidate_setup = true;
-    } else if (hasLevelGeometry || (entryRange && slRange && tpRange)) {
-      trade_setup = {
-        type: dir === 'buy' ? 'buy' : dir === 'sell' ? 'sell' : 'none',
-        entry_zone: String(rawTrade.entry_zone || 'none'),
-        stop_loss: String(rawTrade.stop_loss || 'none'),
-        take_profit: String(rawTrade.take_profit || 'none'),
-        risk_reward: rrValue ?? 0,
-      };
-      validations.candidate_setup = true;
-      failed.push('The setup is directional but not yet fully validated for entry quality and risk/reward.');
+    } else if (entryRange && slRange && tpRange) {
+      failed.push(rrValue != null && rrValue < 1.5
+        ? 'Risk/reward does not meet the minimum 1.5 threshold for a trade.'
+        : 'The setup is directional but not yet fully validated for entry quality and risk/reward.');
     }
   }
 
@@ -1228,12 +1218,10 @@ function applyMentorStrategy(normalized) {
   response.status = evalRes.status || normalized.status || 'no_trade';
   response.trade_setup = {
     ...(evalRes.trade_setup || { ...DEFAULT_TRADE_SETUP }),
-    take_profit_levels: validatedTakeProfitLevels(
-      evalRes.trade_setup,
-      parseTakeProfitLevels(normalized.trade_setup?.take_profit_levels, normalized.trade_setup?.take_profit),
-    ),
+    take_profit_levels: validatedTakeProfitLevels(evalRes.trade_setup),
   };
   response.confidence = typeof evalRes.strategy_score === 'number' ? evalRes.strategy_score : (normalized.confidence || 0);
+  response.confidenceMeaning = 'Evidence-coverage score; not a calibrated win probability.';
   response.reasons = Array.isArray(normalized.reasons) ? Array.from(new Set([...normalized.reasons, ...(evalRes.failed_conditions || [])])) : Array.from(new Set([...(evalRes.failed_conditions || [])]));
   response.reasoning = mergeUniqueStrings([
     ...(Array.isArray(normalized.reasoning) ? normalized.reasoning : []),
@@ -1303,6 +1291,12 @@ function applyMentorStrategy(normalized) {
     response.setupConfidence = 0;
   }
 
+  if (response.status === 'no_trade' && response.reasons.length === 0) {
+    const reason = 'No trade: the available evidence does not establish a complete, validated setup.';
+    response.reasons = [reason];
+    response.whyNotNow = mergeUniqueStrings([...(response.whyNotNow || []), reason]);
+  }
+
   // Enforce additional server-side rules (should not wipe out valid analysis)
   const enforced = enforceValidationRules(response) || response;
   return enforced;
@@ -1327,9 +1321,9 @@ IMPORTANT RULES:
 6. Set chart.is_chart=true when the image shows recognizable market-price chart content, including chart screenshots with platform controls, labels, or overlays.
 7. Return "invalid_image" only when the image is clearly not a trading chart, is blank/corrupted, or the chart content is completely unrecognizable.
 8. If a chart is recognizable but cropped, low-resolution, partially obscured, or has unreadable details, keep chart.is_chart=true, set chart_quality="poor", describe the limitation, and return "no_trade" rather than "invalid_image".
-9. If there is no clear, high-probability setup, return "no_trade". Do not confuse an unclear setup with an invalid image.
-10. You must be conservative. Avoid forcing trades. Confidence must reflect visible evidence, not guesswork.
-11. Keep explanations short, precise, and professional.
+9. If evidence is insufficient or conflicting, return "no_trade". Do not describe a setup as high-probability; no win probability has been established.
+10. Be conservative. Never fill missing evidence with assumptions or force a trade.
+11. Keep explanations specific, concise, and professional. Separate directly visible observations from interpretation and uncertainty.
 
 ANALYSIS REQUIREMENTS:
 
@@ -1344,13 +1338,21 @@ You must extract and evaluate:
 - Indicators (only if clearly visible)
 - Price behavior (breakouts, consolidations, rejections)
 
+Use this order for every chart:
+1. Confirm recognizable chart content, selected instrument, visible timeframe, candle visibility, price-scale readability, and chart quality. Do not claim the image itself identifies an instrument unless its label is visible.
+2. Describe only the visible candle sequence and scale. Distinguish observed swing points from inferred trend; do not call a move a breakout unless a candle close is visibly beyond a prior level.
+3. Assess trend/structure, then relevant support/resistance and any visible momentum evidence. Mark indicators, volume, or higher-timeframe context unavailable when not shown.
+4. Decide BUY, SELL, or NO TRADE. For a trade, explain the visible reason for entry, invalidation/stop, and one target. If any level cannot be read or defensibly anchored to visible structure, return NO TRADE instead of estimating it.
+5. Calculate R:R from the same entry, stop, and single TP1 returned. Report limitations and any conflicting evidence.
+
 TRADE DECISION RULES:
 
 Only return a trade if ALL conditions are met:
 - Clear trend or strong range structure
 - Clear entry zone
 - Logical stop loss placement
-- Minimum risk-reward ratio of 1.5
+- One chart-supported take-profit target
+- Minimum risk-reward ratio of 1.5, calculated from the proposed entry, stop, and TP1
 - No conflicting signals
 
 If any condition fails → return "no_trade"
@@ -1392,7 +1394,11 @@ OUTPUT FORMAT (STRICT JSON):
   },
 
   "reasoning": [
-    "3 to 5 concise bullets based only on visible trend, structure, key levels, pattern, or confluence"
+    "Context: instrument, timeframe, chart quality, and visible data limitations",
+    "Structure: visible swing sequence and directional bias, or why bias is unclear",
+    "Levels: visible support/resistance and whether their prices are readable",
+    "Decision: BUY, SELL, or NO TRADE, with the setup evidence or missing entry trigger",
+    "Limitations: conflicting signals and unavailable information"
   ],
 
   "trade_setup": {
@@ -1400,7 +1406,7 @@ OUTPUT FORMAT (STRICT JSON):
     "entry_zone": "zone or 'none'",
     "stop_loss": "level or 'none'",
     "take_profit": "first target level or 'none'",
-    "take_profit_levels": ["TP1", "TP2 when a second distinct, chart-supported target is visible"],
+    "take_profit_levels": ["TP1 only; do not provide TP2"],
     "risk_reward": "number or 'none'"
   },
 
@@ -1411,9 +1417,11 @@ FINAL RULES:
 
 - If status = "no_trade", a conditional trade_setup may still be provided when directional bias is strong but the current price is not an actionable entry.
 - If status = "invalid_image", all fields except status can be null or minimal
-- Return only price levels that can be read or conservatively derived from visible chart structure. Never invent a second target, exact price, indicator, or confirmation that is not visible.
-- Calculate risk_reward from entry, stop_loss, and TP1 only. Use the same TP1 value in take_profit and as the first take_profit_levels item.
-- Include 3 to 5 short reasoning bullets when the chart provides enough evidence; state uncertainty and chart limitations explicitly.
+- Return only price levels that can be read or conservatively derived from visible chart structure. Never invent an exact price, indicator, or confirmation that is not visible.
+- Return exactly one take-profit target. Calculate risk_reward from the same entry, stop_loss, and take_profit values.
+- Explain the visible evidence anchoring entry, stop, and target. Include uncertainty and chart limitations; when evidence is insufficient, give a specific NO TRADE reason.
+- NO TRADE means no validated entry, not necessarily no directional bias. When the chart supports a bullish or bearish read but lacks a safe entry, state that bias clearly while keeping the trade decision NO TRADE.
+- Keep the top-level reasoning in the five labeled sections shown above, concise and evidence-based. Use the same conclusions in analysis.reasoning without inventing details.
 - Do NOT include extra text outside JSON
 - Do NOT explain beyond what is required`;
 }
@@ -1460,12 +1468,15 @@ function normalizeCandleSeries(candles) {
       const low = Number(candle.low ?? candle.l ?? 0);
       const close = Number(candle.close ?? candle.c ?? candle.price ?? 0);
       const time = candle.time || candle.datetime || candle.timestamp || candle.t || '';
-      if (!Number.isFinite(open) || !Number.isFinite(high) || !Number.isFinite(low) || !Number.isFinite(close) || !time) return null;
+      if (!Number.isFinite(open) || !Number.isFinite(high) || !Number.isFinite(low) || !Number.isFinite(close) || !time
+        || open <= 0 || high <= 0 || low <= 0 || close <= 0
+        || high < Math.max(open, close) || low > Math.min(open, close) || high < low) return null;
       return { time: String(time), open, high, low, close };
     })
     .filter(Boolean);
 
   series.sort((a, b) => String(a.time).localeCompare(String(b.time)));
+  if (series.length !== candles.length || new Set(series.map((candle) => candle.time)).size !== series.length) return [];
   return series;
 }
 
@@ -1474,7 +1485,7 @@ function analyzeMarketFromCandles(symbol, interval, candles) {
   const cleanedInterval = String(interval || '15m').trim() || '15m';
   const series = normalizeCandleSeries(candles);
 
-  if (series.length < 5) {
+  if (series.length < 24) {
     const fallback = {
       status: 'no_trade',
       detectedPair: cleanedSymbol || null,
@@ -1487,7 +1498,7 @@ function analyzeMarketFromCandles(symbol, interval, candles) {
         volatility: 'low',
         volume: 'not_visible',
         price_action: [],
-        structure: 'Not enough candle data to assess a valid setup.',
+        structure: 'At least 24 valid candles are required for the deterministic structure comparison.',
         sentiment: 'neutral',
         indicators: 'none',
         notes: 'The market needs more candles before a valid directional read is possible.',
@@ -1503,7 +1514,7 @@ function analyzeMarketFromCandles(symbol, interval, candles) {
       },
       trade_setup: { type: 'none', entry_zone: 'none', stop_loss: 'none', take_profit: 'none', risk_reward: null },
       confidence: 0,
-      reasons: ['Not enough candle data to analyze the market.'],
+      reasons: ['Not enough valid candle data to compare recent and preceding structure.'],
       marketBias: 'neutral',
       marketBiasConfidence: 0,
       marketConfidence: 0,
@@ -1512,8 +1523,8 @@ function analyzeMarketFromCandles(symbol, interval, candles) {
       tradeStatus: 'no_setup',
       tradeDecision: 'NO_TRADE',
       decision: 'NO_TRADE',
-      whyNotNow: ['Not enough candle data to analyze the market.'],
-      dataLimitations: ['Not enough candle data to analyze the market.'],
+      whyNotNow: ['Not enough valid candle data to compare recent and preceding structure.'],
+      dataLimitations: ['At least 24 valid, unique-time candles are required.'],
       breakdown: { trend: 0, zone: 0, priceLocation: 0, liquidity: 0, confirmation: 0, bos: 0, rsi: 0, rawScore: 0 },
     };
     return fallback;
@@ -1523,32 +1534,33 @@ function analyzeMarketFromCandles(symbol, interval, candles) {
   const startClose = closes[0];
   const endClose = closes[closes.length - 1];
   const totalMovePct = ((endClose - startClose) / startClose) * 100;
-  const avgBody = series.reduce((sum, candle) => sum + Math.abs(candle.close - candle.open), 0) / series.length;
+  const avgTrueRange = series.reduce((sum, candle, index) => {
+    const previousClose = index > 0 ? series[index - 1].close : candle.close;
+    return sum + Math.max(candle.high - candle.low, Math.abs(candle.high - previousClose), Math.abs(candle.low - previousClose));
+  }, 0) / series.length;
+  const averagePrice = closes.reduce((sum, price) => sum + price, 0) / closes.length;
+  const averageRangePct = (avgTrueRange / averagePrice) * 100;
   const directionalMove = Math.abs(totalMovePct);
-  const currentTrend = totalMovePct > 0.35 ? 'bullish' : totalMovePct < -0.35 ? 'bearish' : 'neutral';
-  const structureText = totalMovePct > 0.4 ? 'Higher highs and bullish continuation are visible across the selected timeframe.'
-    : totalMovePct < -0.4 ? 'Lower highs and bearish continuation are visible across the selected timeframe.'
+  const trendThresholdPct = Math.max(0.15, averageRangePct * 1.5);
+  const currentTrend = totalMovePct > trendThresholdPct ? 'bullish' : totalMovePct < -trendThresholdPct ? 'bearish' : 'neutral';
+  const structureText = totalMovePct > trendThresholdPct ? 'Closing prices advanced across the selected window; this is directional evidence, not a verified swing sequence.'
+    : totalMovePct < -trendThresholdPct ? 'Closing prices declined across the selected window; this is directional evidence, not a verified swing sequence.'
     : 'The market is directionless and remains in a sideways or range-bound structure.';
 
   const recentHigh = Math.max(...series.slice(-12).map((candle) => candle.high));
   const recentLow = Math.min(...series.slice(-12).map((candle) => candle.low));
-  const priorHigh = Math.max(...series.slice(-24, -12).map((candle) => candle.high));
-  const priorLow = Math.min(...series.slice(-24, -12).map((candle) => candle.low));
-  const bullishBreak = endClose > recentHigh * 0.9995 || endClose > priorHigh;
-  const bearishBreak = endClose < recentLow * 1.0005 || endClose < priorLow;
+  const priorWindow = series.slice(-24, -12);
+  const priorHigh = Math.max(...priorWindow.map((candle) => candle.high));
+  const priorLow = Math.min(...priorWindow.map((candle) => candle.low));
+  const bullishBreak = endClose > priorHigh;
+  const bearishBreak = endClose < priorLow;
 
   const marketBias = currentTrend === 'bullish' ? 'bullish' : currentTrend === 'bearish' ? 'bearish' : 'neutral';
-  const volatility = avgBody > 0.004 ? 'high' : avgBody > 0.0017 ? 'moderate' : 'low';
-  const canSetup = marketBias !== 'neutral' && directionalMove > 0.18 && (bullishBreak || bearishBreak || directionalMove > 0.25);
-  const tradeType = canSetup && marketBias === 'bullish' ? 'buy' : canSetup && marketBias === 'bearish' ? 'sell' : 'none';
-  const entry = tradeType === 'buy' ? `${(recentLow * 0.999).toFixed(5)}` : tradeType === 'sell' ? `${(recentHigh * 1.001).toFixed(5)}` : 'none';
-  const stop = tradeType === 'buy' ? `${(Math.min(...series.slice(-12).map((c) => c.low)) * 0.9985).toFixed(5)}` : tradeType === 'sell' ? `${(Math.max(...series.slice(-12).map((c) => c.high)) * 1.0015).toFixed(5)}` : 'none';
-  const takeProfit = tradeType === 'buy' ? `${(Math.max(...series.slice(-12).map((c) => c.high)) * 1.008).toFixed(5)}` : tradeType === 'sell' ? `${(Math.min(...series.slice(-12).map((c) => c.low)) * 0.992).toFixed(5)}` : 'none';
-  const rr = tradeType === 'none' ? null : 1.8;
-  const strength = Math.min(100, Math.max(0, Math.round(directionalMove * 1000 + (canSetup ? 25 : 0))));
+  const volatility = averageRangePct > 1 ? 'high' : averageRangePct > 0.35 ? 'moderate' : 'low';
+  const strength = Math.min(100, Math.max(0, Math.round((directionalMove / Math.max(trendThresholdPct, 0.01)) * 25 + (bullishBreak || bearishBreak ? 15 : 0))));
 
   const normalized = {
-    status: canSetup ? 'success' : 'no_trade',
+    status: 'no_trade',
     detectedPair: cleanedSymbol || null,
     timeframe: cleanedInterval,
     chart: {
@@ -1566,18 +1578,18 @@ function analyzeMarketFromCandles(symbol, interval, candles) {
       structure_bias: marketBias,
       volatility,
       volume: 'not_visible',
-      price_action: [currentTrend === 'bullish' ? 'Bullish continuation remains in progress.' : currentTrend === 'bearish' ? 'Bearish continuation remains in progress.' : 'Price action is broadly range-bound.'],
+      price_action: [bullishBreak ? 'The latest close is above the preceding 12-candle high.' : bearishBreak ? 'The latest close is below the preceding 12-candle low.' : currentTrend === 'neutral' ? 'Price action is broadly range-bound.' : `Closing prices moved ${marketBias} across the selected window.`],
       structure: structureText,
       sentiment: currentTrend,
       indicators: 'none',
-      notes: currentTrend === 'neutral' ? 'Price is range-bound and not yet clear enough for an actionable setup.' : `The recent bias is ${marketBias} with a measurable directional move in the selected window.`,
+      notes: currentTrend === 'neutral' ? 'Price is range-bound and not clear enough for an actionable setup.' : `The recent closing-price bias is ${marketBias}; breakout follow-through and a chart-supported target are not established.`,
     },
     zones: {
-      support: `Recent support near ${recentLow.toFixed(5)}`,
-      resistance: `Recent resistance near ${recentHigh.toFixed(5)}`,
-      demand: [`Near ${recentLow.toFixed(5)}`],
-      supply: [`Near ${recentHigh.toFixed(5)}`],
-      liquidity: [`Recent swing range ${recentLow.toFixed(5)} to ${recentHigh.toFixed(5)}`],
+      support: `Observed 12-candle low: ${recentLow}`,
+      resistance: `Observed 12-candle high: ${recentHigh}`,
+      demand: [],
+      supply: [],
+      liquidity: [],
     },
     strategy: {
       daily_trend: marketBias === 'bullish' ? 'bullish' : marketBias === 'bearish' ? 'bearish' : 'neutral',
@@ -1588,14 +1600,15 @@ function analyzeMarketFromCandles(symbol, interval, candles) {
       rsi_confirmation: 'unavailable',
     },
     trade_setup: {
-      type: tradeType,
-      entry_zone: entry,
-      stop_loss: stop,
-      take_profit: takeProfit,
-      risk_reward: rr,
+      type: 'none',
+      entry_zone: 'none',
+      stop_loss: 'none',
+      take_profit: 'none',
+      risk_reward: null,
     },
     confidence: strength,
-    reasons: currentTrend === 'neutral' ? ['Directional structure is not clear enough for a trade.'] : ['Directional structure is visible and the recent move is meaningful.'],
+    confidenceMeaning: 'Evidence-coverage score; not a calibrated win probability.',
+    reasons: ['No entry, invalidation, and chart-supported target combination is established by this candle-only method.'],
     market_data_timestamp: new Date().toISOString(),
     market_data_source: 'structured-candles',
   };
@@ -1608,8 +1621,8 @@ function analyzeMarketFromCandles(symbol, interval, candles) {
     marketConfidence: typeof applied.marketConfidence === 'number' ? applied.marketConfidence : strength,
     setupStatus: applied.setupStatus || (applied.trade_setup && applied.trade_setup.type !== 'none' ? 'DEVELOPING' : 'NO_SETUP'),
     decision: applied.decision || (applied.trade_setup && applied.trade_setup.type !== 'none' ? 'WAIT' : 'NO_TRADE'),
-    whyNotNow: Array.isArray(applied.whyNotNow) && applied.whyNotNow.length ? applied.whyNotNow : (currentTrend === 'neutral' ? ['Directional structure is not clear enough for a trade.'] : []),
-    dataLimitations: Array.isArray(applied.dataLimitations) && applied.dataLimitations.length ? applied.dataLimitations : (currentTrend === 'neutral' ? ['Directional structure is not clear enough for a trade.'] : []),
+    whyNotNow: Array.isArray(applied.whyNotNow) && applied.whyNotNow.length ? applied.whyNotNow : ['Wait for a chart-supported entry, invalidation, and target.'],
+    dataLimitations: Array.isArray(applied.dataLimitations) && applied.dataLimitations.length ? applied.dataLimitations : ['This candle-only method does not validate broker tick size, spread, or execution costs.'],
     confidence: typeof applied.confidence === 'number' ? applied.confidence : strength,
   };
 

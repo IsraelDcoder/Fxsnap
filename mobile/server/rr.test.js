@@ -29,3 +29,21 @@ test('computeRRFromLevels for BUY and SELL', () => {
   const sell = computeRRFromLevels({ entry: '150.00', sl: '151.00', tp: '148.50', direction: 'sell' });
   assert.ok(sell.rr && sell.rr > 0);
 });
+
+test('computeRRFromLevels rejects overlapping zones and non-positive prices', () => {
+  const overlapping = computeRRFromLevels({ entry: '1.1000-1.1010', sl: '1.0990-1.1005', tp: '1.1020', direction: 'buy' });
+  const nonPositive = computeRRFromLevels({ entry: '-1.1000', sl: '1.0900', tp: '1.1200', direction: 'buy' });
+
+  assert.equal(overlapping.rr, null);
+  assert.match(overlapping.issues.join(' '), /entirely below entry/i);
+  assert.equal(nonPositive.rr, null);
+});
+
+test('computeRRFromLevels uses conservative bounds and optional instrument tick size', () => {
+  const ranged = computeRRFromLevels({ entry: '100-101', sl: '98', tp: '107-108', direction: 'buy' });
+  const offTick = computeRRFromLevels({ entry: '1.10005', sl: '1.0990', tp: '1.1020', direction: 'buy', tickSize: 0.0001 });
+
+  assert.equal(ranged.rr, 2);
+  assert.equal(offTick.rr, null);
+  assert.match(offTick.issues.join(' '), /tick size/i);
+});

@@ -126,6 +126,14 @@ test('vision instructions reserve invalid_image for clearly non-chart or unrecog
   assert.match(prompt, /chart is recognizable.*no_trade/i);
   assert.match(prompt, /forex, cryptocurrency, metals, indices, and commodities/i);
   assert.match(prompt, /do not assume forex pip conventions/i);
+  assert.match(prompt, /one take-profit target/i);
+  assert.match(prompt, /do not provide TP2/i);
+  assert.match(prompt, /no win probability has been established/i);
+  assert.match(prompt, /do not call a move a breakout unless a candle close is visibly beyond a prior level/i);
+  assert.match(prompt, /NO TRADE means no validated entry, not necessarily no directional bias/i);
+  assert.match(prompt, /Context: instrument, timeframe, chart quality/i);
+  assert.match(prompt, /Structure: visible swing sequence and directional bias/i);
+  assert.match(prompt, /Decision: BUY, SELL, or NO TRADE/i);
 });
 
 test('comma-formatted crypto prices and ranges parse as full price values', () => {
@@ -181,7 +189,7 @@ test('canonical JSON parsing accepts object, string, and fenced JSON payloads', 
   assert.equal(c.trade_setup.risk_reward, 2.2);
 });
 
-test('structured reasoning, support/resistance, and multiple targets survive normalization', () => {
+test('structured reasoning, support/resistance, and targets survive normalization', () => {
   const canonical = canonicalizeRawAnalysis({
     status: 'success',
     analysis: {
@@ -327,8 +335,63 @@ test('valid evidence with m15 confirmation and numeric levels -> success', () =>
   const res = applyMentorStrategy(normalized);
   assert.equal(res.status, 'success');
   assert.equal(res.trade_setup.type, 'buy');
-  assert.deepEqual(res.trade_setup.take_profit_levels, ['1.1200', '1.1300']);
+  assert.deepEqual(res.trade_setup.take_profit_levels, ['1.1200']);
   assert.ok(res.confidence >= 70);
+});
+
+test('AI-proposed TP2 is omitted from the validated single-target result', () => {
+  const result = applyMentorStrategy({
+    status: 'success',
+    chart: { is_chart: true, timeframe: 'H1', candles_visible: true, price_scale_visible: true, has_enough_candles: true },
+    analysis: { trend: 'bullish', market_structure: 'higher highs and higher lows' },
+    zones: { support: '1.0900' },
+    m15: { confirmation: 'bullish close above support', bos: { detected: true } },
+    strategy: {},
+    trade_setup: {
+      type: 'buy', entry_zone: '1.1000', stop_loss: '1.0900', take_profit: '1.1200',
+      take_profit_levels: ['1.1200', '1.1190-1.1210'], risk_reward: 2,
+    },
+    confidence: 80,
+    reasons: [],
+  });
+
+  assert.equal(result.status, 'success');
+  assert.deepEqual(result.trade_setup.take_profit_levels, ['1.1200']);
+});
+
+test('NO TRADE always includes an explanation when the model supplies none', () => {
+  const result = applyMentorStrategy({
+    status: 'no_trade',
+    chart: { is_chart: true },
+    analysis: {},
+    zones: {},
+    strategy: {},
+    trade_setup: { type: 'none' },
+    confidence: 0,
+    reasons: [],
+  });
+
+  assert.ok(result.reasons.some((reason) => /directional structure is not clearly visible/i.test(reason)));
+});
+
+test('mismatched model-reported RR is rejected while computed RR is authoritative', () => {
+  const normalized = {
+    status: 'success',
+    chart: { is_chart: true, timeframe: 'H1', candles_visible: true, price_scale_visible: true, has_enough_candles: true },
+    analysis: { trend: 'bullish', market_structure: 'higher highs and higher lows' },
+    zones: { support: '1.0900' },
+    m15: { confirmation: 'bullish close above support', bos: { detected: true } },
+    strategy: {},
+    trade_setup: { type: 'buy', entry_zone: '1.1000', stop_loss: '1.0900', take_profit: '1.1200', risk_reward: 9 },
+    confidence: 80,
+    reasons: [],
+  };
+
+  const result = applyMentorStrategy(normalized);
+
+  assert.equal(result.status, 'no_trade');
+  assert.equal(result.trade_setup.type, 'none');
+  assert.ok(result.rrIssues.some((issue) => /does not match/i.test(issue)));
 });
 
 test('insufficient RR should block trade', () => {
@@ -348,8 +411,9 @@ test('insufficient RR should block trade', () => {
   const res = applyMentorStrategy(normalized);
   // With strict RR enforcement the final status should be no_trade, but a fallback candidate may be preserved for DEVELOPING workflows
   assert.equal(res.status, 'no_trade');
-  assert.equal(res.trade_setup.type, 'buy');
-  assert.ok(res.reasons.some((r) => /risk-reward/i.test(r) || /Numeric trade levels/i || /RR/i) || res.failed_conditions);
+  assert.equal(res.marketBias, 'bullish');
+  assert.equal(res.trade_setup.type, 'none');
+  assert.ok(res.reasons.some((r) => /risk.reward|risk\/reward/i.test(r)) || res.rrIssues.length > 0);
 });
 
 // Small sanity test for the observation builder
@@ -413,7 +477,7 @@ test('fallback candidate created from range strings when full validations missin
   assert.ok(['BUY', 'SELL', 'WAIT', 'NO_TRADE'].includes(res.decision));
 });
 
-test('strong bearish directional bias keeps a conditional setup and treats unavailable evidence as N/A', () => {
+test('reported RR that contradicts conservative SELL geometry is rejected', () => {
   const normalized = {
     status: 'success',
     detectedPair: 'XAUUSD',
@@ -446,8 +510,9 @@ test('strong bearish directional bias keeps a conditional setup and treats unava
   const res = applyMentorStrategy(normalized);
   assert.equal(res.marketBias, 'bearish');
   assert.ok(res.marketConfidence > 0);
-  assert.ok(res.trade_setup.type === 'sell');
-  assert.ok(['SELL', 'WAIT'].includes(res.decision));
+  assert.equal(res.trade_setup.type, 'none');
+  assert.equal(res.decision, 'NO_TRADE');
+  assert.ok(res.rrIssues.some((issue) => /does not match/i.test(issue)));
   assert.ok(typeof res.breakdown?.trend === 'number' && res.breakdown.trend > 0);
   assert.ok(res.breakdown?.liquidity === null || res.breakdown?.liquidity === undefined);
   assert.ok(res.breakdown?.rsi === null || res.breakdown?.rsi === undefined);
@@ -520,4 +585,46 @@ test('structured market analysis allows NO_SETUP and WAIT without forcing BUY or
   assert.ok(['NO_SETUP', 'DEVELOPING', 'WAIT'].includes(res.setupStatus || 'NO_SETUP'));
   assert.ok(!['BUY', 'SELL'].includes(res.decision) || res.trade_setup.type === 'none' || res.decision === 'WAIT');
   assert.ok(Array.isArray(res.whyNotNow));
+});
+
+test('candle analysis abstains from fabricated levels across supported asset classes', () => {
+  const analyzeMarketFromCandles = require('./serve').analyzeMarketFromCandles;
+  const startPrices = { EURUSD: 1.08, XAUUSD: 2300, BTCUSD: 65000, US30: 40000, USOIL: 75 };
+  const intervalCandles = (start) => Array.from({ length: 30 }, (_, index) => {
+    const close = start * (1 + index * 0.0002);
+    const open = close - start * 0.00005;
+    return {
+      time: new Date(Date.UTC(2024, 0, 1, 0, index)).toISOString(),
+      open,
+      high: close + start * 0.00005,
+      low: open - start * 0.00005,
+      close,
+    };
+  });
+
+  for (const [symbol, start] of Object.entries(startPrices)) {
+    const result = analyzeMarketFromCandles(symbol, '15min', intervalCandles(start));
+    assert.equal(result.status, 'no_trade', symbol);
+    assert.equal(result.trade_setup.type, 'none', symbol);
+    assert.equal(result.trade_setup.risk_reward, null, symbol);
+    assert.match(result.confidenceMeaning, /not a calibrated win probability/i);
+  }
+});
+
+test('invalid candle OHLC values cause insufficient-data abstention', () => {
+  const candles = Array.from({ length: 24 }, (_, index) => ({
+    time: new Date(Date.UTC(2024, 0, 1, 0, index)).toISOString(),
+    open: 1.1,
+    high: 1.101,
+    low: 1.099,
+    close: 1.1,
+  }));
+  candles[10].low = 1.102;
+
+  const result = require('./serve').analyzeMarketFromCandles('EURUSD', '15min', candles);
+
+  assert.equal(result.status, 'no_trade');
+  assert.equal(result.chart.has_enough_candles, false);
+  assert.equal(result.trade_setup.type, 'none');
+  assert.ok(result.dataLimitations.some((item) => /24 valid/i.test(item)));
 });

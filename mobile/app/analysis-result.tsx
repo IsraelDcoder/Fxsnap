@@ -224,8 +224,15 @@ export default function AnalysisResultScreen() {
   const isSell = currentAnalysis?.direction === 'SELL';
   const isNoTrade = currentAnalysis?.status === 'no_trade';
   const isInvalid = currentAnalysis?.status === 'invalid_image';
+  const isAnalysisUnavailable = isInvalid || currentAnalysis?.status === 'ai_unavailable' || currentAnalysis?.status === 'ai_invalid_response';
+  const marketRead = currentAnalysis?.marketBias ?? currentAnalysis?.analysis?.trend;
+  const marketReadLabel = marketRead === 'bullish' ? 'BULLISH BIAS'
+    : marketRead === 'bearish' ? 'BEARISH BIAS'
+      : marketRead === 'mixed' ? 'MIXED BIAS' : marketRead === 'neutral' ? 'NEUTRAL BIAS'
+        : isAnalysisUnavailable ? 'NOT ASSESSED' : 'NEUTRAL BIAS';
   const hasFullAnalysisAccess = canViewFullAnalysis(isSubscribed, currentAnalysis?.freeAnalysisUsed === true);
-  const directionColor = isBuy ? '#00E676' : isSell ? '#FF5252' : '#8E8E93';
+  const directionColor = isBuy || (!isSell && marketRead === 'bullish') ? '#00E676'
+    : isSell || marketRead === 'bearish' ? '#FF5252' : '#8E8E93';
   const alreadySaved = savedAnalyses.some((a) => a.id === currentAnalysis?.id);
   const pair = currentAnalysis?.pair ?? '';
   const [baseCurrency, quoteCurrency] = pairCurrencies(pair);
@@ -372,12 +379,12 @@ export default function AnalysisResultScreen() {
 
     const lines: string[] = [];
     if (isNoTrade) {
-      lines.push('🔒 FXSnap — No High-Confidence Setup');
+      lines.push('FXSnap — Market Read');
       lines.push('');
       lines.push(`Pair: ${currentAnalysis.pair}`);
-      lines.push(`Confidence: ${currentAnalysis.confidence}%`);
-      lines.push(`Market Bias: ${currentAnalysis.marketBias || 'neutral'}`);
-      lines.push(`Setup Status: ${currentAnalysis.setupStatus || 'NO_SETUP'}`);
+      lines.push(`Evidence score (not win probability): ${currentAnalysis.confidence}%`);
+      lines.push(`Directional bias: ${marketReadLabel}`);
+      lines.push('Trade readiness: No validated setup');
       if (!hasFullAnalysisAccess) lines.push('AI reasoning: Unlock full analysis in FXSnap.');
       if (hasFullAnalysisAccess && currentAnalysis.analysis?.notes) lines.push(`Notes: ${currentAnalysis.analysis.notes}`);
       if (hasFullAnalysisAccess && currentAnalysis.whyNotNow?.length) {
@@ -396,7 +403,7 @@ export default function AnalysisResultScreen() {
       lines.push('');
       lines.push(`Pair: ${currentAnalysis.pair}`);
       lines.push(`Direction: ${dir}`);
-      lines.push(`Confidence: ${currentAnalysis.confidence}%`);
+      lines.push(`Evidence score (not win probability): ${currentAnalysis.confidence}%`);
       lines.push(`Market Bias: ${currentAnalysis.marketBias || 'neutral'}`);
       lines.push(`Setup Status: ${currentAnalysis.setupStatus || 'NO_SETUP'}`);
       lines.push('');
@@ -537,8 +544,8 @@ export default function AnalysisResultScreen() {
             <Text style={styles.entryCaption}>{currentPrice != null ? 'CURRENT' : 'ENTRY'}</Text>
             <Text numberOfLines={1} adjustsFontSizeToFit style={styles.entryPrice}>{currentPrice != null ? formatLevelPrice(currentPrice, pair) : entryLevel}</Text>
             <View style={[styles.directionPill, { backgroundColor: `${priceChangeColor}20` }]}>
-              <Feather name={priceChangePercent == null ? (isSell ? 'trending-down' : 'trending-up') : priceChangePercent >= 0 ? 'trending-up' : 'trending-down'} size={13} color={priceChangeColor} />
-              <Text style={[styles.directionPillText, { color: priceChangeColor }]}>{priceChangePercent == null ? currentAnalysis.direction || 'NO TRADE' : `${priceChangePercent > 0 ? '+' : ''}${priceChangePercent.toFixed(2)}%`}</Text>
+              <Feather name={priceChangePercent == null ? (isSell || marketRead === 'bearish' ? 'trending-down' : 'trending-up') : priceChangePercent >= 0 ? 'trending-up' : 'trending-down'} size={13} color={priceChangeColor} />
+              <Text style={[styles.directionPillText, { color: priceChangeColor }]}>{priceChangePercent == null ? (isNoTrade ? marketReadLabel : currentAnalysis.direction || marketReadLabel) : `${priceChangePercent > 0 ? '+' : ''}${priceChangePercent.toFixed(2)}%`}</Text>
             </View>
           </View>
         </Animated.View>
@@ -617,8 +624,9 @@ export default function AnalysisResultScreen() {
         {activeTab === 'analysis' ? (
           <>
             <Animated.View entering={FadeInUp.duration(350)} style={styles.verdictCard}>
-              <View style={styles.verdictTop}><Text style={styles.sectionTitle}>OUR VERDICT</Text><View style={[styles.verdictBadge, { backgroundColor: `${directionColor}20` }]}><View style={[styles.verdictDot, { backgroundColor: directionColor }]} /><Text style={[styles.verdictText, { color: directionColor }]}>{isNoTrade ? 'NO TRADE' : currentAnalysis.direction || '—'}</Text></View></View>
-              <View style={styles.confidenceLine}><Text style={styles.bodyMuted}>Confidence</Text><Text style={styles.confidenceText}>{confidenceLabel} · {confidence}%</Text></View>
+              <View style={styles.verdictTop}><Text style={styles.sectionTitle}>MARKET READ</Text><View style={[styles.verdictBadge, { backgroundColor: `${directionColor}20` }]}><View style={[styles.verdictDot, { backgroundColor: directionColor }]} /><Text style={[styles.verdictText, { color: directionColor }]}>{isNoTrade ? marketReadLabel : currentAnalysis.direction || marketReadLabel}</Text></View></View>
+              <View style={styles.confidenceLine}><Text style={styles.bodyMuted}>Trade readiness</Text><Text style={styles.confidenceText}>{isAnalysisUnavailable ? 'Unavailable' : isNoTrade ? 'No validated setup' : 'Setup validated'}</Text></View>
+              <View style={styles.confidenceLine}><Text style={styles.bodyMuted}>Evidence score</Text><Text style={styles.confidenceText}>{confidenceLabel} · {confidence}%</Text></View>
               <View style={styles.confidenceTrack}><View style={[styles.confidenceProgress, { width: `${Math.max(0, Math.min(confidence, 100))}%`, backgroundColor: directionColor }]} /></View>
             </Animated.View>
             <View style={styles.levelsCard}>
@@ -635,7 +643,7 @@ export default function AnalysisResultScreen() {
                 setAnalysisExpanded((expanded) => !expanded);
                 trackEvent('analysis_expanded', { expanded: !analysisExpanded });
               }}>
-                <View><Text style={styles.sectionTitle}>AI ANALYSIS</Text><Text style={styles.bodyMuted}>{hasFullAnalysisAccess ? (analysisExpanded ? 'Reasoning behind this setup' : 'Read more about this setup') : 'Premium insight · Tap to unlock'}</Text></View>
+                <View><Text style={styles.sectionTitle}>AI ANALYSIS</Text><Text style={styles.bodyMuted}>{hasFullAnalysisAccess ? (isNoTrade ? 'Reasoning behind this market read' : analysisExpanded ? 'Reasoning behind this setup' : 'Read more about this setup') : 'Premium insight · Tap to unlock'}</Text></View>
                 <Feather name={hasFullAnalysisAccess && analysisExpanded ? 'chevron-up' : 'chevron-down'} size={18} color="#BDBDBD" />
               </TouchableOpacity>
               {hasFullAnalysisAccess && analysisExpanded ? (

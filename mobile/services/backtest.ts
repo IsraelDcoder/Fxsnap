@@ -42,6 +42,7 @@ export interface BacktestConfig {
   rewardRisk: number;
   pipSize: number;
   maxBarsInTrade?: number;
+  maxIndex?: number;
   splitRatio?: number;
 }
 
@@ -50,7 +51,7 @@ export function evaluateTrade(candles: CandleData[], start: number, direction: '
   const stopDistance = config.stopPips * config.pipSize;
   const sl = direction === 'BUY' ? entry - stopDistance : entry + stopDistance;
   const tp = direction === 'BUY' ? entry + stopDistance * config.rewardRisk : entry - stopDistance * config.rewardRisk;
-  const max = Math.min(candles.length - 1, start + (config.maxBarsInTrade || 48));
+  const max = Math.min(candles.length - 1, config.maxIndex ?? candles.length - 1, start + (config.maxBarsInTrade || 48));
   for (let i = start + 1; i <= max; i += 1) {
     const candle = candles[i];
     const hitStop = direction === 'BUY' ? candle.low <= sl : candle.high >= sl;
@@ -76,7 +77,10 @@ export function runBacktest(candles: CandleData[], signalFor: (history: CandleDa
   for (let index = config.warmupCandles; index < candles.length - 1; index += 1) {
     const signal = signalFor(candles.slice(0, index + 1));
     if (!signal?.direction || signal.isLowConfidence) continue;
-    trades.push(evaluateTrade(candles, index, signal.direction, config));
+    trades.push(evaluateTrade(candles, index, signal.direction, {
+      ...config,
+      maxIndex: index < split ? split - 1 : candles.length - 1,
+    }));
   }
   return { trades, inSample: calculateMetrics(trades.filter((trade) => trade.index < split), true), outOfSample: calculateMetrics(trades.filter((trade) => trade.index >= split), false) };
 }
