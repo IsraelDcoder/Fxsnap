@@ -34,6 +34,7 @@ import { analyzeChartImage, analyzeMultiTimeframeCharts, type ChartAnalysisResul
 import { trackEvent } from '@/services/telemetry';
 import { recordRatingEligibleAnalysis } from '@/services/ratingPrompt';
 import { clearAnalysisRetryRequest, getAnalysisRetryRequest, storeAnalysisRetryRequest } from '@/services/analysisRetry';
+import { resolveAnalysisDirection } from '@/services/analysisDirection';
 
 type Stage = 'pick' | 'preview' | 'analyzing';
 type AnalysisMode = 'quick' | 'multiTimeframe';
@@ -232,15 +233,19 @@ function AnalyzingView() {
 
 /** Convert the disciplined chart result into the app's AnalysisResult model. */
 function buildAnalysisResult(chart: ChartAnalysisResult, pair: string, imageUri?: string): AnalysisResult {
-  const isBuy = chart.trade_setup.type === 'buy';
-  const isSell = chart.trade_setup.type === 'sell';
-    return {
+  const direction = resolveAnalysisDirection(
+    chart.trade_setup.type,
+    chart.marketBias,
+    chart.analysis.trend,
+    chart.analysis.sentiment,
+  );
+  return {
     id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
     pair,
     status: chart.status,
     message: chart.message,
     freeAnalysisUsed: chart.freeAnalysisUsed,
-    direction: isBuy ? 'BUY' : isSell ? 'SELL' : undefined,
+    direction,
     timeframe: chart.timeframe || undefined,
     takeProfitLevels: chart.trade_setup.take_profit_levels?.length
       ? chart.trade_setup.take_profit_levels

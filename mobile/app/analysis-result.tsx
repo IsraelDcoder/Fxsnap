@@ -42,6 +42,7 @@ import { trackEvent } from '@/services/telemetry';
 import { canViewFullAnalysis } from '@/services/featureAccess';
 import { getInstrument } from '@/services/instruments';
 import { shareAnalysisCardOnWeb } from '@/services/shareAnalysisCard';
+import { formatAnalysisDirection, resolveAnalysisDirection } from '@/services/analysisDirection';
 
 type ResultTab = 'analysis' | 'insights';
 
@@ -231,16 +232,27 @@ export default function AnalysisResultScreen() {
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
   const botPad = Platform.OS === 'web' ? 34 : insets.bottom;
 
-  const isBuy = currentAnalysis?.direction === 'BUY';
-  const isSell = currentAnalysis?.direction === 'SELL';
   const isNoTrade = currentAnalysis?.status === 'no_trade';
   const isInvalid = currentAnalysis?.status === 'invalid_image';
   const isAnalysisUnavailable = isInvalid || currentAnalysis?.status === 'ai_unavailable' || currentAnalysis?.status === 'ai_invalid_response';
   const marketRead = currentAnalysis?.marketBias ?? currentAnalysis?.analysis?.trend;
+  const displayDirection = resolveAnalysisDirection(
+    currentAnalysis?.tradeSetup?.type,
+    currentAnalysis?.direction,
+    marketRead,
+    currentAnalysis?.analysis?.sentiment,
+  );
+  const isBuy = displayDirection === 'BUY';
+  const isSell = displayDirection === 'SELL';
   const marketReadLabel = marketRead === 'bullish' ? 'BULLISH BIAS'
     : marketRead === 'bearish' ? 'BEARISH BIAS'
       : marketRead === 'mixed' ? 'MIXED BIAS' : marketRead === 'neutral' ? 'NEUTRAL BIAS'
         : isAnalysisUnavailable ? 'NOT ASSESSED' : 'NEUTRAL BIAS';
+  const directionLabel = formatAnalysisDirection(
+    displayDirection,
+    currentAnalysis?.status === 'success' && currentAnalysis.tradeStatus === 'actionable',
+    marketReadLabel,
+  );
   const hasFullAnalysisAccess = canViewFullAnalysis(isSubscribed, currentAnalysis?.freeAnalysisUsed === true);
   const directionColor = isBuy || (!isSell && marketRead === 'bullish') ? '#00E676'
     : isSell || marketRead === 'bearish' ? '#FF5252' : '#8E8E93';
@@ -405,7 +417,7 @@ export default function AnalysisResultScreen() {
       lines.push('');
       lines.push(`Pair: ${currentAnalysis.pair}`);
       lines.push(`Evidence score (not win probability): ${currentAnalysis.confidence}%`);
-      lines.push(`Directional bias: ${marketReadLabel}`);
+      lines.push(`Directional bias: ${directionLabel}`);
       lines.push(`Trade readiness: ${readinessText}`);
       if (!hasFullAnalysisAccess) lines.push('AI reasoning: Unlock full analysis in FXSnap.');
       if (hasFullAnalysisAccess && currentAnalysis.analysis?.notes) lines.push(`Notes: ${currentAnalysis.analysis.notes}`);
@@ -607,7 +619,7 @@ export default function AnalysisResultScreen() {
             <Text numberOfLines={1} adjustsFontSizeToFit style={styles.entryPrice}>{currentPrice != null ? formatLevelPrice(currentPrice, pair) : entryLevel}</Text>
             <View style={[styles.directionPill, { backgroundColor: `${priceChangeColor}20` }]}>
               <Feather name={priceChangePercent == null ? (isSell || marketRead === 'bearish' ? 'trending-down' : 'trending-up') : priceChangePercent >= 0 ? 'trending-up' : 'trending-down'} size={13} color={priceChangeColor} />
-              <Text style={[styles.directionPillText, { color: priceChangeColor }]}>{priceChangePercent == null ? (isNoTrade ? marketReadLabel : currentAnalysis.direction || marketReadLabel) : `${priceChangePercent > 0 ? '+' : ''}${priceChangePercent.toFixed(2)}%`}</Text>
+              <Text style={[styles.directionPillText, { color: priceChangeColor }]}>{priceChangePercent == null ? directionLabel : `${priceChangePercent > 0 ? '+' : ''}${priceChangePercent.toFixed(2)}%`}</Text>
             </View>
           </View>
         </Animated.View>
@@ -686,7 +698,7 @@ export default function AnalysisResultScreen() {
         {activeTab === 'analysis' ? (
           <>
             <Animated.View entering={FadeInUp.duration(350)} style={styles.verdictCard}>
-              <View style={styles.verdictTop}><Text style={styles.sectionTitle}>MARKET READ</Text><View style={[styles.verdictBadge, { backgroundColor: `${directionColor}20` }]}><View style={[styles.verdictDot, { backgroundColor: directionColor }]} /><Text style={[styles.verdictText, { color: directionColor }]}>{isNoTrade ? marketReadLabel : currentAnalysis.direction || marketReadLabel}</Text></View></View>
+              <View style={styles.verdictTop}><Text style={styles.sectionTitle}>MARKET READ</Text><View style={[styles.verdictBadge, { backgroundColor: `${directionColor}20` }]}><View style={[styles.verdictDot, { backgroundColor: directionColor }]} /><Text style={[styles.verdictText, { color: directionColor }]}>{directionLabel}</Text></View></View>
               <View style={styles.confidenceLine}><Text style={styles.bodyMuted}>Trade readiness</Text><Text style={styles.confidenceText}>{readinessText}</Text></View>
               <View style={styles.confidenceLine}><Text style={styles.bodyMuted}>Evidence score</Text><Text style={styles.confidenceText}>{confidenceLabel} · {confidence}%</Text></View>
               <View style={styles.confidenceTrack}><View style={[styles.confidenceProgress, { width: `${Math.max(0, Math.min(confidence, 100))}%`, backgroundColor: directionColor }]} /></View>

@@ -1,4 +1,5 @@
 import type { AnalysisResult } from '@/context/AppContext';
+import { formatAnalysisDirection, resolveAnalysisDirection } from '@/services/analysisDirection';
 
 type ShareNavigator = Navigator & {
   canShare?: (data: ShareData) => boolean;
@@ -53,14 +54,19 @@ async function createAnalysisCardBlob(analysis: AnalysisResult, isPremium: boole
   const context = canvas.getContext('2d');
   if (!context) throw new Error('Your browser could not create the share-card image.');
 
-  const isBuy = analysis.direction === 'BUY';
-  const isSell = analysis.direction === 'SELL';
+  const displayDirection = resolveAnalysisDirection(
+    analysis.tradeSetup?.type,
+    analysis.direction,
+    analysis.marketBias,
+    analysis.analysis?.trend,
+    analysis.analysis?.sentiment,
+  );
+  const isBuy = displayDirection === 'BUY';
+  const isSell = displayDirection === 'SELL';
   const accent = isBuy ? '#00E676' : isSell ? '#FF5252' : '#A0A5AD';
-  const direction = analysis.status === 'no_trade'
-    ? 'NO TRADE'
-    : analysis.status === 'invalid_image'
-      ? 'INVALID'
-      : analysis.direction || 'MARKET READ';
+  const direction = analysis.status === 'invalid_image'
+    ? 'INVALID'
+    : formatAnalysisDirection(displayDirection, analysis.status === 'success' && analysis.tradeStatus === 'actionable');
   const entry = analysis.tradeSetup?.entryZone || analysis.entry || '—';
   const stopLoss = analysis.tradeSetup?.stopLoss || analysis.sl || '—';
   const takeProfit = analysis.tradeSetup?.takeProfit || analysis.takeProfitLevels?.join(', ') || analysis.tp || '—';

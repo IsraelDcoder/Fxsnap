@@ -1,5 +1,6 @@
 import React from 'react';
 import { Image, View, Text, StyleSheet } from 'react-native';
+import { formatAnalysisDirection, resolveAnalysisDirection } from '@/services/analysisDirection';
 
 // Minimal share card component used for off-screen capture.
 // Calls onReady after the first layout + short delay to ensure fonts/assets have rendered.
@@ -30,10 +31,19 @@ const AnalysisShareCard = React.forwardRef(function AnalysisShareCard(props: Pro
     signalReady();
   };
 
-  const isBuy = analysis?.direction === 'BUY';
-  const isSell = analysis?.direction === 'SELL';
-  const isNoTrade = analysis?.status === 'no_trade';
+  const displayDirection = resolveAnalysisDirection(
+    analysis?.tradeSetup?.type,
+    analysis?.direction,
+    analysis?.marketBias,
+    analysis?.analysis?.trend,
+    analysis?.analysis?.sentiment,
+  );
+  const isBuy = displayDirection === 'BUY';
+  const isSell = displayDirection === 'SELL';
   const isInvalid = analysis?.status === 'invalid_image';
+  const directionLabel = isInvalid
+    ? 'INVALID'
+    : formatAnalysisDirection(displayDirection, analysis?.status === 'success' && analysis?.tradeStatus === 'actionable');
   const directionColor = isBuy ? '#00E676' : isSell ? '#FF5252' : '#8E8E93';
   const setup = analysis?.tradeSetup;
   const entry = setup?.entryZone || analysis?.entry;
@@ -54,7 +64,7 @@ const AnalysisShareCard = React.forwardRef(function AnalysisShareCard(props: Pro
         </View>
         <View style={[styles.shareDirectionBadge, { backgroundColor: isBuy ? '#023315' : isSell ? '#3F0A0A' : '#1A1A1A' }]}>
           <Text style={[styles.shareDirectionText, { color: directionColor }]}>
-            {isNoTrade ? 'NO TRADE' : isInvalid ? 'INVALID' : analysis.direction || '—'}
+            {directionLabel}
           </Text>
         </View>
       </View>

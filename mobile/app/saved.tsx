@@ -20,6 +20,7 @@ import * as Haptics from '@/services/haptics';
 import { useApp } from '@/context/AppContext';
 import type { AnalysisResult } from '@/context/AppContext';
 import { useColors } from '@/hooks/useColors';
+import { formatAnalysisDirection, resolveAnalysisDirection } from '@/services/analysisDirection';
 
 type Filter = 'all' | 'BUY' | 'SELL';
 
@@ -133,11 +134,11 @@ function AnalysisCard({
   onPress: () => void;
 }) {
   const colors = useColors();
-  const isBuy = item.direction === 'BUY';
-  const isSell = item.direction === 'SELL';
-  const isNoTrade = item.status === 'no_trade';
+  const displayDirection = resolveAnalysisDirection(item.tradeSetup?.type, item.direction, item.marketBias, item.analysis?.trend, item.analysis?.sentiment);
+  const isBuy = displayDirection === 'BUY';
+  const isSell = displayDirection === 'SELL';
   const color = isBuy ? colors.buy : isSell ? colors.sell : colors.textSecondary;
-  const dirLabel = isNoTrade ? 'NO TRADE' : isBuy ? 'BUY' : isSell ? 'SELL' : '—';
+  const dirLabel = formatAnalysisDirection(displayDirection, item.status === 'success' && item.tradeStatus === 'actionable', 'DIRECTION UNCLEAR');
   const entryText = item.entry ?? item.tradeSetup?.entryZone ?? '—';
   const slText = item.sl ?? item.tradeSetup?.stopLoss ?? '—';
   const tpText = item.tp ?? item.tradeSetup?.takeProfit ?? '—';

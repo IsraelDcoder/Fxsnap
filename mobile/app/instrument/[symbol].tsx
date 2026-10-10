@@ -6,6 +6,7 @@ import { useColors } from '@/hooks/useColors';
 import SimpleChart from '@/components/SimpleChart';
 import * as market from '@/services/market';
 import { DefaultNewsProvider, NewsProvider } from '@/services/news';
+import { formatAnalysisDirection, resolveAnalysisDirection } from '@/services/analysisDirection';
 
 const newsProvider: NewsProvider = new DefaultNewsProvider();
 
@@ -103,6 +104,18 @@ export default function InstrumentDetail() {
     { key: 'technical', label: 'TECHNICAL' },
     { key: 'news', label: 'NEWS' },
   ], []);
+  const analysisDirection = resolveAnalysisDirection(
+    analysis?.decision,
+    analysis?.tradeType,
+    analysis?.marketBias,
+    analysis?.analysis?.trend,
+    analysis?.analysis?.sentiment,
+  );
+  const analysisDirectionLabel = formatAnalysisDirection(
+    analysisDirection,
+    analysis?.tradeStatus === 'actionable',
+    'DIRECTION UNCLEAR',
+  );
 
   const renderTechnicalTab = () => (
     <View>
@@ -144,7 +157,7 @@ export default function InstrumentDetail() {
             <Text style={[styles.analysisTitle, { color: colors.text }]}>Latest FXSnap AI analysis</Text>
             <Text style={[styles.analysisMetric, { color: colors.textSecondary }]}>Bias: <Text style={{ color: colors.text, fontWeight: '700' }}>{analysis.marketBias ?? 'neutral'}</Text></Text>
             <Text style={[styles.analysisMetric, { color: colors.textSecondary }]}>Setup: <Text style={{ color: colors.text, fontWeight: '700' }}>{analysis.setupStatus ?? 'NO_SETUP'}</Text></Text>
-            <Text style={[styles.analysisMetric, { color: colors.textSecondary }]}>Decision: <Text style={{ color: colors.text, fontWeight: '700' }}>{analysis.decision ?? analysis.tradeStatus ?? 'NO_TRADE'}</Text></Text>
+            <Text style={[styles.analysisMetric, { color: colors.textSecondary }]}>Direction: <Text style={{ color: colors.text, fontWeight: '700' }}>{analysisDirectionLabel}</Text></Text>
             <Text style={[styles.analysisMetric, { color: colors.textSecondary }]}>Confidence: <Text style={{ color: colors.text, fontWeight: '700' }}>{analysis.marketConfidence ?? analysis.confidence ?? 0}%</Text></Text>
             <Text style={[styles.analysisNote, { color: colors.textSecondary }]}>{analysis.analysis?.notes || analysis.message || 'No strong setup is currently active.'}</Text>
           </>
