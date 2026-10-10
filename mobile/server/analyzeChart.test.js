@@ -700,6 +700,56 @@ test('XAUUSD and BTCUSD keep AI-provided levels visible when geometry blocks the
   }
 });
 
+test('explicit direction and directional bias survive trade_setup.type none', () => {
+  const cases = [
+    {
+      pair: 'XAUUSD',
+      direction: 'BUY',
+      trend: 'neutral',
+      structure: 'Price is holding above visible support.',
+      entry: '2350',
+      stop: '2360',
+      target: '2380',
+    },
+    {
+      pair: 'BTCUSD',
+      direction: 'SELL',
+      trend: 'bearish',
+      structure: 'Lower highs and lower lows.',
+      entry: '65000',
+      stop: '64000',
+      target: '62000',
+    },
+  ];
+
+  for (const item of cases) {
+    const canonical = canonicalizeRawAnalysis({
+      status: 'no_trade',
+      pair: item.pair,
+      direction: item.pair === 'XAUUSD' ? item.direction : undefined,
+      chart: { is_chart: true, chart_quality: 'good', price_scale_visible: true, candles_visible: true, has_enough_candles: true },
+      analysis: { trend: item.trend, structure: item.structure },
+      trade_setup: {
+        type: 'none',
+        entry_zone: item.entry,
+        stop_loss: item.stop,
+        take_profit: item.target,
+        risk_reward: 2,
+      },
+    });
+
+    assert.equal(TradeAnalysisSchema.safeParse(canonical).success, true, item.pair);
+    const result = applyMentorStrategy(normalizeAnalysis(canonical));
+
+    assert.equal(result.marketBias, item.direction === 'BUY' ? 'bullish' : 'bearish', item.pair);
+    assert.equal(result.trade_setup.type, item.direction.toLowerCase(), item.pair);
+    assert.equal(result.trade_setup.entry_zone, item.entry, item.pair);
+    assert.equal(result.trade_setup.stop_loss, item.stop, item.pair);
+    assert.equal(result.trade_setup.take_profit, item.target, item.pair);
+    assert.equal(result.tradeStatus, 'no_setup', item.pair);
+  }
+});
+
 test('neutral market remains no_setup while preserving explainable reasons', () => {
   const normalized = {
     status: 'success',

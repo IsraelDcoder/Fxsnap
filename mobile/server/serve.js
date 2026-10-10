@@ -543,21 +543,27 @@ function canonicalizeRawAnalysis(raw) {
   const reasoning = parseBoundedStringArray(raw.reasoning, 5, 300).length
     ? parseBoundedStringArray(raw.reasoning, 5, 300)
     : parseBoundedStringArray(analysisRaw.reasoning, 5, 300);
-  const rawTradeType = canonicalizeEnumOr(
-    tradeRaw.type ?? tradeRaw.trade_type ?? tradeRaw.direction
-      ?? raw.trade_type ?? raw.trade_direction ?? raw.direction ?? raw.signal,
-    {
-      buy: 'buy',
-      sell: 'sell',
-      none: 'none',
-      long: 'buy',
-      short: 'sell',
-      no_trade: 'none',
-      no_setup: 'none',
-    },
-    ['buy', 'sell', 'none'],
-    'none',
-  );
+  const tradeTypeMapping = {
+    buy: 'buy',
+    sell: 'sell',
+    none: 'none',
+    long: 'buy',
+    short: 'sell',
+    no_trade: 'none',
+    no_setup: 'none',
+  };
+  const tradeTypeCandidates = [
+    tradeRaw.type,
+    tradeRaw.trade_type,
+    tradeRaw.direction,
+    raw.trade_type,
+    raw.trade_direction,
+    raw.direction,
+    raw.signal,
+  ].map((value) => canonicalizeEnumOr(value, tradeTypeMapping, ['buy', 'sell', 'none'], 'none'));
+  const rawTradeType = tradeTypeCandidates.find((type) => type === 'buy' || type === 'sell')
+    || tradeTypeCandidates.find((type) => type === 'none')
+    || 'none';
   const entryZone = boundedString(ensurePriceString(
     tradeRaw.entry_zone ?? tradeRaw.entry ?? tradeRaw.entry_price ?? raw.entry_zone ?? raw.entry ?? raw.entry_price,
   ), 'none');
@@ -831,6 +837,9 @@ function deriveMarketBias(norm) {
   if (bullish && bearish) return 'mixed';
   if (bullish) return 'bullish';
   if (bearish) return 'bearish';
+  const setupDirection = normalizeText(norm.trade_setup?.type);
+  if (setupDirection === 'buy') return 'bullish';
+  if (setupDirection === 'sell') return 'bearish';
   return 'neutral';
 }
 
@@ -985,8 +994,20 @@ function evaluateDecisionEngine(obs) {
 
   let trade_setup = { ...DEFAULT_TRADE_SETUP };
   const rawTrade = norm.trade_setup || {};
-  if (rawTrade && rawTrade.type && rawTrade.type !== 'none') {
-    const dir = normalizeText(rawTrade.type);
+  const hasProposedLevels = [
+    rawTrade.entry_zone,
+    rawTrade.stop_loss,
+    rawTrade.take_profit,
+    ...(Array.isArray(rawTrade.take_profit_levels) ? rawTrade.take_profit_levels : []),
+  ].some(hasMeaningfulLevel);
+  const marketBias = deriveMarketBias(norm);
+  const rawDirection = normalizeText(rawTrade.type);
+  const dir = ['buy', 'sell'].includes(rawDirection)
+    ? rawDirection
+    : hasProposedLevels && ['bullish', 'bearish'].includes(marketBias)
+      ? marketBias === 'bullish' ? 'buy' : 'sell'
+      : 'none';
+  if (dir !== 'none') {
     const entryRange = parsePriceOrRange(rawTrade.entry_zone);
     const slRange = parsePriceOrRange(rawTrade.stop_loss);
     const tpRange = parsePriceOrRange(rawTrade.take_profit);
@@ -1037,10 +1058,10 @@ function evaluateDecisionEngine(obs) {
   if (m15 && m15.rsi && m15.rsi.visible === true && m15.rsi.confirms === false) {
     failed.push('RSI is visible and contradicts the setup.');
   }
-  if (m15 && m15.bos && m15.bos.detected === false && rawTrade.type && rawTrade.type !== 'none') {
+  if (m15 && m15.bos && m15.bos.detected === false && dir !== 'none') {
     failed.push('Break of structure is not confirmed on the visible chart.');
   }
-  if (liquidityVisible && !liquidityOk && rawTrade.type && rawTrade.type !== 'none') {
+  if (liquidityVisible && !liquidityOk && dir !== 'none') {
     failed.push('Liquidity confirmation is visible and contradicts the setup.');
   }
 
