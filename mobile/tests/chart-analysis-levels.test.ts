@@ -61,6 +61,19 @@ test('keeps comma-grouped prices intact instead of splitting them into target va
   assert.deepEqual(setup.take_profit_levels, ['65,500', '64,000']);
 });
 
+test('keeps a single comma-grouped take-profit price as one target', () => {
+  const setup = normalizeChartTradeSetup({
+    trade_setup: {
+      type: 'buy',
+      entry_zone: '67,000',
+      stop_loss: '66,000',
+      take_profit: '68,500',
+    },
+  });
+
+  assert.deepEqual(setup.take_profit_levels, ['68,500']);
+});
+
 test('does not create levels for a valid no-trade response without them', () => {
   const setup = normalizeChartTradeSetup({
     status: 'no_trade',

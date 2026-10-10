@@ -261,7 +261,7 @@ export default function AnalysisResultScreen() {
   const [baseCurrency, quoteCurrency] = pairCurrencies(pair);
   const targetLevels = [
     ...(currentAnalysis?.takeProfitLevels ?? []),
-    ...(currentAnalysis?.tradeSetup?.takeProfit?.split(/[,|]/).map((level) => level.trim()) ?? []),
+    ...(currentAnalysis?.tradeSetup?.takeProfit ? [currentAnalysis.tradeSetup.takeProfit] : []),
     ...(currentAnalysis?.tp ? [currentAnalysis.tp] : []),
   ].filter((level, index, levels) => firstAvailableLevel(level) != null && levels.indexOf(level) === index).slice(0, 2);
   const usableTargetLevels = targetLevels;
@@ -269,6 +269,10 @@ export default function AnalysisResultScreen() {
   const stopLevel = formatLevelPrice(firstAvailableLevel(currentAnalysis?.sl, currentAnalysis?.tradeSetup?.stopLoss), pair);
   const tp1Level = formatLevelPrice(usableTargetLevels[0], pair);
   const tp2Level = formatLevelPrice(usableTargetLevels[1], pair);
+  const unavailableLevelLabel = isNoTrade ? 'Not established' : 'Not provided';
+  const entryLevelText = entryLevel === '—' ? unavailableLevelLabel : entryLevel;
+  const stopLevelText = stopLevel === '—' ? unavailableLevelLabel : stopLevel;
+  const tp1LevelText = tp1Level === '—' ? unavailableLevelLabel : tp1Level;
   const shareAnalysis = currentAnalysis && !hasFullAnalysisAccess ? {
     ...currentAnalysis,
     entry: entryLevel,
@@ -291,6 +295,9 @@ export default function AnalysisResultScreen() {
     ? directionColor
     : priceChangeFavorable ? '#39E58C' : '#FF6262';
   const riskReward = formatRiskReward(currentAnalysis?.tradeSetup?.riskReward);
+  const riskRewardText = riskReward === '—'
+    ? isNoTrade ? 'Not calculable' : 'Not provided'
+    : riskReward.includes(':') ? riskReward : `1:${riskReward}`;
   const confidence = currentAnalysis?.marketConfidence ?? currentAnalysis?.confidence ?? 0;
   const entryReadiness = Math.round(Math.max(0, Math.min(100, currentAnalysis?.entryReadiness ?? 0)));
   const readinessLabel = currentAnalysis?.tradeStatus === 'actionable'
@@ -616,7 +623,7 @@ export default function AnalysisResultScreen() {
           </View>
           <View style={styles.entrySummary}>
             <Text style={styles.entryCaption}>{currentPrice != null ? 'CURRENT' : 'ENTRY'}</Text>
-            <Text numberOfLines={1} adjustsFontSizeToFit style={styles.entryPrice}>{currentPrice != null ? formatLevelPrice(currentPrice, pair) : entryLevel}</Text>
+            <Text numberOfLines={1} adjustsFontSizeToFit style={styles.entryPrice}>{currentPrice != null ? formatLevelPrice(currentPrice, pair) : entryLevelText}</Text>
             <View style={[styles.directionPill, { backgroundColor: `${priceChangeColor}20` }]}>
               <Feather name={priceChangePercent == null ? (isSell || marketRead === 'bearish' ? 'trending-down' : 'trending-up') : priceChangePercent >= 0 ? 'trending-up' : 'trending-down'} size={13} color={priceChangeColor} />
               <Text style={[styles.directionPillText, { color: priceChangeColor }]}>{priceChangePercent == null ? directionLabel : `${priceChangePercent > 0 ? '+' : ''}${priceChangePercent.toFixed(2)}%`}</Text>
@@ -673,7 +680,7 @@ export default function AnalysisResultScreen() {
           <View style={styles.targetsCallout}>
             <View style={styles.calloutHeading}><Feather name="target" size={14} color="#39E58C" /><Text style={styles.targetsHeading}>TARGETS</Text></View>
             <TouchableOpacity style={styles.calloutLevelRow} onPress={() => highlightLevel('tp1')}>
-              <View style={styles.targetTrack}><View style={styles.targetDot} /></View><Text style={styles.calloutLevelName}>TP1</Text><Text numberOfLines={1} style={styles.calloutLevelPrice}>{tp1Level}</Text>
+            <View style={styles.targetTrack}><View style={styles.targetDot} /></View><Text style={styles.calloutLevelName}>TP1</Text><Text numberOfLines={1} style={styles.calloutLevelPrice}>{tp1LevelText}</Text>
             </TouchableOpacity>
             {usableTargetLevels.length > 1 ? (
               <TouchableOpacity style={styles.calloutLevelRow} onPress={() => hasFullAnalysisAccess ? highlightLevel('tp2') : openLockedContent('tp2')}>
@@ -685,7 +692,7 @@ export default function AnalysisResultScreen() {
           </View>
           <TouchableOpacity style={styles.stopCallout} onPress={() => highlightLevel('sl')}>
             <View style={styles.calloutHeading}><Feather name="slash" size={14} color="#FF6262" /><Text style={styles.stopHeading}>STOP LOSS</Text></View>
-            <View style={styles.calloutLevelRow}><View style={[styles.targetTrack, styles.stopTrack]}><View style={styles.stopDot} /></View><Text numberOfLines={1} style={styles.stopPrice}>{stopLevel}</Text></View>
+            <View style={styles.calloutLevelRow}><View style={[styles.targetTrack, styles.stopTrack]}><View style={styles.stopDot} /></View><Text numberOfLines={1} style={styles.stopPrice}>{stopLevelText}</Text></View>
             <Text style={styles.stopDistance}>{stopDistance != null ? `${stopDistance} pips from entry` : 'Distance unavailable'}</Text>
           </TouchableOpacity>
         </Animated.View>
@@ -705,11 +712,11 @@ export default function AnalysisResultScreen() {
             </Animated.View>
             <View style={styles.levelsCard}>
               <Text style={styles.sectionTitle}>TRADE LEVELS</Text>
-              <TradeLevelRow label="Entry" value={entryLevel} /><View style={styles.tableDivider} />
-              <TradeLevelRow label="Stop Loss" value={stopLevel} color="#FF6262" /><View style={styles.tableDivider} />
-              <TradeLevelRow label="Take Profit 1" value={tp1Level} color="#39E58C" /><View style={styles.tableDivider} />
+              <TradeLevelRow label="Entry" value={entryLevelText} /><View style={styles.tableDivider} />
+              <TradeLevelRow label="Stop Loss" value={stopLevelText} color="#FF6262" /><View style={styles.tableDivider} />
+              <TradeLevelRow label="Take Profit 1" value={tp1LevelText} color="#39E58C" /><View style={styles.tableDivider} />
               <TradeLevelRow label="Take Profit 2" value={usableTargetLevels.length > 1 ? (hasFullAnalysisAccess ? tp2Level : '••••••') : 'Not provided'} color="#39E58C" locked={!hasFullAnalysisAccess && usableTargetLevels.length > 1} onPress={() => openLockedContent('tp2')} /><View style={styles.tableDivider} />
-                <TradeLevelRow label="Risk : Reward (AI)" value={hasFullAnalysisAccess ? (riskReward === '—' ? riskReward : riskReward.includes(':') ? riskReward : `1:${riskReward}`) : '••••'} color="#39E58C" locked={!hasFullAnalysisAccess} onPress={() => openLockedContent('risk-reward')} />
+                <TradeLevelRow label="Risk : Reward" value={hasFullAnalysisAccess ? riskRewardText : '••••'} color="#39E58C" locked={!hasFullAnalysisAccess} onPress={() => openLockedContent('risk-reward')} />
             </View>
             <View style={styles.levelsCard}>
               <TouchableOpacity style={styles.aiHeading} onPress={() => {

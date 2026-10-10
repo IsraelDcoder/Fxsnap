@@ -27,14 +27,13 @@ import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import * as Haptics from '@/services/haptics';
 import { useApp } from '@/context/AppContext';
-import type { AnalysisResult } from '@/context/AppContext';
 import { PairSelectionModal } from '@/components/PairSelectionModal';
 import { useColors } from '@/hooks/useColors';
 import { analyzeChartImage, analyzeMultiTimeframeCharts, type ChartAnalysisResult, type MultiTimeframeChartImage } from '../services/chartDetection';
 import { trackEvent } from '@/services/telemetry';
 import { recordRatingEligibleAnalysis } from '@/services/ratingPrompt';
 import { clearAnalysisRetryRequest, getAnalysisRetryRequest, storeAnalysisRetryRequest } from '@/services/analysisRetry';
-import { resolveAnalysisDirection } from '@/services/analysisDirection';
+import { buildAnalysisResult } from '@/services/analysisResult';
 
 type Stage = 'pick' | 'preview' | 'analyzing';
 type AnalysisMode = 'quick' | 'multiTimeframe';
@@ -229,69 +228,6 @@ function AnalyzingView() {
       </View>
     </View>
   );
-}
-
-/** Convert the disciplined chart result into the app's AnalysisResult model. */
-function buildAnalysisResult(chart: ChartAnalysisResult, pair: string, imageUri?: string): AnalysisResult {
-  const direction = resolveAnalysisDirection(
-    chart.trade_setup.type,
-    chart.marketBias,
-    chart.analysis.trend,
-    chart.analysis.sentiment,
-  );
-  return {
-    id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
-    pair,
-    status: chart.status,
-    message: chart.message,
-    freeAnalysisUsed: chart.freeAnalysisUsed,
-    direction,
-    timeframe: chart.timeframe || undefined,
-    takeProfitLevels: chart.trade_setup.take_profit_levels?.length
-      ? chart.trade_setup.take_profit_levels
-      : chart.trade_setup.take_profit.split(/[,|]/).map((level) => level.trim()).filter(Boolean),
-    priceSeries: chart.priceSeries,
-    reasoning: chart.reasoning,
-    supportResistance: chart.supportResistance,
-    // Primary market confidence (preferred). Fall back to legacy composite confidence when missing.
-    confidence: typeof chart.marketConfidence === 'number' ? chart.marketConfidence : chart.confidence,
-    confidenceType: 'composite_score',
-    imageUri,
-    createdAt: new Date().toISOString(),
-    analysis: {
-      trend: chart.analysis.trend,
-      structure: chart.analysis.structure,
-      volatility: chart.analysis.volatility,
-      volume: chart.analysis.volume,
-      sentiment: chart.analysis.sentiment,
-      indicators: chart.analysis.indicators,
-      notes: chart.analysis.notes,
-    },
-    zones: {
-      support: chart.zones.support,
-      resistance: chart.zones.resistance,
-      liquidity: chart.zones.liquidity,
-    },
-    tradeSetup: {
-      type: chart.trade_setup.type,
-      entryZone: chart.trade_setup.entry_zone,
-      stopLoss: chart.trade_setup.stop_loss,
-      takeProfit: chart.trade_setup.take_profit,
-      riskReward: chart.trade_setup.risk_reward,
-    },
-    marketBias: chart.marketBias,
-    marketBiasConfidence: chart.marketBiasConfidence,
-    marketConfidence: chart.marketConfidence ?? chart.marketBiasConfidence ?? chart.confidence,
-    setupConfidence: chart.setupConfidence ?? chart.confidence,
-    entryReadiness: chart.entryReadiness ?? 0,
-    breakdown: chart.breakdown || {},
-    tradeStatus: chart.tradeStatus,
-    setupStatus: chart.setupStatus,
-    tradeTrigger: chart.tradeTrigger,
-    whyNotNow: chart.whyNotNow,
-    dataLimitations: chart.dataLimitations,
-    multiTimeframe: chart.multiTimeframe,
-  };
 }
 
 export default function AnalysisScreen() {
@@ -492,9 +428,9 @@ export default function AnalysisScreen() {
     const remainingMinimumTime = Math.max(0, 10000 - (Date.now() - analysisStartedAt));
     await new Promise((resolve) => setTimeout(resolve, remainingMinimumTime));
 
-    if (chart.status === 'ai_unavailable') {
+    if (chart.status === 'ai_unavailable' || chart.status === 'ai_invalid_response') {
       trackEvent('analysis_ai_unavailable', { pair });
-      const unavailableMessage = chart.message || 'Analysis is not available at the moment. Please try again later.';
+      const unavailableMessage = chart.message || 'The analysis response was invalid. Please retry.';
       setAnalysisError(unavailableMessage);
       Alert.alert('Analysis unavailable', unavailableMessage);
       returnToInput();

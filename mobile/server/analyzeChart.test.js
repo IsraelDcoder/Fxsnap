@@ -81,7 +81,10 @@ test('conflicting H4 and M15 direction always suppresses the trade setup', () =>
 
   assert.equal(result.multiTimeframe.alignment, 'conflicting');
   assert.equal(result.status, 'no_trade');
-  assert.equal(result.trade_setup.type, 'none');
+  assert.equal(result.trade_setup.type, 'buy');
+  assert.equal(result.trade_setup.entry_zone, '2350');
+  assert.equal(result.trade_setup.stop_loss, '2340');
+  assert.equal(result.trade_setup.take_profit, '2380');
   assert.equal(result.marketBias, 'mixed');
   assert.equal(result.tradeDecision, 'NONE');
 });
@@ -102,7 +105,10 @@ test('aligned labels cannot produce a trade without explicit evidence on both ch
 
   assert.equal(result.multiTimeframe.alignment, 'unclear');
   assert.equal(result.status, 'no_trade');
-  assert.equal(result.trade_setup.type, 'none');
+  assert.equal(result.trade_setup.type, 'buy');
+  assert.equal(result.trade_setup.entry_zone, '2350');
+  assert.equal(result.trade_setup.stop_loss, '2340');
+  assert.equal(result.trade_setup.take_profit, '2380');
   assert.match(result.reasons.join(' '), /explicit evidence/i);
 });
 
@@ -127,8 +133,8 @@ test('vision instructions reserve invalid_image for clearly non-chart or unrecog
   assert.match(prompt, /chart is recognizable.*no_trade/i);
   assert.match(prompt, /forex, cryptocurrency, metals, indices, and commodities/i);
   assert.match(prompt, /do not assume forex pip conventions/i);
-  assert.match(prompt, /one take-profit target/i);
-  assert.match(prompt, /do not provide TP2/i);
+  assert.match(prompt, /up to two take-profit targets/i);
+  assert.match(prompt, /first take-profit target/i);
   assert.match(prompt, /no win probability has been established/i);
   assert.match(prompt, /do not call a move a breakout unless a candle close is visibly beyond a prior level/i);
   assert.match(prompt, /NO TRADE means no validated entry, not necessarily no directional bias/i);
@@ -269,7 +275,7 @@ test('incomplete model success is returned as an explainable no-trade analysis',
   assert.match(result.analysis.notes, /setup prices were omitted/i);
 });
 
-test('numeric levels without AI-provided RR are preserved but not presented as a validated trade', () => {
+test('numeric levels without AI-provided RR are preserved with RR calculated from those levels', () => {
   const canonical = canonicalizeRawAnalysis({
     status: 'success',
     chart: { is_chart: true, chart_quality: 'good', price_scale_visible: true, candles_visible: true, has_enough_candles: true },
@@ -294,14 +300,77 @@ test('numeric levels without AI-provided RR are preserved but not presented as a
 
   const normalized = normalizeAnalysis(parsed.data);
   const result = applyMentorStrategy(normalized);
-  assert.equal(result.status, 'no_trade');
+  assert.equal(result.status, 'success');
   assert.equal(result.trade_setup.type, 'buy');
   assert.equal(result.trade_setup.entry_zone, '1.1');
   assert.equal(result.trade_setup.stop_loss, '1.09');
   assert.equal(result.trade_setup.take_profit, '1.12');
-  assert.equal(result.trade_setup.risk_reward, null);
+  assert.equal(result.trade_setup.risk_reward, 2);
   assert.ok(result.confidence > 0);
   assert.ok(result.breakdown.trend > 0);
+});
+
+test('validated candidate levels survive status downgrade and retain both take-profit targets', () => {
+  const raw = {
+    status: 'success',
+    chart: { is_chart: true, chart_quality: 'good', price_scale_visible: true, candles_visible: true, has_enough_candles: true },
+    analysis: { trend: 'bullish', sentiment: 'bullish', structure: 'Higher highs and higher lows.' },
+    zones: { support: '1.0950', resistance: '1.1100' },
+    trade_setup: {
+      type: 'buy',
+      entry_zone: '1.1000',
+      stop_loss: 'none',
+      take_profit: '1.1100',
+      take_profit_levels: ['1.1100', '1.1200'],
+      risk_reward: null,
+    },
+    confidence: 64,
+    reasoning: ['The chart shows higher highs.', 'Price is holding above support.'],
+    reasons: [],
+  };
+  const canonical = canonicalizeRawAnalysis(raw);
+  const parsed = TradeAnalysisSchema.safeParse(canonical);
+  assert.equal(parsed.success, true);
+
+  const result = applyMentorStrategy(normalizeAnalysis(parsed.data));
+  assert.equal(result.status, 'no_trade');
+  assert.deepEqual(result.trade_setup.take_profit_levels, ['1.1100', '1.1200']);
+  assert.equal(result.trade_setup.entry_zone, '1.1000');
+  assert.equal(result.trade_setup.stop_loss, 'none');
+  assert.deepEqual(result.reasoning.slice(0, 2), raw.reasoning);
+  assert.ok(result.marketConfidence > 0);
+});
+
+test('non-actionable AI no-trade response preserves its validated candidate levels and explanation', () => {
+  const canonical = canonicalizeRawAnalysis({
+    status: 'no_trade',
+    chart: { is_chart: true, chart_quality: 'good', price_scale_visible: true, candles_visible: true, has_enough_candles: true },
+    analysis: { trend: 'bearish', sentiment: 'bearish', structure: 'Lower highs and lower lows.', notes: 'Wait for a retest.' },
+    zones: { support: '1.0800', resistance: '1.0900' },
+    trade_setup: {
+      type: 'sell',
+      entry_zone: '1.0880',
+      stop_loss: '1.0920',
+      take_profit: '1.0800',
+      take_profit_levels: ['1.0800', '1.0760'],
+      risk_reward: 2,
+    },
+    confidence: 64,
+    reasoning: ['Price is making lower highs.', 'Wait for a retest before entry.'],
+    reasons: ['The entry confirmation is not established.'],
+  });
+  const parsed = TradeAnalysisSchema.safeParse(canonical);
+  assert.equal(parsed.success, true);
+
+  const result = applyMentorStrategy(normalizeAnalysis(parsed.data));
+  assert.equal(result.status, 'no_trade');
+  assert.equal(result.trade_setup.type, 'sell');
+  assert.equal(result.trade_setup.entry_zone, '1.0880');
+  assert.equal(result.trade_setup.stop_loss, '1.0920');
+  assert.equal(result.trade_setup.take_profit, '1.0800');
+  assert.deepEqual(result.trade_setup.take_profit_levels, ['1.0800', '1.0760']);
+  assert.deepEqual(result.reasoning.slice(0, 2), ['Price is making lower highs.', 'Wait for a retest before entry.']);
+  assert.ok(result.reasons.some((reason) => /confirmation/i.test(reason)));
 });
 
 test('common model level aliases are normalized instead of dropped', () => {
@@ -503,11 +572,11 @@ test('valid evidence with m15 confirmation and numeric levels -> success', () =>
   const res = applyMentorStrategy(normalized);
   assert.equal(res.status, 'success');
   assert.equal(res.trade_setup.type, 'buy');
-  assert.deepEqual(res.trade_setup.take_profit_levels, ['1.1200']);
+  assert.deepEqual(res.trade_setup.take_profit_levels, ['1.1200', '1.1300']);
   assert.ok(res.confidence >= 70);
 });
 
-test('AI-proposed TP2 is omitted from the validated single-target result', () => {
+test('AI-proposed TP2 survives backend validation when it is a readable price level', () => {
   const result = applyMentorStrategy({
     status: 'success',
     chart: { is_chart: true, timeframe: 'H1', candles_visible: true, price_scale_visible: true, has_enough_candles: true },
@@ -524,7 +593,7 @@ test('AI-proposed TP2 is omitted from the validated single-target result', () =>
   });
 
   assert.equal(result.status, 'success');
-  assert.deepEqual(result.trade_setup.take_profit_levels, ['1.1200']);
+  assert.deepEqual(result.trade_setup.take_profit_levels, ['1.1200', '1.1190-1.1210']);
 });
 
 test('NO TRADE always includes an explanation when the model supplies none', () => {

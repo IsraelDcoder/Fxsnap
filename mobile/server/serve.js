@@ -348,11 +348,10 @@ function parseTakeProfitLevels(explicitLevels, fallbackLevel) {
 }
 
 function validatedTakeProfitLevels(tradeSetup) {
-  if (!tradeSetup || tradeSetup.type === 'none') return [];
-  const primary = String(tradeSetup.take_profit || '').trim();
-  const primaryPrice = parsePriceOrRange(primary);
-  if (!primary || !primaryPrice) return [];
-  return [primary];
+  if (!tradeSetup) return [];
+  return parseTakeProfitLevels(tradeSetup.take_profit_levels, tradeSetup.take_profit)
+    .filter((level) => parsePriceOrRange(level))
+    .slice(0, 2);
 }
 
 function parseIndicatorList(value) {
@@ -962,11 +961,12 @@ function evaluateDecisionEngine(obs) {
 
   let trade_setup = { ...DEFAULT_TRADE_SETUP };
   const rawTrade = norm.trade_setup || {};
+  const reportedTargets = parseTakeProfitLevels(rawTrade.take_profit_levels, rawTrade.take_profit);
+  const firstTarget = reportedTargets[0] || rawTrade.take_profit;
   const hasProposedLevels = [
     rawTrade.entry_zone,
     rawTrade.stop_loss,
-    rawTrade.take_profit,
-    ...(Array.isArray(rawTrade.take_profit_levels) ? rawTrade.take_profit_levels : []),
+    ...reportedTargets,
   ].some(hasMeaningfulLevel);
   const marketBias = deriveMarketBias(norm);
   const rawDirection = normalizeText(rawTrade.type);
@@ -978,12 +978,12 @@ function evaluateDecisionEngine(obs) {
   if (dir !== 'none') {
     const entryRange = parsePriceOrRange(rawTrade.entry_zone);
     const slRange = parsePriceOrRange(rawTrade.stop_loss);
-    const tpRange = parsePriceOrRange(rawTrade.take_profit);
+    const tpRange = parsePriceOrRange(firstTarget);
     const rr = typeof rawTrade.risk_reward === 'number' ? rawTrade.risk_reward : parseRiskReward(rawTrade.risk_reward);
     const computed = computeRRFromLevels({
       entry: rawTrade.entry_zone,
       sl: rawTrade.stop_loss,
-      tp: rawTrade.take_profit,
+      tp: firstTarget,
       direction: dir,
     });
     const reportedRR = Number.isFinite(rr) ? rr : null;
@@ -998,14 +998,15 @@ function evaluateDecisionEngine(obs) {
     }
 
     const hasLevelGeometry = Boolean(entryRange && slRange && tpRange && computed?.rr != null);
-    const rrValue = reportedRR;
+    const rrValue = reportedRR ?? (computed?.rr ?? null);
 
     if (['buy', 'sell'].includes(dir) && (entryRange || slRange || tpRange)) {
       trade_setup = {
         type: dir,
         entry_zone: entryRange ? String(rawTrade.entry_zone) : 'none',
         stop_loss: slRange ? String(rawTrade.stop_loss) : 'none',
-        take_profit: tpRange ? String(rawTrade.take_profit) : 'none',
+        take_profit: tpRange ? String(firstTarget) : 'none',
+        take_profit_levels: reportedTargets.filter((level) => parsePriceOrRange(level)).slice(0, 2),
         risk_reward: rrValue,
       };
       if (hasLevelGeometry && rrValue != null && rrValue > 0) validations.candidate_setup = true;
@@ -1020,6 +1021,18 @@ function evaluateDecisionEngine(obs) {
         failed.push('The AI-reported risk/reward meets the threshold, but the proposed price levels imply a lower ratio; verify the levels before trading.');
       }
     }
+  } else if (hasProposedLevels) {
+    const entry = parsePriceOrRange(rawTrade.entry_zone);
+    const stop = parsePriceOrRange(rawTrade.stop_loss);
+    const targets = reportedTargets.filter((level) => parsePriceOrRange(level)).slice(0, 2);
+    trade_setup = {
+      type: 'none',
+      entry_zone: entry ? String(rawTrade.entry_zone) : 'none',
+      stop_loss: stop ? String(rawTrade.stop_loss) : 'none',
+      take_profit: targets[0] || 'none',
+      take_profit_levels: targets,
+      risk_reward: Number.isFinite(rr) ? rr : null,
+    };
   }
 
   // Only penalize actual contradictory evidence. Missing higher timeframes or absent indicators are not failure conditions.
@@ -1257,7 +1270,11 @@ function applyMentorStrategy(normalized) {
 
   // Start from normalized object and override with deterministic outputs
   const response = { ...normalized };
-  response.status = evalRes.status || normalized.status || 'no_trade';
+  response.status = evalRes.status === 'invalid_image' || normalized.status === 'invalid_image'
+    ? 'invalid_image'
+    : normalized.status === 'no_trade'
+      ? 'no_trade'
+      : evalRes.status || normalized.status || 'no_trade';
   response.trade_setup = {
     ...(evalRes.trade_setup || { ...DEFAULT_TRADE_SETUP }),
     take_profit_levels: validatedTakeProfitLevels(evalRes.trade_setup),
@@ -1318,13 +1335,8 @@ function applyMentorStrategy(normalized) {
 
   // If evaluation failed mandatory conditions, ensure trade_setup is none
   // If evaluation failed mandatory conditions, only clear trade_setup when no candidate was provided.
-  if (response.status !== 'success' && (!evalRes.trade_setup || !evalRes.trade_setup.type || evalRes.trade_setup.type === 'none') && !evalRes.candidate) {
-    response.trade_setup = { ...DEFAULT_TRADE_SETUP };
-  }
-
   if (response.status === 'success' && !hasActionableTradeSetup(response.trade_setup)) {
     response.status = 'no_trade';
-    response.trade_setup = { ...DEFAULT_TRADE_SETUP };
     response.decision = 'NO_TRADE';
     response.tradeDecision = 'NONE';
     response.setupStatus = 'NO_SETUP';
@@ -1385,7 +1397,7 @@ Use this order for every chart:
 2. Describe only the visible candle sequence and scale. Distinguish observed swing points from inferred trend; do not call a move a breakout unless a candle close is visibly beyond a prior level.
 3. Assess trend/structure, then relevant support/resistance and any visible momentum evidence. Mark indicators, volume, or higher-timeframe context unavailable when not shown.
 4. Decide BUY, SELL, or NO TRADE. For a trade, explain the visible reason for entry, invalidation/stop, and one target. If any level cannot be read or defensibly anchored to visible structure, return NO TRADE instead of estimating it.
-5. Calculate R:R from the same entry, stop, and single TP1 returned. Report limitations and any conflicting evidence.
+5. Calculate R:R from the same entry, stop, and TP1. Report limitations and any conflicting evidence.
 
 TRADE DECISION RULES:
 
@@ -1399,7 +1411,7 @@ A trade is actionable only if ALL conditions are met:
 - Clear trend or strong range structure
 - Clear entry zone
 - Logical stop loss placement
-- One chart-supported take-profit target
+- Up to two chart-supported take-profit targets, when both are visible
 - Minimum risk-reward ratio of 1.5, calculated from the proposed entry, stop, and TP1
 - No conflicting signals
 
@@ -1454,7 +1466,7 @@ OUTPUT FORMAT (STRICT JSON):
     "entry_zone": "zone or 'none'",
     "stop_loss": "level or 'none'",
     "take_profit": "first target level or 'none'",
-    "take_profit_levels": ["TP1 only; do not provide TP2"],
+    "take_profit_levels": ["TP1", "TP2 when separately supported; otherwise one target"],
     "risk_reward": "number or 'none'"
   },
 
@@ -1466,7 +1478,7 @@ FINAL RULES:
 - If status = "no_trade" and a conditional candidate is supported by visible prices, include its levels while keeping the result non-actionable.
 - If status = "invalid_image", all fields except status can be null or minimal
 - Return only price levels that can be read or conservatively derived from visible chart structure. Never invent an exact price, indicator, or confirmation that is not visible.
-- Return exactly one take-profit target. Calculate risk_reward from the same entry, stop_loss, and take_profit values.
+- Return up to two take-profit targets when both are supported by visible chart structure. Calculate risk_reward from the entry, stop_loss, and first take-profit target.
 - Explain the visible evidence anchoring entry, stop, and target. Include uncertainty and chart limitations; when evidence is insufficient, give a specific NO TRADE reason.
 - NO TRADE means no validated entry, not necessarily no directional bias. When the chart supports a bullish or bearish read but lacks a safe entry, state that bias clearly while keeping the trade decision NO TRADE.
 - Keep the top-level reasoning in the five labeled sections shown above, concise and evidence-based. Use the same conclusions in analysis.reasoning without inventing details.
@@ -1978,9 +1990,7 @@ function enforceMultiTimeframeAlignment(result) {
 
   if (multiTimeframe.alignment !== 'aligned') {
     result.status = 'no_trade';
-    result.trade_setup = { ...DEFAULT_TRADE_SETUP };
     result.marketBias = multiTimeframe.alignment === 'conflicting' ? 'mixed' : result.marketBias;
-    result.setupDirection = 'none';
     result.setupStatus = 'NO_SETUP';
     result.tradeStatus = 'no_setup';
     result.decision = 'NO_TRADE';
