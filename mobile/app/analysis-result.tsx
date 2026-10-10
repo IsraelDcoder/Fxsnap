@@ -507,6 +507,46 @@ export default function AnalysisResultScreen() {
     );
   }
 
+  if (isAnalysisUnavailable) {
+    return (
+      <View style={[styles.container, { paddingTop: topPad, backgroundColor: '#000000' }]}>
+        <Animated.View entering={FadeIn.duration(300)} style={styles.header}>
+          <TouchableOpacity style={styles.backBtn} onPress={() => router.replace('/home')} accessibilityRole="button" accessibilityLabel="Back">
+            <Feather name="arrow-left" size={22} color="#FFFFFF" />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Analysis Result</Text>
+          <View style={styles.backBtn} />
+        </Animated.View>
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={[styles.emptyState, styles.failedAnalysisState, { paddingBottom: botPad + 32 }]}
+          showsVerticalScrollIndicator={false}
+        >
+          {currentAnalysis.imageUri ? (
+            <Image source={{ uri: currentAnalysis.imageUri }} resizeMode="contain" style={styles.failedAnalysisImage} />
+          ) : null}
+          <View style={styles.failedAnalysisMessage}>
+            <Feather name="alert-triangle" size={22} color="#FF7777" />
+            <Text style={styles.resultErrorText}>
+              {currentAnalysis.message || currentAnalysis.analysis?.notes || 'Analysis could not be completed.'}
+            </Text>
+          </View>
+          <TouchableOpacity
+            style={styles.failedAnalysisRetry}
+            onPress={() => router.replace({ pathname: '/analysis', params: { retry: '1' } })}
+            accessibilityRole="button"
+          >
+            <Feather name="refresh-cw" size={16} color="#111111" />
+            <Text style={styles.retryButtonText}>Retry Analysis</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.newBtn} onPress={() => router.replace('/home')}>
+            <Text style={styles.newBtnText}>Go Home</Text>
+          </TouchableOpacity>
+        </ScrollView>
+      </View>
+    );
+  }
+
   return (
     <View style={[styles.container, { paddingTop: topPad, backgroundColor: '#000000' }]}>
       <Animated.View entering={FadeIn.duration(300)} style={styles.header}>
@@ -755,6 +795,10 @@ const styles = StyleSheet.create({
   resultErrorText: { flex: 1, minWidth: 0, color: '#F0DADA', fontSize: 12, lineHeight: 17 },
   retryButton: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 9, backgroundColor: '#F5F5F5' },
   retryButtonText: { color: '#111111', fontSize: 11, fontFamily: 'Inter_700Bold' },
+  failedAnalysisState: { flexGrow: 1, justifyContent: 'center', gap: 16, paddingHorizontal: 20 },
+  failedAnalysisImage: { width: '100%', height: 300, borderRadius: 16, backgroundColor: '#151515' },
+  failedAnalysisMessage: { width: '100%', flexDirection: 'row', alignItems: 'center', gap: 10, padding: 14, borderRadius: 12, backgroundColor: '#281717', borderWidth: 1, borderColor: '#633333' },
+  failedAnalysisRetry: { minHeight: 46, width: '100%', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 11, backgroundColor: '#39E58C' },
   chartCard: {
     height: 270,
     width: '100%',

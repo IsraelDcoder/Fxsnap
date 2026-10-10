@@ -189,6 +189,87 @@ test('canonical JSON parsing accepts object, string, and fenced JSON payloads', 
   assert.equal(c.trade_setup.risk_reward, 2.2);
 });
 
+test('incomplete model success is returned as an explainable no-trade analysis', () => {
+  const canonical = canonicalizeRawAnalysis({
+    status: 'success',
+    chart: { is_chart: true, chart_quality: 'good', price_scale_visible: true, candles_visible: true, has_enough_candles: true },
+    analysis: {
+      trend: 'bearish',
+      structure: 'Lower highs and lower lows',
+      notes: 'A clear bearish bias is visible, but setup prices were omitted.',
+    },
+    zones: { support: 1.3200, resistance: 1.3280, liquidity: 'not_clear' },
+    trade_setup: { type: 'sell' },
+    confidence: 70,
+  });
+  const parsed = TradeAnalysisSchema.safeParse(canonical);
+  const result = parsed.success
+    ? applyMentorStrategy(normalizeAnalysis(parsed.data))
+    : null;
+
+  assert.equal(canonical.status, 'success');
+  assert.equal(parsed.success, true);
+  assert.equal(result.status, 'no_trade');
+  assert.equal(result.trade_setup.type, 'none');
+  assert.match(result.analysis.notes, /setup prices were omitted/i);
+});
+
+test('valid numeric levels with omitted RR are normalized and score through the full analysis pipeline', () => {
+  const canonical = canonicalizeRawAnalysis({
+    status: 'success',
+    chart: { is_chart: true, chart_quality: 'good', price_scale_visible: true, candles_visible: true, has_enough_candles: true },
+    analysis: {
+      trend: 'bullish',
+      structure: 'Higher highs and higher lows',
+      market_structure: 'An uptrend with a pullback to support.',
+      notes: 'Price is holding above the visible support zone.',
+    },
+    zones: { support: 1.0950, resistance: 1.1200, liquidity: 'not_clear' },
+    m15: { confirmation: 'Bullish rejection at support.', bos: { detected: true } },
+    trade_setup: {
+      type: 'BUY',
+      entry_zone: 1.1000,
+      stop_loss: 1.0900,
+      take_profit: 1.1200,
+    },
+    confidence: 80,
+  });
+  const parsed = TradeAnalysisSchema.safeParse(canonical);
+  assert.equal(parsed.success, true);
+
+  const normalized = normalizeAnalysis(parsed.data);
+  const result = applyMentorStrategy(normalized);
+  assert.equal(result.status, 'success');
+  assert.equal(result.trade_setup.type, 'buy');
+  assert.equal(result.trade_setup.entry_zone, '1.1');
+  assert.equal(result.trade_setup.stop_loss, '1.09');
+  assert.equal(result.trade_setup.take_profit, '1.12');
+  assert.equal(result.trade_setup.risk_reward, 2);
+  assert.ok(result.confidence > 0);
+  assert.ok(result.breakdown.trend > 0);
+});
+
+test('overlong model prose is bounded before schema validation', () => {
+  const canonical = canonicalizeRawAnalysis({
+    status: 'no_trade',
+    analysis: {
+      trend: 'neutral',
+      structure: 'S'.repeat(800),
+      notes: 'N'.repeat(800),
+      indicators: 'I'.repeat(500),
+    },
+    zones: { support: 'not_clear', resistance: 'not_clear', liquidity: 'not_clear' },
+    trade_setup: { type: 'none' },
+    reasoning: ['R'.repeat(500)],
+  });
+  const parsed = TradeAnalysisSchema.safeParse(canonical);
+
+  assert.equal(parsed.success, true);
+  assert.equal(canonical.analysis.structure.length, 300);
+  assert.equal(canonical.analysis.notes.length, 400);
+  assert.equal(canonical.reasoning[0].length, 300);
+});
+
 test('structured reasoning, support/resistance, and targets survive normalization', () => {
   const canonical = canonicalizeRawAnalysis({
     status: 'success',
@@ -220,7 +301,7 @@ test('structured reasoning, support/resistance, and targets survive normalizatio
   assert.deepEqual(normalized.trade_setup.take_profit_levels, ['1.1150', '1.1200']);
 });
 
-test('a successful analysis must include actionable trade geometry before it is accepted', () => {
+test('incomplete successful payloads reach the decision engine and cannot produce a trade', () => {
   const result = TradeAnalysisSchema.safeParse({
     status: 'success',
     chart: {
@@ -274,8 +355,10 @@ test('a successful analysis must include actionable trade geometry before it is 
     reasoning: ['Higher highs are visible.'],
   });
 
-  assert.equal(result.success, false);
-  assert.ok(result.error);
+  assert.equal(result.success, true);
+  const evaluated = applyMentorStrategy(normalizeAnalysis(result.data));
+  assert.equal(evaluated.status, 'no_trade');
+  assert.equal(evaluated.trade_setup.type, 'none');
 });
 
 test('invalid image yields invalid_image status and no trade', () => {

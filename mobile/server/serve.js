@@ -262,24 +262,6 @@ const TradeAnalysisSchema = z.object({
   market_data_timestamp: z.string().optional().nullable(),
   market_data_source: z.string().trim().optional().nullable(),
 }).superRefine((value, ctx) => {
-  if (value.status === 'success') {
-    const directionalEvidence =
-      hasMeaningfulLevel(value.analysis?.structure) ||
-      hasMeaningfulLevel(value.analysis?.market_structure) ||
-      hasMeaningfulLevel(value.zones?.support) ||
-      hasMeaningfulLevel(value.zones?.resistance) ||
-      (Array.isArray(value.reasoning) && value.reasoning.length > 0)
-      || (typeof value.analysis?.trend === 'string' && value.analysis.trend !== 'neutral');
-
-    if (!directionalEvidence) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'A successful analysis must include directional chart evidence.' });
-    }
-
-    if (!hasActionableTradeSetup(value.trade_setup)) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'A successful analysis must include a complete trade setup with entry, stop, take-profit, and risk/reward.' });
-    }
-  }
-
   if (value.status === 'no_trade' && value.trade_setup && value.trade_setup.type !== 'none') {
     const hasTradeGeometry = hasMeaningfulLevel(value.trade_setup.entry_zone)
       || hasMeaningfulLevel(value.trade_setup.stop_loss)
@@ -342,6 +324,48 @@ function parseStringArray(value) {
   return [];
 }
 
+function parseBoundedStringArray(value, maxItems, maxLength) {
+  return parseStringArray(value)
+    .map((item) => item.slice(0, maxLength))
+    .slice(0, maxItems);
+}
+
+function normalizeMultiTimeframe(raw) {
+  if (!raw || typeof raw !== 'object') return undefined;
+  return {
+    alignment: canonicalizeEnumOr(raw.alignment, { aligned: 'aligned', conflicting: 'conflicting', unclear: 'unclear' }, ['aligned', 'conflicting', 'unclear'], 'unclear'),
+    summary: boundedString(raw.summary, '', 500),
+    h4: {
+      chartValid: parseBoolean(raw.h4?.chartValid, false),
+      trend: canonicalizeEnumOr(raw.h4?.trend, { bullish: 'bullish', bearish: 'bearish', neutral: 'neutral' }, ['bullish', 'bearish', 'neutral'], 'neutral'),
+      structure: boundedString(raw.h4?.structure, '', 300),
+    },
+    m15: {
+      chartValid: parseBoolean(raw.m15?.chartValid, false),
+      trend: canonicalizeEnumOr(raw.m15?.trend, { bullish: 'bullish', bearish: 'bearish', neutral: 'neutral' }, ['bullish', 'bearish', 'neutral'], 'neutral'),
+      structure: boundedString(raw.m15?.structure, '', 300),
+      confirmation: boundedString(raw.m15?.confirmation, '', 300),
+    },
+  };
+}
+
+function normalizeM15(raw) {
+  if (!raw || typeof raw !== 'object') return undefined;
+  return {
+    confirmation: raw.confirmation == null ? raw.confirmation : boundedString(raw.confirmation, '', 300),
+    bos: raw.bos && typeof raw.bos === 'object' ? {
+      detected: typeof raw.bos.detected === 'boolean' ? raw.bos.detected : undefined,
+    } : undefined,
+    rsi: raw.rsi && typeof raw.rsi === 'object' ? {
+      visible: typeof raw.rsi.visible === 'boolean' ? raw.rsi.visible : undefined,
+      confirms: typeof raw.rsi.confirms === 'boolean' ? raw.rsi.confirms : undefined,
+    } : undefined,
+    liquidity: raw.liquidity && typeof raw.liquidity === 'object' ? {
+      swept: typeof raw.liquidity.swept === 'boolean' ? raw.liquidity.swept : undefined,
+    } : undefined,
+  };
+}
+
 function parseTakeProfitLevels(explicitLevels, fallbackLevel) {
   const levels = Array.isArray(explicitLevels)
     ? explicitLevels
@@ -388,21 +412,7 @@ function mergeUniqueStrings(items) {
 }
 
 function parseRiskReward(value) {
-  if (typeof value === 'number') return value;
-  if (typeof value !== 'string') return null;
-  const trimmed = value.trim();
-  const ratioMatch = trimmed.match(/^(\d+(?:\.\d+)?)\s*[:x]\s*(\d+(?:\.\d+)?)$/i);
-  if (ratioMatch) {
-    const numerator = Number(ratioMatch[1]);
-    const denominator = Number(ratioMatch[2]);
-    if (denominator > 0) return numerator / denominator;
-  }
-  const numberMatch = trimmed.match(/-?\d+(?:\.\d+)?/);
-  if (numberMatch) {
-    const numeric = Number(numberMatch[0]);
-    if (!Number.isNaN(numeric)) return numeric;
-  }
-  return null;
+  return rrParse(value);
 }
 
 function parsePriceOrRange(value) {
@@ -441,6 +451,15 @@ function parseConfidence(value) {
 
 function ensureString(value, fallback = '') {
   return typeof value === 'string' ? value.trim() : fallback;
+}
+
+function ensurePriceString(value, fallback = 'none') {
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  return ensureString(value, fallback);
+}
+
+function boundedString(value, fallback = '', maxLength = 200) {
+  return ensureString(value, fallback).slice(0, maxLength);
 }
 
 function ensureNullableString(value) {
@@ -484,14 +503,23 @@ function canonicalizeEnum(value, mapping) {
   return mapping[key] ?? value.trim();
 }
 
+function canonicalizeEnumOr(value, mapping, allowedValues, fallback) {
+  const canonical = canonicalizeEnum(value, mapping);
+  return allowedValues.includes(canonical) ? canonical : fallback;
+}
+
 function canonicalizeRawAnalysis(raw) {
   if (typeof raw === 'string') raw = parseJsonPayload(raw);
   if (!raw || typeof raw !== 'object') return null;
 
-  const status = canonicalizeEnum(raw.status, {
+  const status = canonicalizeEnumOr(raw.status, {
     success: 'success',
+    completed: 'success',
+    analysis_complete: 'success',
     no_trade: 'no_trade',
     'no trade': 'no_trade',
+    wait: 'no_trade',
+    waiting: 'no_trade',
     invalid_image: 'invalid_image',
     'invalid image': 'invalid_image',
     ai_unavailable: 'ai_unavailable',
@@ -499,9 +527,7 @@ function canonicalizeRawAnalysis(raw) {
     unavailable: 'ai_unavailable',
     ai_invalid_response: 'ai_invalid_response',
     'ai invalid response': 'ai_invalid_response',
-  });
-
-  if (!status) return null;
+  }, ANALYSIS_STATUS, 'no_trade');
 
   const chartRaw = parseJsonField(raw.chart) || {};
   const analysisRaw = parseJsonField(raw.analysis) || {};
@@ -509,54 +535,73 @@ function canonicalizeRawAnalysis(raw) {
   const strategyRaw = parseJsonField(raw.strategy) || {};
   const tradeRaw = parseJsonField(raw.trade_setup) || {};
   const takeProfitLevels = parseTakeProfitLevels(tradeRaw.take_profit_levels, tradeRaw.take_profit);
-  const reasoning = parseStringArray(raw.reasoning).length
-    ? parseStringArray(raw.reasoning).slice(0, 5)
-    : parseStringArray(analysisRaw.reasoning).slice(0, 5);
+  const reasoning = parseBoundedStringArray(raw.reasoning, 5, 300).length
+    ? parseBoundedStringArray(raw.reasoning, 5, 300)
+    : parseBoundedStringArray(analysisRaw.reasoning, 5, 300);
+  const rawTradeType = canonicalizeEnumOr(tradeRaw.type, {
+    buy: 'buy',
+    sell: 'sell',
+    none: 'none',
+    long: 'buy',
+    short: 'sell',
+    no_trade: 'none',
+    no_setup: 'none',
+  }, ['buy', 'sell', 'none'], 'none');
+  const entryZone = boundedString(ensurePriceString(tradeRaw.entry_zone), 'none');
+  const stopLoss = boundedString(ensurePriceString(tradeRaw.stop_loss), 'none');
+  const takeProfit = boundedString(ensurePriceString(takeProfitLevels[0] || tradeRaw.take_profit), 'none');
+  let riskReward = parseRiskReward(tradeRaw.risk_reward);
 
-  const chartQuality = canonicalizeEnum(chartRaw.chart_quality, {
+  if ((riskReward == null || riskReward <= 0) && rawTradeType !== 'none') {
+    const computed = computeRRFromLevels({
+      entry: entryZone,
+      sl: stopLoss,
+      tp: takeProfit,
+      direction: rawTradeType,
+    });
+    if (computed.rr != null && computed.rr > 0 && computed.issues.length === 0) {
+      riskReward = computed.rr;
+    }
+  }
+
+  const message = boundedString(raw.message, '', 1000);
+  const reasons = parseBoundedStringArray(raw.reasons, 20, 300);
+
+  const chartQuality = canonicalizeEnumOr(chartRaw.chart_quality, {
     good: 'good',
     acceptable: 'acceptable',
     poor: 'poor',
-  }) || (status === 'invalid_image' ? 'poor' : 'acceptable');
+  }, ['good', 'acceptable', 'poor'], status === 'invalid_image' ? 'poor' : 'acceptable');
 
   const marketStructure = ensureString(analysisRaw.market_structure, ensureString(analysisRaw.structure, ''));
-  const structureBias = canonicalizeEnum(analysisRaw.structure_bias, {
+  const structureBias = canonicalizeEnumOr(analysisRaw.structure_bias, {
     bullish: 'bullish',
     bearish: 'bearish',
     neutral: 'neutral',
-  }) || canonicalizeEnum(analysisRaw.trend, {
+  }, ['bullish', 'bearish', 'neutral'], canonicalizeEnumOr(analysisRaw.trend, {
     bullish: 'bullish',
     bearish: 'bearish',
     neutral: 'neutral',
-  }) || 'neutral';
+  }, ['bullish', 'bearish', 'neutral'], 'neutral'));
 
   return {
     status,
-    message: ensureString(raw.message),
+    message,
     detectedPair: ensureNullableString(raw.detectedPair || raw.pair),
     timeframe: ensureNullableString(raw.timeframe),
-    multiTimeframe: raw.multiTimeframe && typeof raw.multiTimeframe === 'object' ? {
-      alignment: canonicalizeEnum(raw.multiTimeframe.alignment, { aligned: 'aligned', conflicting: 'conflicting', unclear: 'unclear' }) || 'unclear',
-      summary: ensureString(raw.multiTimeframe.summary),
-      h4: {
-        chartValid: parseBoolean(raw.multiTimeframe.h4?.chartValid, false),
-        trend: canonicalizeEnum(raw.multiTimeframe.h4?.trend, { bullish: 'bullish', bearish: 'bearish', neutral: 'neutral' }) || 'neutral',
-        structure: ensureString(raw.multiTimeframe.h4?.structure),
-      },
-      m15: {
-        chartValid: parseBoolean(raw.multiTimeframe.m15?.chartValid, false),
-        trend: canonicalizeEnum(raw.multiTimeframe.m15?.trend, { bullish: 'bullish', bearish: 'bearish', neutral: 'neutral' }) || 'neutral',
-        structure: ensureString(raw.multiTimeframe.m15?.structure),
-        confirmation: ensureString(raw.multiTimeframe.m15?.confirmation),
-      },
-    } : undefined,
-    timeframes_detected: Array.isArray(raw.timeframes_detected) ? raw.timeframes_detected : undefined,
-    m15: raw.m15 && typeof raw.m15 === 'object' ? raw.m15 : undefined,
+    multiTimeframe: normalizeMultiTimeframe(raw.multiTimeframe),
+    timeframes_detected: Array.isArray(raw.timeframes_detected) && raw.timeframes_detected.length >= 2
+      ? raw.timeframes_detected.slice(0, 2).map((item) => ({
+        timeframe: boundedString(item?.timeframe, '', 12),
+        observations: item?.observations && typeof item.observations === 'object' ? item.observations : {},
+      }))
+      : undefined,
+    m15: normalizeM15(raw.m15),
     chart: {
       ...DEFAULT_CHART,
       is_chart: parseBoolean(chartRaw.is_chart, status !== 'invalid_image'),
-      pair: ensureString(chartRaw.pair, ensureString(raw.pair)),
-      timeframe: ensureString(chartRaw.timeframe, ensureString(raw.timeframe)),
+      pair: boundedString(chartRaw.pair, boundedString(raw.pair, '', 20), 20),
+      timeframe: boundedString(chartRaw.timeframe, boundedString(raw.timeframe, '', 20), 20),
       chart_quality: chartQuality,
       price_scale_visible: parseBoolean(chartRaw.price_scale_visible, true),
       candles_visible: parseBoolean(chartRaw.candles_visible, true),
@@ -564,105 +609,101 @@ function canonicalizeRawAnalysis(raw) {
     },
     analysis: {
       ...DEFAULT_ANALYSIS,
-      trend: canonicalizeEnum(analysisRaw.trend, {
+      trend: canonicalizeEnumOr(analysisRaw.trend, {
         bullish: 'bullish',
         bearish: 'bearish',
         neutral: 'neutral',
-      }) || 'neutral',
-      market_structure: marketStructure,
+      }, ['bullish', 'bearish', 'neutral'], 'neutral'),
+      market_structure: boundedString(marketStructure, '', 400),
       structure_bias: structureBias,
-      volatility: canonicalizeEnum(analysisRaw.volatility, {
+      volatility: canonicalizeEnumOr(analysisRaw.volatility, {
         low: 'low',
         moderate: 'moderate',
         high: 'high',
-      }) || 'low',
-      volume: canonicalizeEnum(analysisRaw.volume, {
+      }, ['low', 'moderate', 'high'], 'low'),
+      volume: canonicalizeEnumOr(analysisRaw.volume, {
         visible: 'visible',
         not_visible: 'not_visible',
         'not visible': 'not_visible',
-      }) || 'not_visible',
-      indicators_detected: parseIndicatorList(analysisRaw.indicators_detected),
-      price_action: parseStringArray(analysisRaw.price_action),
-      structure: ensureString(analysisRaw.structure, marketStructure),
-      sentiment: canonicalizeEnum(analysisRaw.sentiment, {
+      }, ['visible', 'not_visible'], 'not_visible'),
+      indicators_detected: parseIndicatorList(analysisRaw.indicators_detected)
+        .slice(0, 12)
+        .map((item) => ({ ...item, name: item.name.slice(0, 50), interpretation: item.interpretation?.slice(0, 200) })),
+      price_action: parseBoundedStringArray(analysisRaw.price_action, 20, 100),
+      structure: boundedString(analysisRaw.structure, marketStructure, 300),
+      sentiment: canonicalizeEnumOr(analysisRaw.sentiment, {
         bullish: 'bullish',
         bearish: 'bearish',
         neutral: 'neutral',
-      }) || 'neutral',
-      indicators: ensureString(analysisRaw.indicators, 'none'),
-      notes: ensureString(analysisRaw.notes),
-      reasoning: parseStringArray(analysisRaw.reasoning).slice(0, 5),
+      }, ['bullish', 'bearish', 'neutral'], 'neutral'),
+      indicators: boundedString(analysisRaw.indicators, 'none', 200),
+      notes: boundedString(analysisRaw.notes, '', 400),
+      reasoning: parseBoundedStringArray(analysisRaw.reasoning, 5, 300),
     },
     zones: {
       ...DEFAULT_ZONES,
-      support: ensureString(zonesRaw.support, ensureString(raw.support, DEFAULT_ZONES.support)),
-      resistance: ensureString(zonesRaw.resistance, ensureString(raw.resistance, DEFAULT_ZONES.resistance)),
-      demand: parseStringArray(zonesRaw.demand),
-      supply: parseStringArray(zonesRaw.supply),
-      liquidity: parseStringArray(zonesRaw.liquidity),
+      support: boundedString(ensurePriceString(zonesRaw.support, ensurePriceString(raw.support, DEFAULT_ZONES.support))),
+      resistance: boundedString(ensurePriceString(zonesRaw.resistance, ensurePriceString(raw.resistance, DEFAULT_ZONES.resistance))),
+      demand: parseBoundedStringArray(zonesRaw.demand, 20, 200),
+      supply: parseBoundedStringArray(zonesRaw.supply, 20, 200),
+      liquidity: parseBoundedStringArray(zonesRaw.liquidity, 20, 200),
     },
     strategy: {
       ...DEFAULT_STRATEGY,
-      daily_trend: canonicalizeEnum(strategyRaw.daily_trend, {
+      daily_trend: canonicalizeEnumOr(strategyRaw.daily_trend, {
         bullish: 'bullish',
         bearish: 'bearish',
         neutral: 'neutral',
         unavailable: 'unavailable',
-      }) || 'unavailable',
-      higher_timeframe_confirmation: canonicalizeEnum(strategyRaw.higher_timeframe_confirmation, {
+      }, ['bullish', 'bearish', 'neutral', 'unavailable'], 'unavailable'),
+      higher_timeframe_confirmation: canonicalizeEnumOr(strategyRaw.higher_timeframe_confirmation, {
         confirmed: 'confirmed',
         unavailable: 'unavailable',
         conflicting: 'conflicting',
-      }) || 'unavailable',
-      zone_status: canonicalizeEnum(strategyRaw.zone_status, {
+      }, ['confirmed', 'unavailable', 'conflicting'], 'unavailable'),
+      zone_status: canonicalizeEnumOr(strategyRaw.zone_status, {
         inside_zone: 'inside_zone',
         near_zone: 'near_zone',
         outside_zone: 'outside_zone',
         unavailable: 'unavailable',
-      }) || 'unavailable',
-      liquidity_sweep: canonicalizeEnum(strategyRaw.liquidity_sweep, {
+      }, ['inside_zone', 'near_zone', 'outside_zone', 'unavailable'], 'unavailable'),
+      liquidity_sweep: canonicalizeEnumOr(strategyRaw.liquidity_sweep, {
         bullish: 'bullish',
         bearish: 'bearish',
         none: 'none',
         unavailable: 'unavailable',
-      }) || 'unavailable',
-      bos: canonicalizeEnum(strategyRaw.bos, {
+      }, ['bullish', 'bearish', 'none', 'unavailable'], 'unavailable'),
+      bos: canonicalizeEnumOr(strategyRaw.bos, {
         bullish: 'bullish',
         bearish: 'bearish',
         none: 'none',
         unavailable: 'unavailable',
-      }) || 'none',
-      rsi_confirmation: canonicalizeEnum(strategyRaw.rsi_confirmation, {
+      }, ['bullish', 'bearish', 'none', 'unavailable'], 'none'),
+      rsi_confirmation: canonicalizeEnumOr(strategyRaw.rsi_confirmation, {
         bullish: 'bullish',
         bearish: 'bearish',
         neutral: 'neutral',
         unavailable: 'unavailable',
-      }) || 'unavailable',
+      }, ['bullish', 'bearish', 'neutral', 'unavailable'], 'unavailable'),
     },
     trade_setup: {
       ...DEFAULT_TRADE_SETUP,
-      type: canonicalizeEnum(tradeRaw.type, {
-        buy: 'buy',
-        sell: 'sell',
-        none: 'none',
-        long: 'buy',
-        short: 'sell',
-      }) || 'none',
-      entry_zone: ensureString(tradeRaw.entry_zone, 'none'),
-      stop_loss: ensureString(tradeRaw.stop_loss, 'none'),
-      take_profit: takeProfitLevels[0] || ensureString(tradeRaw.take_profit, 'none'),
+      type: rawTradeType,
+      entry_zone: entryZone,
+      stop_loss: stopLoss,
+      take_profit: takeProfit,
       take_profit_levels: takeProfitLevels,
-      risk_reward: parseRiskReward(tradeRaw.risk_reward),
+      risk_reward: riskReward,
     },
     confidence: parseConfidence(raw.confidence),
-    reasons: parseStringArray(raw.reasons),
+    reasons,
     reasoning,
     support_resistance: {
-      support: parseStringArray(raw.support_resistance?.support).slice(0, 8),
-      resistance: parseStringArray(raw.support_resistance?.resistance).slice(0, 8),
+      support: parseBoundedStringArray(raw.support_resistance?.support, 8, 200),
+      resistance: parseBoundedStringArray(raw.support_resistance?.resistance, 8, 200),
     },
-    whyNotNow: parseStringArray(raw.whyNotNow),
-    dataLimitations: parseStringArray(raw.dataLimitations),
+    whyNotNow: parseBoundedStringArray(raw.whyNotNow, 20, 300),
+    dataLimitations: parseBoundedStringArray(raw.dataLimitations, 20, 300),
     market_data_timestamp: ensureNullableString(raw.market_data_timestamp),
     market_data_source: ensureNullableString(raw.market_data_source),
   };

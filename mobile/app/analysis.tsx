@@ -23,7 +23,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
-import { router, useFocusEffect } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import * as Haptics from '@/services/haptics';
 import { useApp } from '@/context/AppContext';
@@ -33,6 +33,7 @@ import { useColors } from '@/hooks/useColors';
 import { analyzeChartImage, analyzeMultiTimeframeCharts, type ChartAnalysisResult, type MultiTimeframeChartImage } from '../services/chartDetection';
 import { trackEvent } from '@/services/telemetry';
 import { recordRatingEligibleAnalysis } from '@/services/ratingPrompt';
+import { clearAnalysisRetryRequest, getAnalysisRetryRequest, storeAnalysisRetryRequest } from '@/services/analysisRetry';
 
 type Stage = 'pick' | 'preview' | 'analyzing';
 type AnalysisMode = 'quick' | 'multiTimeframe';
@@ -291,14 +292,17 @@ function buildAnalysisResult(chart: ChartAnalysisResult, pair: string, imageUri?
 export default function AnalysisScreen() {
   const insets = useSafeAreaInsets();
   const colors = useColors();
+  const { retry } = useLocalSearchParams<{ retry?: string }>();
+  const retryRequest = retry === '1' ? getAnalysisRetryRequest() : null;
   const { setCurrentAnalysis, isSubscribed, isLoading, billingAvailable, checkFeatureAccess, consumeAnalysisAccessGrant } = useApp();
   const [accessVerified, setAccessVerified] = useState(false);
-  const [stage, setStage] = useState<Stage>('pick');
+  const [stage, setStage] = useState<Stage>(retryRequest ? 'preview' : 'pick');
   const [mode, setMode] = useState<AnalysisMode>('quick');
-  const [imageUri, setImageUri] = useState<string | null>(null);
-  const [imageBase64, setImageBase64] = useState<string | null>(null);
-  const [imageMimeType, setImageMimeType] = useState('image/jpeg');
-  const [selectedPair, setSelectedPair] = useState<string | null>(null);
+  const [imageUri, setImageUri] = useState<string | null>(retryRequest?.imageUri ?? null);
+  const [imageBase64, setImageBase64] = useState<string | null>(retryRequest?.imageBase64 ?? null);
+  const [imageMimeType, setImageMimeType] = useState(retryRequest?.imageMimeType ?? 'image/jpeg');
+  const [selectedPair, setSelectedPair] = useState<string | null>(retryRequest?.pair ?? null);
+  const [retryingExistingChart, setRetryingExistingChart] = useState(Boolean(retryRequest));
   const [timeframeCharts, setTimeframeCharts] = useState<{ h4: TimeframeChart | null; m15: TimeframeChart | null }>({ h4: null, m15: null });
   const [showPairModal, setShowPairModal] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
@@ -365,6 +369,9 @@ export default function AnalysisScreen() {
       legacy: useLegacy,
     });
     if (!result.canceled && result.assets[0]) {
+      clearAnalysisRetryRequest();
+      setRetryingExistingChart(false);
+      setSelectedPair(null);
       setImageUri(result.assets[0].uri);
       setImageBase64(result.assets[0].base64 || null);
       setImageMimeType(result.assets[0].mimeType || 'image/jpeg');
@@ -388,6 +395,9 @@ export default function AnalysisScreen() {
       base64: true,
     });
     if (!result.canceled && result.assets[0]) {
+      clearAnalysisRetryRequest();
+      setRetryingExistingChart(false);
+      setSelectedPair(null);
       setImageUri(result.assets[0].uri);
       setImageBase64(result.assets[0].base64 || null);
       setImageMimeType(result.assets[0].mimeType || 'image/jpeg');
@@ -429,6 +439,8 @@ export default function AnalysisScreen() {
   };
 
   const startQuickMode = () => {
+    setRetryingExistingChart(false);
+    setSelectedPair(null);
     setMode('quick');
     setStage('pick');
     setShowPairModal(false);
@@ -447,6 +459,10 @@ export default function AnalysisScreen() {
       return;
     }
 
+    if (retryingExistingChart && selectedPair) {
+      await handlePairSelected(selectedPair);
+      return;
+    }
     setShowPairModal(true);
     setAnalysisError(null);
   };
@@ -481,6 +497,7 @@ export default function AnalysisScreen() {
     }
 
     if (chart.status === 'invalid_image') {
+      clearAnalysisRetryRequest();
       trackEvent('analysis_invalid_image', { pair });
       setAnalysisError(chart.analysis.notes || 'No valid trading chart detected. Please upload a clearer chart.');
       Alert.alert('Invalid Image', chart.analysis.notes || 'No valid trading chart detected. Please upload a clearer chart.');
@@ -489,6 +506,10 @@ export default function AnalysisScreen() {
     }
 
     const result = buildAnalysisResult(chart, pair, sourceImageUri);
+    if (chart.status === 'success' || chart.status === 'no_trade') {
+      clearAnalysisRetryRequest();
+      setRetryingExistingChart(false);
+    }
     setCurrentAnalysis(result);
     trackEvent('analysis_succeeded', { pair, status: chart.status, confidence: chart.confidence });
     await recordRatingEligibleAnalysis();
@@ -508,6 +529,14 @@ export default function AnalysisScreen() {
     setSelectedPair(pair);
     setShowPairModal(false);
     if (mode === 'multiTimeframe') return;
+    if (imageBase64 && imageUri) {
+      storeAnalysisRetryRequest({
+        imageBase64,
+        imageMimeType,
+        imageUri,
+        pair,
+      });
+    }
 
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setStage('analyzing');
@@ -693,7 +722,7 @@ export default function AnalysisScreen() {
             </TouchableOpacity>
             <TouchableOpacity style={[styles.analyzeBtn, { backgroundColor: colors.primary }]} onPress={handleImageSelected}>
               <Feather name="zap" size={18} color="#000" />
-              <Text style={[styles.analyzeBtnText, { color: colors.primaryForeground }]}>Analyse Chart</Text>
+              <Text style={[styles.analyzeBtnText, { color: colors.primaryForeground }]}>{retryingExistingChart ? 'Retry Analysis' : 'Analyse Chart'}</Text>
             </TouchableOpacity>
           </View>
           {analysisError && (
