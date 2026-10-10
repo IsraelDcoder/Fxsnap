@@ -37,7 +37,7 @@ function parseRiskReward(value) {
 function parsePriceOrRange(value) {
   if (typeof value === 'number') return { type: 'price', value };
   if (!value || typeof value !== 'string') return null;
-  const raw = value.replace(/[‐–—−]/g, '-').trim();
+  const raw = normalizeNumberString(value.replace(/[‐–—−]/g, '-'));
   // Try explicit hyphen-separated ranges first
   if (raw.includes('-')) {
     const parts = raw.split('-').map((p) => p.trim()).filter(Boolean);

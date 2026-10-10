@@ -83,3 +83,49 @@ export async function getServerPremiumStatus(): Promise<boolean | null> {
     return typeof payload.active === 'boolean' ? payload.active : null;
   } catch { return null; }
 }
+
+export interface ServerAnalysisAccess {
+  canAnalyze: boolean;
+  freeAnalysisAvailable: boolean;
+  analysisInProgress: boolean;
+  freeAnalysesUsed: number;
+  freeAnalysisLimit: number;
+}
+
+export function normalizeServerAnalysisAccess(payload: unknown): ServerAnalysisAccess | null {
+  if (
+    typeof payload !== 'object'
+    || payload === null
+    || !('canAnalyze' in payload)
+    || !('freeAnalysisAvailable' in payload)
+    || typeof payload.canAnalyze !== 'boolean'
+    || typeof payload.freeAnalysisAvailable !== 'boolean'
+  ) return null;
+  const access = payload as Record<string, unknown>;
+  const freeAnalysisLimit = typeof access.freeAnalysisLimit === 'number'
+    && Number.isInteger(access.freeAnalysisLimit)
+    && access.freeAnalysisLimit > 0
+    ? access.freeAnalysisLimit
+    : 1;
+  const analysisInProgress = access.analysisInProgress === true;
+  const freeAnalysesUsed = typeof access.freeAnalysesUsed === 'number'
+    && Number.isInteger(access.freeAnalysesUsed)
+    && access.freeAnalysesUsed >= 0
+    ? access.freeAnalysesUsed
+    : !payload.freeAnalysisAvailable && !analysisInProgress
+      ? freeAnalysisLimit
+      : 0;
+  return {
+    canAnalyze: payload.canAnalyze,
+    freeAnalysisAvailable: payload.freeAnalysisAvailable,
+    analysisInProgress,
+    freeAnalysesUsed,
+    freeAnalysisLimit,
+  };
+}
+
+export async function getServerAnalysisAccess(): Promise<ServerAnalysisAccess | null> {
+  const response = await fetch(`${API_URL}/api/analysis-access`, { headers: await getApiHeaders() });
+  if (!response.ok) return null;
+  return normalizeServerAnalysisAccess(await response.json());
+}

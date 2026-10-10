@@ -23,7 +23,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import * as Haptics from '@/services/haptics';
 import { useApp } from '@/context/AppContext';
@@ -238,6 +238,7 @@ function buildAnalysisResult(chart: ChartAnalysisResult, pair: string, imageUri?
     pair,
     status: chart.status,
     message: chart.message,
+    freeAnalysisUsed: chart.freeAnalysisUsed,
     direction: isBuy ? 'BUY' : isSell ? 'SELL' : undefined,
     timeframe: chart.timeframe || undefined,
     takeProfitLevels: chart.trade_setup.take_profit_levels?.length
@@ -290,7 +291,8 @@ function buildAnalysisResult(chart: ChartAnalysisResult, pair: string, imageUri?
 export default function AnalysisScreen() {
   const insets = useSafeAreaInsets();
   const colors = useColors();
-  const { setCurrentAnalysis, isSubscribed, isLoading, billingAvailable, checkFeatureAccess } = useApp();
+  const { setCurrentAnalysis, isSubscribed, isLoading, billingAvailable, checkFeatureAccess, consumeAnalysisAccessGrant } = useApp();
+  const [accessVerified, setAccessVerified] = useState(false);
   const [stage, setStage] = useState<Stage>('pick');
   const [mode, setMode] = useState<AnalysisMode>('quick');
   const [imageUri, setImageUri] = useState<string | null>(null);
@@ -313,6 +315,35 @@ export default function AnalysisScreen() {
     }
     return decision.allowed;
   };
+
+  useFocusEffect(
+    React.useCallback(() => {
+      if (isLoading) return;
+      if (consumeAnalysisAccessGrant()) {
+        setAccessVerified(true);
+        return;
+      }
+      let active = true;
+      setAccessVerified(false);
+      void checkFeatureAccess('AI_ANALYSIS', '/analysis').then((decision) => {
+        if (!active) return;
+        if (decision.error) {
+          setAccessVerified(true);
+          return;
+        }
+        if (decision.allowed) setAccessVerified(true);
+      }).catch((error: unknown) => {
+        if (!active) return;
+        console.warn('[ACCESS] Analysis route check failed; the analysis API will enforce free-analysis limits.', error);
+        setAccessVerified(true);
+      });
+      return () => {
+        active = false;
+      };
+    }, [checkFeatureAccess, consumeAnalysisAccessGrant, isLoading])
+  );
+
+  if (!accessVerified) return null;
 
   const pickFromGallery = async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);

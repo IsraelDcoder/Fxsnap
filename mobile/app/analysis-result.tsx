@@ -39,8 +39,9 @@ import { useColors } from '@/hooks/useColors';
 import Svg, { Defs, Line, LinearGradient as SvgLinearGradient, Path, Rect, Stop } from 'react-native-svg';
 import { BlurView } from 'expo-blur';
 import { trackEvent } from '@/services/telemetry';
+import { canViewFullAnalysis } from '@/services/featureAccess';
+import { getInstrument } from '@/services/instruments';
 
-const RESULT_TIMEFRAMES = ['15m', '1H', '4H', '1D', '1W'] as const;
 type ResultTab = 'analysis' | 'insights';
 
 function currencyFlag(currency: string) {
@@ -66,7 +67,11 @@ function formatLevelPrice(value: string | number | undefined, pair: string) {
   if (['none', 'not_clear', 'unknown'].includes(text.toLowerCase())) return '—';
   if (!/^-?\d+(?:\.\d+)?$/.test(text)) return text;
   const [base, quote] = pairCurrencies(pair);
-  return Number(text).toFixed(quote === 'JPY' ? 3 : base === 'JPY' ? 3 : 5);
+  const instrument = getInstrument(pair.replace(/[^A-Z0-9]/gi, ''));
+  const decimals = instrument
+    ? instrument.kind === 'forex' ? instrument.decimals + 1 : instrument.decimals
+    : quote === 'JPY' || base === 'JPY' ? 3 : 5;
+  return Number(text).toFixed(decimals);
 }
 
 function formatRiskReward(value: unknown) {
@@ -86,7 +91,9 @@ function getPipDistance(entry: string, stop: string, pair: string) {
   const stopPrice = midpoint(stop);
   if (entryPrice == null || stopPrice == null) return null;
   const [, quote] = pairCurrencies(pair);
-  return Math.round(Math.abs(entryPrice - stopPrice) / (quote === 'JPY' ? 0.01 : 0.0001));
+  const instrument = getInstrument(pair.replace(/[^A-Z0-9]/gi, ''));
+  const pipSize = instrument?.pipSize ?? (quote === 'JPY' ? 0.01 : 0.0001);
+  return Math.round(Math.abs(entryPrice - stopPrice) / pipSize);
 }
 
 function buildSmoothChartPaths(series: number[] = []) {
@@ -192,7 +199,6 @@ export default function AnalysisResultScreen() {
   const [shareError, setShareError] = useState(false);
   const [ratingPromptVisible, setRatingPromptVisible] = useState(false);
   const [activeTab, setActiveTab] = useState<ResultTab>('analysis');
-  const [selectedTimeframe, setSelectedTimeframe] = useState<string>('4H');
   const [activeLevel, setActiveLevel] = useState<string | null>(null);
   const [analysisExpanded, setAnalysisExpanded] = useState(false);
   const shareCardRef = useRef<View | null>(null);
@@ -218,6 +224,7 @@ export default function AnalysisResultScreen() {
   const isSell = currentAnalysis?.direction === 'SELL';
   const isNoTrade = currentAnalysis?.status === 'no_trade';
   const isInvalid = currentAnalysis?.status === 'invalid_image';
+  const hasFullAnalysisAccess = canViewFullAnalysis(isSubscribed, currentAnalysis?.freeAnalysisUsed === true);
   const directionColor = isBuy ? '#00E676' : isSell ? '#FF5252' : '#8E8E93';
   const alreadySaved = savedAnalyses.some((a) => a.id === currentAnalysis?.id);
   const pair = currentAnalysis?.pair ?? '';
@@ -267,12 +274,6 @@ export default function AnalysisResultScreen() {
     : currentAnalysis?.zones?.resistance && currentAnalysis.zones.resistance !== 'not_clear'
       ? currentAnalysis.zones.resistance
       : 'Not identified';
-
-  useEffect(() => {
-    const timeframe = currentAnalysis?.timeframe?.toUpperCase();
-    const normalizedTimeframe = timeframe === 'M15' ? '15m' : timeframe === 'H1' ? '1H' : timeframe === 'H4' ? '4H' : timeframe;
-    setSelectedTimeframe(RESULT_TIMEFRAMES.includes(normalizedTimeframe as typeof RESULT_TIMEFRAMES[number]) ? normalizedTimeframe! : '4H');
-  }, [currentAnalysis?.id, currentAnalysis?.timeframe]);
 
   useEffect(() => {
     if (!currentAnalysis) return;
@@ -377,9 +378,9 @@ export default function AnalysisResultScreen() {
       lines.push(`Confidence: ${currentAnalysis.confidence}%`);
       lines.push(`Market Bias: ${currentAnalysis.marketBias || 'neutral'}`);
       lines.push(`Setup Status: ${currentAnalysis.setupStatus || 'NO_SETUP'}`);
-      if (!isSubscribed) lines.push('AI reasoning: Unlock full analysis in FXSnap.');
-      if (isSubscribed && currentAnalysis.analysis?.notes) lines.push(`Notes: ${currentAnalysis.analysis.notes}`);
-      if (isSubscribed && currentAnalysis.whyNotNow?.length) {
+      if (!hasFullAnalysisAccess) lines.push('AI reasoning: Unlock full analysis in FXSnap.');
+      if (hasFullAnalysisAccess && currentAnalysis.analysis?.notes) lines.push(`Notes: ${currentAnalysis.analysis.notes}`);
+      if (hasFullAnalysisAccess && currentAnalysis.whyNotNow?.length) {
         lines.push('');
         lines.push('Why Not Now:');
         currentAnalysis.whyNotNow.forEach((reason) => lines.push(`- ${reason}`));
@@ -388,7 +389,7 @@ export default function AnalysisResultScreen() {
       lines.push('⚠️ FXSnap — Invalid Chart Image');
       lines.push('');
       lines.push(`Pair: ${currentAnalysis.pair}`);
-      if (isSubscribed && currentAnalysis.analysis?.notes) lines.push(`Notes: ${currentAnalysis.analysis.notes}`);
+      if (hasFullAnalysisAccess && currentAnalysis.analysis?.notes) lines.push(`Notes: ${currentAnalysis.analysis.notes}`);
     } else {
       const dir = isBuy ? 'BUY ↑' : isSell ? 'SELL ↓' : '—';
       lines.push('🎯 FXSnap Signal');
@@ -410,8 +411,8 @@ export default function AnalysisResultScreen() {
         lines.push(`Entry:       ${currentAnalysis.tradeSetup.entryZone}`);
         lines.push(`Stop Loss:   ${currentAnalysis.tradeSetup.stopLoss}`);
         lines.push(`Take Profit 1: ${tp1Level}`);
-        if (isSubscribed && usableTargetLevels.length > 1) lines.push(`Take Profit 2: ${tp2Level}`);
-        if (isSubscribed) lines.push(`Risk/Reward: ${formatRR(currentAnalysis.tradeSetup.riskReward)}`);
+        if (hasFullAnalysisAccess && usableTargetLevels.length > 1) lines.push(`Take Profit 2: ${tp2Level}`);
+        if (hasFullAnalysisAccess) lines.push(`Risk/Reward: ${formatRR(currentAnalysis.tradeSetup.riskReward)}`);
       } else {
         lines.push(`Entry:       ${currentAnalysis.entry ?? '—'}`);
         lines.push(`Stop Loss:   ${currentAnalysis.sl ?? '—'}`);
@@ -464,10 +465,6 @@ export default function AnalysisResultScreen() {
     if (element === 'tp2') trackEvent('callout_tapped', { pair, level: element });
     trackEvent('locked_content_tapped', { pair, element, source: 'analysis-result-locked' });
     router.push({ pathname: '/paywall', params: { source: 'analysis-result-locked', element } });
-  };
-  const selectTimeframe = (timeframe: string) => {
-    setSelectedTimeframe(timeframe);
-    trackEvent('timeframe_chip_tapped', { pair, timeframe });
   };
   const selectTab = (tab: ResultTab) => {
     setActiveTab(tab);
@@ -533,7 +530,7 @@ export default function AnalysisResultScreen() {
             </View>
             <View style={styles.assetNameWrap}>
               <Text style={styles.assetPair}>{currentAnalysis.pair}</Text>
-              <Text style={styles.assetTimeframe}>{currentAnalysis.timeframe || selectedTimeframe}</Text>
+              <Text style={styles.assetTimeframe}>{currentAnalysis.timeframe || '—'}</Text>
             </View>
           </View>
           <View style={styles.entrySummary}>
@@ -581,14 +578,14 @@ export default function AnalysisResultScreen() {
             {[35, 75, 115, 155, 195].map((y) => <Line key={`grid-${y}`} x1="0" y1={y} x2="360" y2={y} stroke="#FFFFFF" strokeOpacity="0.11" strokeDasharray="3 6" />)}
             {entryLevel !== '—' && tp1Level !== '—' ? <Rect x="0" y={Math.min(levelY('entry', entryLevel), levelY('tp1', tp1Level)) * 2.2} width="360" height={Math.abs(levelY('entry', entryLevel) - levelY('tp1', tp1Level)) * 2.2} fill="#39E58C" fillOpacity="0.08" /> : null}
             {entryLevel !== '—' && stopLevel !== '—' ? <Rect x="0" y={Math.min(levelY('entry', entryLevel), levelY('sl', stopLevel)) * 2.2} width="360" height={Math.abs(levelY('entry', entryLevel) - levelY('sl', stopLevel)) * 2.2} fill="#FF6262" fillOpacity="0.08" /> : null}
-            {chartLevelValues.filter(([key, value]) => value !== '—' && (key !== 'tp2' || isSubscribed)).map(([key, value]) => {
+            {chartLevelValues.filter(([key, value]) => value !== '—' && (key !== 'tp2' || hasFullAnalysisAccess)).map(([key, value]) => {
               const y = levelY(key, value) * 2.2;
               const color = key === 'entry' ? '#DDEBFF' : key === 'sl' ? '#FF6262' : '#39E58C';
               return <Line key={key} x1="0" y1={y} x2="360" y2={y} stroke={color} strokeOpacity={activeLevel === key ? 1 : 0.82} strokeWidth={activeLevel === key ? 2.5 : 1.25} strokeDasharray={key === 'entry' ? undefined : '5 5'} />;
             })}
           </Svg>
           </Animated.View>
-          {chartLevelValues.filter(([key, value]) => value !== '—' && (key !== 'tp2' || isSubscribed)).map(([key, value]) => {
+          {chartLevelValues.filter(([key, value]) => value !== '—' && (key !== 'tp2' || hasFullAnalysisAccess)).map(([key, value]) => {
             const color = key === 'entry' ? '#DDEBFF' : key === 'sl' ? '#FF6262' : '#39E58C';
             return <Animated.View key={`label-${key}`} entering={FadeInUp.delay(180).duration(350)} style={[styles.chartLevelLabel, { top: `${levelY(key, value)}%`, borderColor: `${color}80` }]}><Text numberOfLines={1} style={[styles.chartLevelText, { color }]}>{value}</Text></Animated.View>;
           })}
@@ -598,8 +595,8 @@ export default function AnalysisResultScreen() {
               <View style={styles.targetTrack}><View style={styles.targetDot} /></View><Text style={styles.calloutLevelName}>TP1</Text><Text numberOfLines={1} style={styles.calloutLevelPrice}>{tp1Level}</Text>
             </TouchableOpacity>
             {usableTargetLevels.length > 1 ? (
-              <TouchableOpacity style={styles.calloutLevelRow} onPress={() => isSubscribed ? highlightLevel('tp2') : openLockedContent('tp2')}>
-                <View style={styles.targetTrack}><View style={styles.targetDot} /></View><Text style={styles.calloutLevelName}>TP2</Text><Text numberOfLines={1} style={styles.calloutLevelPrice}>{isSubscribed ? tp2Level : 'Unlock'}</Text>{!isSubscribed ? <Feather name="lock" size={10} color="#C6A94B" /> : null}
+              <TouchableOpacity style={styles.calloutLevelRow} onPress={() => hasFullAnalysisAccess ? highlightLevel('tp2') : openLockedContent('tp2')}>
+                <View style={styles.targetTrack}><View style={styles.targetDot} /></View><Text style={styles.calloutLevelName}>TP2</Text><Text numberOfLines={1} style={styles.calloutLevelPrice}>{hasFullAnalysisAccess ? tp2Level : 'Unlock'}</Text>{!hasFullAnalysisAccess ? <Feather name="lock" size={10} color="#C6A94B" /> : null}
               </TouchableOpacity>
             ) : (
               <View style={styles.calloutLevelRow}><View style={styles.targetTrack}><View style={styles.targetDotMuted} /></View><Text style={styles.calloutLevelName}>TP2</Text><Text style={styles.calloutMissing}>Not provided</Text></View>
@@ -612,9 +609,6 @@ export default function AnalysisResultScreen() {
           </TouchableOpacity>
         </Animated.View>
 
-        <View style={styles.timeframeRow}>
-          {RESULT_TIMEFRAMES.map((timeframe) => <TouchableOpacity key={timeframe} style={[styles.timeframeChip, selectedTimeframe === timeframe && styles.timeframeChipSelected]} onPress={() => selectTimeframe(timeframe)}><Text style={[styles.timeframeText, selectedTimeframe === timeframe && styles.timeframeTextSelected]}>{timeframe}</Text></TouchableOpacity>)}
-        </View>
         <View style={styles.segmentedControl}>
           <TouchableOpacity style={[styles.segment, activeTab === 'analysis' && styles.segmentSelected]} onPress={() => selectTab('analysis')}><Text style={[styles.segmentText, activeTab === 'analysis' && styles.segmentTextSelected]}>Our Analysis</Text></TouchableOpacity>
           <TouchableOpacity style={[styles.segment, activeTab === 'insights' && styles.segmentSelected]} onPress={() => selectTab('insights')}><Text style={[styles.segmentText, activeTab === 'insights' && styles.segmentTextSelected]}>Insights</Text></TouchableOpacity>
@@ -632,21 +626,21 @@ export default function AnalysisResultScreen() {
               <TradeLevelRow label="Entry" value={entryLevel} /><View style={styles.tableDivider} />
               <TradeLevelRow label="Stop Loss" value={stopLevel} color="#FF6262" /><View style={styles.tableDivider} />
               <TradeLevelRow label="Take Profit 1" value={tp1Level} color="#39E58C" /><View style={styles.tableDivider} />
-              <TradeLevelRow label="Take Profit 2" value={usableTargetLevels.length > 1 ? (isSubscribed ? tp2Level : '••••••') : 'Not provided'} color="#39E58C" locked={!isSubscribed && usableTargetLevels.length > 1} onPress={() => openLockedContent('tp2')} /><View style={styles.tableDivider} />
-                <TradeLevelRow label="Risk : Reward" value={isSubscribed ? (riskReward === '—' ? riskReward : riskReward.includes(':') ? riskReward : `1:${riskReward}`) : '••••'} color="#39E58C" locked={!isSubscribed} onPress={() => openLockedContent('risk-reward')} />
+              <TradeLevelRow label="Take Profit 2" value={usableTargetLevels.length > 1 ? (hasFullAnalysisAccess ? tp2Level : '••••••') : 'Not provided'} color="#39E58C" locked={!hasFullAnalysisAccess && usableTargetLevels.length > 1} onPress={() => openLockedContent('tp2')} /><View style={styles.tableDivider} />
+                <TradeLevelRow label="Risk : Reward" value={hasFullAnalysisAccess ? (riskReward === '—' ? riskReward : riskReward.includes(':') ? riskReward : `1:${riskReward}`) : '••••'} color="#39E58C" locked={!hasFullAnalysisAccess} onPress={() => openLockedContent('risk-reward')} />
             </View>
             <View style={styles.levelsCard}>
               <TouchableOpacity style={styles.aiHeading} onPress={() => {
-                if (!isSubscribed) { openLockedContent('ai-analysis'); return; }
+                if (!hasFullAnalysisAccess) { openLockedContent('ai-analysis'); return; }
                 setAnalysisExpanded((expanded) => !expanded);
                 trackEvent('analysis_expanded', { expanded: !analysisExpanded });
               }}>
-                <View><Text style={styles.sectionTitle}>AI ANALYSIS</Text><Text style={styles.bodyMuted}>{isSubscribed ? (analysisExpanded ? 'Reasoning behind this setup' : 'Read more about this setup') : 'Premium insight · Tap to unlock'}</Text></View>
-                <Feather name={isSubscribed && analysisExpanded ? 'chevron-up' : 'chevron-down'} size={18} color="#BDBDBD" />
+                <View><Text style={styles.sectionTitle}>AI ANALYSIS</Text><Text style={styles.bodyMuted}>{hasFullAnalysisAccess ? (analysisExpanded ? 'Reasoning behind this setup' : 'Read more about this setup') : 'Premium insight · Tap to unlock'}</Text></View>
+                <Feather name={hasFullAnalysisAccess && analysisExpanded ? 'chevron-up' : 'chevron-down'} size={18} color="#BDBDBD" />
               </TouchableOpacity>
-              {isSubscribed && analysisExpanded ? (
+              {hasFullAnalysisAccess && analysisExpanded ? (
                 <View style={styles.reasoningList}>{(reasoning.length ? reasoning : ['No additional reasoning was provided for this setup.']).map((reason, index) => <View key={`${index}-${reason}`} style={styles.reasoningRow}><View style={styles.reasoningBullet} /><Text style={styles.reasoningText}>{reason}</Text></View>)}</View>
-              ) : !isSubscribed ? (
+              ) : !hasFullAnalysisAccess ? (
                 <View style={styles.lockedReasoning}><View pointerEvents="none" style={styles.lockedReasoningPreview}>{(reasoning.length ? reasoning.slice(0, 3) : ['Trend and structure analysis', 'Key levels and confluence']).map((reason, index) => <Text key={`${index}-${reason}`} numberOfLines={1} style={styles.reasoningText}>{`• ${reason}`}</Text>)}<BlurView intensity={36} tint="dark" style={StyleSheet.absoluteFill} /></View><TouchableOpacity style={styles.unlockButton} onPress={() => openLockedContent('ai-analysis')}><Feather name="lock" size={14} color="#111111" /><Text style={styles.unlockButtonText}>Unlock full analysis</Text></TouchableOpacity></View>
               ) : null}
             </View>
@@ -676,7 +670,7 @@ export default function AnalysisResultScreen() {
       <View style={styles.hiddenShareContainer}>
         <AnalysisShareCard
           ref={shareCardRef}
-          analysis={isSubscribed ? currentAnalysis : {
+          analysis={hasFullAnalysisAccess ? currentAnalysis : {
             ...currentAnalysis,
             entry: entryLevel,
             tp: tp1Level,
@@ -685,7 +679,7 @@ export default function AnalysisResultScreen() {
               ? { ...currentAnalysis.tradeSetup, takeProfit: tp1Level, riskReward: '—' }
               : undefined,
           }}
-          isPremium={isSubscribed}
+          isPremium={hasFullAnalysisAccess}
           colors={colors}
           onReady={() => {
             console.log('[AnalysisShare] share card signalled ready');
@@ -820,11 +814,6 @@ const styles = StyleSheet.create({
   stopDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#FF6262' },
   stopPrice: { flex: 1, minWidth: 0, color: '#FFFFFF', fontSize: 11, fontFamily: 'Inter_700Bold' },
   stopDistance: { paddingLeft: 14, color: '#B89191', fontSize: 9, fontFamily: 'Inter_500Medium' },
-  timeframeRow: { width: '100%', flexDirection: 'row', justifyContent: 'space-between', gap: 6 },
-  timeframeChip: { minWidth: 42, flex: 1, alignItems: 'center', paddingVertical: 8, borderRadius: 10, backgroundColor: '#171717', borderWidth: 1, borderColor: '#292929' },
-  timeframeChipSelected: { backgroundColor: '#163321', borderColor: '#39E58C' },
-  timeframeText: { color: '#A5A5A5', fontSize: 11, fontFamily: 'Inter_600SemiBold' },
-  timeframeTextSelected: { color: '#39E58C' },
   segmentedControl: { width: '100%', flexDirection: 'row', padding: 4, borderRadius: 12, backgroundColor: '#151515', borderWidth: 1, borderColor: '#292929' },
   segment: { flex: 1, alignItems: 'center', paddingVertical: 9, borderRadius: 9 },
   segmentSelected: { backgroundColor: '#2A2A2A' },

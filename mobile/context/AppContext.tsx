@@ -1,8 +1,10 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { Alert, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router } from 'expo-router';
 import { addBillingListener, billingIsConfigured, configureBilling, getPremiumStatus, purchasePlan, restorePurchases, type BillingPlan } from '@/services/billing';
-import { getFeatureAccessDecision, type FeatureAccessDecision, type ProtectedFeature } from '@/services/featureAccess';
+import { getServerAnalysisAccess, type ServerAnalysisAccess } from '@/services/apiAuth';
+import { getFeatureAccessDecision, isFreeAnalysisExhausted, type FeatureAccessDecision, type ProtectedFeature } from '@/services/featureAccess';
 import { setHapticsEnabled } from '@/services/haptics';
 import { createDailyRiskActivity, getLocalRiskDateKey, normalizeDailyRiskActivity, type DailyRiskActivity, type OpenRiskPosition } from '@/services/risk';
 
@@ -18,6 +20,7 @@ export interface AnalysisResult {
   pair: string;
   status?: AnalysisStatus;
   message?: string;
+  freeAnalysisUsed?: boolean;
   direction?: 'BUY' | 'SELL';
   timeframe?: string;
   takeProfitLevels?: string[];
@@ -161,7 +164,8 @@ interface AppContextValue {
   completeOnboarding: () => void;
   billingAvailable: boolean;
   pendingFeatureRoute: string | null;
-  checkFeatureAccess: (feature: ProtectedFeature, route: string) => Promise<FeatureAccessDecision & { error?: string }>;
+  checkFeatureAccess: (feature: ProtectedFeature, route: string, grantAnalysisRoute?: boolean) => Promise<FeatureAccessDecision & { error?: string }>;
+  consumeAnalysisAccessGrant: () => boolean;
   consumePendingFeatureRoute: () => string | null;
   clearPendingFeatureRoute: () => void;
   purchasePlan: (plan: BillingPlan) => Promise<boolean>;
@@ -299,6 +303,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [currentAnalysis, setCurrentAnalysis] = useState<AnalysisResult | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [pendingFeatureRoute, setPendingFeatureRoute] = useState<string | null>(null);
+  const analysisAccessGrant = useRef(false);
 
   useEffect(() => {
     const load = async () => {
@@ -383,13 +388,61 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return active;
   };
 
-  const checkFeatureAccess = async (feature: ProtectedFeature, route: string): Promise<FeatureAccessDecision & { error?: string }> => {
+  const checkFeatureAccess = useCallback(async (feature: ProtectedFeature, route: string, grantAnalysisRoute = false): Promise<FeatureAccessDecision & { error?: string }> => {
     if (isLoading) {
       return { allowed: false, requiresPaywall: false, error: 'Account access is still loading. Please try again.' };
     }
 
     const subscriptionActive = isSubscribed;
+    let analysisAccess: ServerAnalysisAccess | null = null;
+    let accessCheckError: unknown;
+    if (!subscriptionActive && (feature === 'AI_ANALYSIS' || feature === 'TRADE_SETUP')) {
+      try {
+        analysisAccess = await getServerAnalysisAccess();
+      } catch (error) {
+        accessCheckError = error;
+      }
+    }
+
+    if (!analysisAccess && !subscriptionActive && (feature === 'AI_ANALYSIS' || feature === 'TRADE_SETUP')) {
+      console.warn(
+        '[ACCESS] Free-analysis access response unavailable; allowing analysis entry for backend enforcement.',
+        accessCheckError ?? 'The response was unavailable or invalid.'
+      );
+    }
+
+    if (analysisAccess && isFreeAnalysisExhausted(
+      analysisAccess.freeAnalysesUsed,
+      analysisAccess.freeAnalysisLimit,
+      subscriptionActive,
+    )) {
+      setPendingFeatureRoute(route);
+      const openPaywall = () => router.replace({
+        pathname: '/paywall',
+        params: { source: 'analysis-limit', used: String(analysisAccess.freeAnalysesUsed), limit: String(analysisAccess.freeAnalysisLimit) },
+      });
+      const message = 'Subscribe to unlock unlimited analysis.';
+      if (Platform.OS === 'web') {
+        globalThis.alert(`You have used your free analysis. ${message}`);
+        openPaywall();
+      } else {
+        Alert.alert('You have used your free analysis', message, [{ text: 'Continue', onPress: openPaywall }]);
+      }
+      return { allowed: false, requiresPaywall: true };
+    }
+
+    if (analysisAccess?.analysisInProgress) {
+      return {
+        allowed: false,
+        requiresPaywall: false,
+        error: 'Your free analysis is already running. Please wait for it to finish.',
+      };
+    }
+
     const decision = getFeatureAccessDecision(feature, subscriptionActive);
+    if (grantAnalysisRoute && decision.allowed && route === '/analysis') {
+      analysisAccessGrant.current = true;
+    }
     console.log(`[ACCESS] Feature: ${feature}`);
     console.log(`[ACCESS] Subscription status: ${subscriptionActive}`);
     console.log(`[ACCESS] Result: ${decision.allowed ? 'ALLOWED' : 'PAYWALL'}`);
@@ -400,7 +453,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       router.replace('/paywall');
     }
     return decision;
-  };
+  }, [isLoading, isSubscribed]);
+
+  const consumeAnalysisAccessGrant = useCallback(() => {
+    const granted = analysisAccessGrant.current;
+    analysisAccessGrant.current = false;
+    return granted;
+  }, []);
 
   const consumePendingFeatureRoute = () => {
     const queuedRoute = pendingFeatureRoute;
@@ -566,6 +625,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         billingAvailable,
         pendingFeatureRoute,
         checkFeatureAccess,
+        consumeAnalysisAccessGrant,
         consumePendingFeatureRoute,
         clearPendingFeatureRoute,
         purchasePlan: buyPlan,

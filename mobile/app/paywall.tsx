@@ -1,68 +1,64 @@
 import React, { useEffect, useState } from 'react';
-import { Alert, BackHandler, Linking, Platform, StyleSheet, Text, TouchableOpacity, View, useWindowDimensions } from 'react-native';
+import { Alert, BackHandler, Modal, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, {
   FadeIn,
   FadeInDown,
   FadeInUp,
+  SlideInDown,
+  ZoomIn,
 } from 'react-native-reanimated';
-import { BlurView } from 'expo-blur';
 import ScreenWrapper from '@/components/ScreenWrapper';
 import { Feather } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
 import * as Haptics from '@/services/haptics';
 import { useApp } from '@/context/AppContext';
-import { useColors } from '@/hooks/useColors';
 import { getAvailablePlans, type BillingPlan, type PlanOffering } from '@/services/billing';
-import { getPaywallRemoteConfig, type PaywallRemoteConfig } from '@/services/paywallConfig';
 
 export default function PaywallScreen() {
   // ScreenWrapper handles safe area and scrolling
-  const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { source, used, limit } = useLocalSearchParams<{ source?: string; used?: string; limit?: string }>();
-  const isFreeAnalysisOffer = source === 'free-analysis';
+  const { source } = useLocalSearchParams<{ source?: string }>();
   const isAnalysisLimit = source === 'analysis-limit';
   const isAnalysisResultUnlock = source === 'analysis-result-locked';
-  const isAnalysisOffer = isFreeAnalysisOffer || isAnalysisLimit;
-  const returnRoute = isFreeAnalysisOffer || isAnalysisResultUnlock
+  const returnRoute = isAnalysisResultUnlock
     ? '/analysis-result'
-    : isAnalysisLimit
-      ? '/analysis'
-      : '/(tabs)/home';
-  const { currentAnalysis, purchasePlan, restorePurchases, billingAvailable, isSubscribed, isLoading, consumePendingFeatureRoute, clearPendingFeatureRoute } = useApp();
-  const storeName = Platform.OS === 'ios' ? 'the App Store' : 'Google Play';
-  const termsUrl = process.env.EXPO_PUBLIC_TERMS_URL || 'https://fxsnap.app/terms';
-  const privacyPolicyUrl = process.env.EXPO_PUBLIC_PRIVACY_POLICY_URL || 'https://fxsnapprivacy.netlify.app/';
+    : '/(tabs)/home';
+  const { purchasePlan, restorePurchases, billingAvailable, isSubscribed, isLoading, consumePendingFeatureRoute, clearPendingFeatureRoute } = useApp();
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
   const isCompact = screenHeight < 760 || screenWidth < 380;
-  const isTiny = screenHeight < 600 || screenWidth < 340;
 
   const dismissPaywall = () => {
     clearPendingFeatureRoute();
     router.replace(returnRoute);
+  };
+  const handlePaywallDismiss = () => {
+    if (exitOfferShown) {
+      dismissPaywall();
+      return;
+    }
+    setExitOfferShown(true);
+    setExitOfferVisible(true);
+  };
+  const handleExitOfferUnlock = () => {
+    setExitOfferVisible(false);
+  };
+  const handleExitOfferLater = () => {
+    setExitOfferVisible(false);
+    dismissPaywall();
   };
   const [selectedPlan, setSelectedPlan] = useState<BillingPlan>('monthly');
   const [plans, setPlans] = useState<PlanOffering[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingPlans, setLoadingPlans] = useState(true);
   const [canDismiss, setCanDismiss] = useState(false);
-  const [remoteConfig, setRemoteConfig] = useState<PaywallRemoteConfig | null>(null);
+  const [exitOfferVisible, setExitOfferVisible] = useState(false);
+  const [exitOfferShown, setExitOfferShown] = useState(false);
   const botPad = Platform.OS === 'web' ? 34 : insets.bottom;
-  const usedCount = Math.max(0, Number.parseInt(String(used ?? '1'), 10) || 0);
-  const freeLimit = Math.max(1, Number.parseInt(String(limit ?? '1'), 10) || 1);
 
   useEffect(() => {
-    const timer = setTimeout(() => setCanDismiss(true), 3000);
+    const timer = setTimeout(() => setCanDismiss(true), 1000);
     return () => clearTimeout(timer);
-  }, []);
-
-  useEffect(() => {
-    let active = true;
-    void getPaywallRemoteConfig().then((config) => {
-      if (active) setRemoteConfig(config);
-    });
-    return () => { active = false; };
   }, []);
 
   useEffect(() => {
@@ -96,31 +92,35 @@ export default function PaywallScreen() {
   useEffect(() => {
     const onBack = () => {
       if (!canDismiss) return true;
-      dismissPaywall();
+      handlePaywallDismiss();
       return true;
     };
 
     const subscription = BackHandler.addEventListener('hardwareBackPress', onBack);
     return () => subscription.remove();
-  }, [canDismiss]);
+  }, [canDismiss, exitOfferShown]);
 
   if (isLoading || isSubscribed) return null;
 
   const selectedPlanMeta = plans.find((plan) => plan.plan === selectedPlan) ?? plans[0];
   const canPurchaseSelectedPlan = Boolean(selectedPlanMeta?.available);
 
+  const orderedPlans: PlanOffering[] = (['weekly', 'monthly', 'quarterly'] as const).map((planType) => {
+    const configuredPlan = plans.find((plan) => plan.plan === planType);
+    return configuredPlan ?? {
+      plan: planType,
+      title: planType === 'quarterly' ? '3 Months' : planType,
+      price: '—',
+      period: planType === 'weekly' ? 'week' : planType === 'quarterly' ? '3 months' : 'month',
+      productId: '',
+      available: false,
+    };
+  });
   const getPlanDisplayPrice = (plan: PlanOffering) => plan.price || '—';
   const getPlanDisplayPeriod = (plan: PlanOffering) => {
     if (plan.plan === 'weekly') return '/ week';
     if (plan.plan === 'quarterly') return '/ 3 months';
     return '/ month';
-  };
-  const openLegalLink = async (url: string) => {
-    try {
-      await Linking.openURL(url);
-    } catch {
-      Alert.alert('Unable to open link', 'Please try again later.');
-    }
   };
   const handleRestore = async () => {
     if (!billingAvailable) {
@@ -174,7 +174,7 @@ export default function PaywallScreen() {
       <View style={[styles.header, isCompact && styles.compactHeader]}>
         {canDismiss ? (
           <Animated.View entering={FadeIn.duration(350)}>
-            <TouchableOpacity style={[styles.closeBtn, isCompact && styles.compactCloseBtn]} onPress={dismissPaywall} accessibilityRole="button" accessibilityLabel="Close paywall">
+            <TouchableOpacity style={[styles.closeBtn, isCompact && styles.compactCloseBtn]} onPress={handlePaywallDismiss} accessibilityRole="button" accessibilityLabel="Close paywall">
               <Feather name="x" size={26} color="#FFFFFF" />
             </TouchableOpacity>
           </Animated.View>
@@ -182,103 +182,52 @@ export default function PaywallScreen() {
       </View>
 
       <Animated.View entering={FadeInDown.delay(100).duration(600)} style={[styles.hero, isCompact && styles.compactHero]}>
-        <View style={[styles.logoBox, isCompact && styles.compactLogoBox]}>
-          <Feather name="zap" size={32} color="#FFD60A" />
+        <View style={styles.brandRow}>
+          <View style={styles.brandMark}>
+            {[10, 15, 21].map((height, index) => (
+              <View key={height} style={[styles.candle, { height: height + 8 }]}>
+                <View style={styles.candleWick} />
+                <View style={[styles.candleBody, { height, bottom: index === 1 ? 5 : index === 2 ? 8 : 3 }]} />
+              </View>
+            ))}
+          </View>
+          <Text style={styles.brandName}>FXSnap <Text style={styles.brandAccent}>AI</Text></Text>
         </View>
-        <Text style={[styles.title, isCompact && styles.compactTitle]}>{isAnalysisOffer ? 'That was your free analysis.' : 'FXSNAP PREMIUM'}</Text>
-        <Text style={[styles.subtitle, isCompact && styles.compactSubtitle]}>{isAnalysisOffer ? 'Get Entry, SL & TP levels on every chart you trade.' : 'Your complete AI trading assistant.'}</Text>
+        <Text style={[styles.title, isCompact && styles.compactTitle]}>Your free analysis{"\nis used up"}</Text>
+        <Text style={[styles.subtitle, isCompact && styles.compactSubtitle]}>Unlock unlimited AI chart insights — cancel anytime</Text>
+        <View style={styles.trustedRow}>
+          <Feather name="users" size={20} color="#31D15B" />
+          <Text style={styles.trustedText}>Trusted by <Text style={styles.trustedCount}>3,700+</Text> traders</Text>
+        </View>
       </Animated.View>
 
-      {isAnalysisOffer && (
-        <View style={[styles.usageBanner, isCompact && styles.compactUsageBanner]}>
-          <Feather name="check-circle" size={16} color="#3CEB8C" />
-          <Text style={[styles.usageText, isCompact && styles.compactUsageText]}>You’ve used {usedCount} of {freeLimit} free {freeLimit === 1 ? 'analysis' : 'analyses'}</Text>
-        </View>
-      )}
+      <View style={styles.sectionDivider} />
 
-      <View style={[styles.previewCard, isCompact && styles.compactPreviewCard, isTiny && styles.tinyPreviewCard]}>
-        <View style={styles.previewHeader}>
-          <Text style={[styles.previewTitle, isCompact && styles.compactPreviewTitle]}>Your analysis preview</Text>
-          {currentAnalysis && <Text style={styles.previewPair}>{currentAnalysis.pair}{currentAnalysis.direction ? ` · ${currentAnalysis.direction}` : ''}</Text>}
-        </View>
-        <View style={styles.previewMetricsRow}>
-        {([
-          ['Entry', currentAnalysis?.entry ?? currentAnalysis?.tradeSetup?.entryZone],
-          ['Stop Loss', currentAnalysis?.sl ?? currentAnalysis?.tradeSetup?.stopLoss],
-          ['Take Profit', currentAnalysis?.tp ?? currentAnalysis?.tradeSetup?.takeProfit],
-          ['R:R', currentAnalysis?.tradeSetup?.riskReward],
-        ] as const).map(([label, value]) => (
-          <View key={label} style={styles.previewMetric}>
-            <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} style={[styles.previewLabel, isCompact && styles.compactPreviewLabel]}>{label}</Text>
-            <View style={[styles.previewValueWrap, isCompact && styles.compactPreviewValueWrap]}>
-              <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} style={[styles.previewValue, isCompact && styles.compactPreviewValue]}>{value == null || value === '' ? '••••' : String(value)}</Text>
-              <BlurView intensity={28} tint="dark" style={StyleSheet.absoluteFill} />
-            </View>
+      <Animated.View entering={FadeInUp.delay(200).duration(600)} style={styles.featuresList}>
+        {[
+          'Unlimited screenshot analyses',
+          'Clear Long/Short/Hold + entry SL & TP levels',
+          'Support & resistance + pattern detection',
+          'Works with TradingView, MT4, MT5 & any broker',
+        ].map((benefit) => (
+          <View key={benefit} style={styles.featureRow}>
+            <View style={styles.featureCheck}><Feather name="check" size={12} color="#07130B" /></View>
+            <Text style={styles.featureText}>{benefit}</Text>
           </View>
         ))}
-        </View>
-        <View style={styles.previewLock}>
-          <Feather name="lock" size={12} color="#FFD60A" />
-          <Text style={styles.previewLockText}>Exact levels on every chart</Text>
-        </View>
-      </View>
-
-      <Animated.View entering={FadeInUp.delay(200).duration(600)} style={[styles.featuresList, isCompact && styles.compactFeaturesList]}>
-        <View style={styles.featureRow}>
-          <View style={[styles.featureIconWrap, isCompact && styles.compactFeatureIconWrap]}>
-            <Feather name="bar-chart-2" size={24} color="#3CEB8C" />
-          </View>
-          <View style={styles.featureTextWrap}>
-            <Text style={[styles.featureTitle, isCompact && styles.compactFeatureTitle]}>Unlimited chart analysis.</Text>
-            {!isTiny && <Text style={[styles.featureSubtitle, isCompact && styles.compactFeatureSubtitle]}>Upload any pair, any timeframe.</Text>}
-          </View>
-        </View>
-        <View style={styles.featureRow}>
-          <View style={[styles.featureIconWrap, isCompact && styles.compactFeatureIconWrap]}>
-            <Feather name="target" size={24} color="#3CEB8C" />
-          </View>
-          <View style={styles.featureTextWrap}>
-            <Text style={[styles.featureTitle, isCompact && styles.compactFeatureTitle]}>Clear trade levels.</Text>
-            {!isTiny && <Text style={[styles.featureSubtitle, isCompact && styles.compactFeatureSubtitle]}>Entry, Stop Loss and Take Profit, with R:R included.</Text>}
-          </View>
-        </View>
-        <View style={styles.featureRow}>
-          <View style={[styles.featureIconWrap, isCompact && styles.compactFeatureIconWrap]}>
-            <Feather name="cpu" size={24} color="#3CEB8C" />
-          </View>
-          <View style={styles.featureTextWrap}>
-            <Text style={[styles.featureTitle, isCompact && styles.compactFeatureTitle]}>Know the why.</Text>
-            {!isTiny && <Text style={[styles.featureSubtitle, isCompact && styles.compactFeatureSubtitle]}>The AI reasoning behind every setup.</Text>}
-          </View>
-        </View>
       </Animated.View>
 
-      {remoteConfig?.traderCount != null && (
-        <Text style={[styles.socialProof, isCompact && styles.compactSocialProof]}>Join {new Intl.NumberFormat('en-US').format(remoteConfig.traderCount)}+ traders using FXSnap</Text>
-      )}
-      {remoteConfig?.googlePlayRating != null && remoteConfig.googlePlayRatingCount != null && (
-        <View style={styles.ratingRow}>
-          <Feather name="star" size={15} color="#FFD60A" />
-          <Text style={styles.ratingText}>{remoteConfig.googlePlayRating.toFixed(1)} on Google Play</Text>
-          <Text style={styles.ratingCount}>({new Intl.NumberFormat('en-US').format(remoteConfig.googlePlayRatingCount)})</Text>
-        </View>
-      )}
-      {remoteConfig?.testimonials.map((testimonial) => (
-        <View key={`${testimonial.attribution}:${testimonial.quote}`} style={styles.testimonial}>
-          <Text style={styles.testimonialQuote}>“{testimonial.quote}”</Text>
-          <Text style={styles.testimonialAttribution}>{testimonial.attribution}</Text>
-        </View>
-      ))}
-
-      <Animated.View entering={FadeInUp.delay(300).duration(600)} style={[styles.plans, isCompact && styles.compactPlans]}>
+      <Animated.View entering={FadeInUp.delay(300).duration(600)} style={[styles.planSection, isCompact && styles.compactPlanSection]}>
         {loadingPlans ? (
           <View style={styles.loadingState}>
             <Text style={styles.loadingText}>Loading subscription options…</Text>
           </View>
-        ) : plans.length > 0 ? (
-          plans.map((plan) => {
+        ) : (
+          <>
+            <Text style={styles.planSectionTitle}>Choose Your Plan</Text>
+            <View style={styles.plansRow}>
+              {orderedPlans.map((plan) => {
             const isSelected = isSelectedPlan(plan.plan);
-            const isMonthly = plan.plan === 'monthly';
 
             return (
               <TouchableOpacity
@@ -288,7 +237,7 @@ export default function PaywallScreen() {
                   isCompact && styles.compactPlanCard,
                   isSelected && styles.planCardSelected,
                   !plan.available && styles.planCardUnavailable,
-                  isMonthly && styles.monthlyPlanCard,
+                  plan.plan === 'monthly' && styles.monthlyPlanCard,
                 ]}
                 onPress={() => {
                   if (!plan.available) return;
@@ -298,26 +247,20 @@ export default function PaywallScreen() {
                 disabled={!plan.available}
                 activeOpacity={0.95}
               >
-                {isMonthly && <View style={styles.planTag}><Text style={styles.planTagText}>BEST VALUE</Text></View>}
-                <Text style={[styles.planName, isSelected && styles.planNameSelected]}>{plan.plan === 'weekly' ? 'Weekly' : plan.plan === 'monthly' ? 'Monthly' : '3 Months'}</Text>
-                <View style={styles.planRadioWrap}>
-                  <View style={[styles.planRadio, isSelected && styles.planRadioSelected]}>
-                    {isSelected && <View style={styles.planRadioDot} />}
-                  </View>
+                {plan.plan === 'monthly' && <View style={[styles.planTag, styles.popularTag]}><Text style={styles.planTagText}>Most Popular</Text></View>}
+                {plan.plan === 'quarterly' && <View style={[styles.planTag, styles.bestValueTag]}><Text style={styles.planTagText}>Best Value - Save 22%</Text></View>}
+                <View style={[styles.planTextColumn, plan.plan === 'monthly' && styles.monthlyPlanText]}>
+                  <Text style={[styles.planName, isSelected && styles.planNameSelected]}>{plan.plan === 'quarterly' ? '3-Month' : plan.plan === 'weekly' ? 'Weekly' : 'Monthly'}</Text>
+                  <Text style={[styles.planPrice, isSelected && styles.planPriceSelected]}>{getPlanDisplayPrice(plan)}</Text>
+                  <Text style={styles.planPeriod}>{getPlanDisplayPeriod(plan)}</Text>
+                  {plan.plan === 'monthly' && <Text style={styles.dailyPrice}>Only $0.50/day</Text>}
                 </View>
-                <Text
-                  numberOfLines={1}
-                  adjustsFontSizeToFit
-                  minimumFontScale={0.65}
-                  style={[styles.planPrice, isSelected && styles.planPriceSelected]}
-                >
-                  {getPlanDisplayPrice(plan)}
-                </Text>
-                <Text style={[styles.planPeriod, isSelected && styles.planPeriodSelected]}>{getPlanDisplayPeriod(plan)}</Text>
               </TouchableOpacity>
             );
-          })
-        ) : null}
+              })}
+            </View>
+          </>
+        )}
       </Animated.View>
 
       <Animated.View entering={FadeInUp.delay(400).duration(600)} style={[styles.actions, isCompact && styles.compactActions]}>
@@ -325,27 +268,110 @@ export default function PaywallScreen() {
           style={[
             styles.subscribeBtn,
             isCompact && styles.compactSubscribeBtn,
-            (loading || !billingAvailable || !canPurchaseSelectedPlan) && { opacity: 0.65 },
           ]}
           onPress={handleSubscribe}
           disabled={loading || !billingAvailable || !canPurchaseSelectedPlan}
         >
           <Text style={[styles.subscribeBtnText, isCompact && styles.compactSubscribeText]}>
-            {loading ? 'Processing...' : billingAvailable ? 'Start plan' : 'Billing unavailable'}
+            {loading ? 'Processing...' : 'Unlock Unlimited Now'}
           </Text>
-          <Feather name="arrow-right" size={20} color="#000000" />
+          <Feather name="arrow-right" size={20} color="#FFFFFF" />
         </TouchableOpacity>
 
-        <Text style={styles.cancellationNote}>Cancel anytime in {storeName}.</Text>
-        <View style={styles.legalRow}>
-          <TouchableOpacity style={styles.legalLink} onPress={() => void openLegalLink(termsUrl)}><Text style={styles.legalText}>Terms</Text></TouchableOpacity>
-          <Text style={styles.legalDivider}>·</Text>
-          <TouchableOpacity style={styles.legalLink} onPress={() => void openLegalLink(privacyPolicyUrl)}><Text style={styles.legalText}>Privacy</Text></TouchableOpacity>
-          <Text style={styles.legalDivider}>·</Text>
-          <TouchableOpacity style={styles.legalLink} onPress={() => void handleRestore()} disabled={loading}><Text style={styles.legalText}>Restore Purchases</Text></TouchableOpacity>
+        <Text style={styles.restoreText}>
+          <Text style={styles.restoreLink} onPress={() => void handleRestore()} accessibilityRole="link">Restore Purchases</Text>
+        </Text>
+        <View style={styles.securityNote}>
+          <Feather name="lock" size={13} color="#31D15B" />
+          <Text style={styles.securityNoteText}>Cancel anytime  •  Secure payment  •  No auto-renew if cancelled</Text>
         </View>
-        <Text style={styles.footerNote}>AI analysis, not financial advice.</Text>
+        <Text style={styles.trialNote}>You won't be charged until your free trial (if any) ends.</Text>
       </Animated.View>
+      <Modal
+        visible={exitOfferVisible}
+        transparent
+        animationType="none"
+        statusBarTranslucent
+        onRequestClose={handleExitOfferLater}
+      >
+        <View style={styles.exitOfferBackdrop} accessibilityViewIsModal>
+          <Animated.View entering={FadeIn.duration(300)} style={styles.exitOfferScrim} />
+          <View style={styles.exitOfferGlow} />
+          <View style={styles.exitOfferGlowSecondary} />
+          <ScrollView
+            contentContainerStyle={[
+              styles.exitOfferContent,
+              { paddingTop: insets.top + 28, paddingBottom: insets.bottom + 24 },
+            ]}
+            showsVerticalScrollIndicator={false}
+          >
+            <Animated.View
+              entering={SlideInDown.delay(0).duration(320).springify().damping(20)}
+              style={styles.exitOfferEyebrowRow}
+            >
+              <View style={styles.exitOfferIcon}>
+                <Feather name="bar-chart-2" size={23} color="#31D15B" />
+              </View>
+              <Text style={styles.exitOfferEyebrow}>BEFORE YOU GO...</Text>
+            </Animated.View>
+            <Animated.Text
+              entering={FadeInUp.delay(150).duration(330)}
+              style={styles.exitOfferTitle}
+              accessibilityRole="header"
+            >
+              Your Next Chart Deserves Better Analysis.
+            </Animated.Text>
+            <Animated.Text
+              entering={FadeIn.delay(300).duration(320)}
+              style={styles.exitOfferDescription}
+            >
+              You've used your free analysis. Unlock continued access to AI-powered chart insights with FXSnap.
+            </Animated.Text>
+            <View style={styles.exitOfferBenefits}>
+              {[
+                'More AI chart analyses',
+                'Trading setup insights',
+                'Access to subscription features',
+              ].map((benefit, index) => (
+                <Animated.View
+                  key={benefit}
+                  entering={FadeInUp.delay(440 + index * 130).duration(300)}
+                  style={styles.exitOfferBenefit}
+                >
+                  <View style={styles.exitOfferBenefitIcon}>
+                    <Feather name="check" size={14} color="#31D15B" />
+                  </View>
+                  <Text style={styles.exitOfferBenefitText}>{benefit}</Text>
+                </Animated.View>
+              ))}
+            </View>
+            <Animated.View
+              entering={ZoomIn.delay(850).duration(300).springify().damping(16)}
+              style={styles.exitOfferActions}
+            >
+              <TouchableOpacity
+                style={styles.exitOfferPrimary}
+                onPress={handleExitOfferUnlock}
+                accessibilityRole="button"
+                accessibilityLabel="Unlock Unlimited Analyses"
+              >
+                <Text style={styles.exitOfferPrimaryText}>Unlock Unlimited Analyses</Text>
+                <Feather name="arrow-right" size={19} color="#FFFFFF" />
+              </TouchableOpacity>
+            </Animated.View>
+            <Animated.View entering={FadeIn.delay(1030).duration(280)}>
+              <TouchableOpacity
+                style={styles.exitOfferSecondary}
+                onPress={handleExitOfferLater}
+                accessibilityRole="button"
+                accessibilityLabel="Maybe Later"
+              >
+                <Text style={styles.exitOfferSecondaryText}>Maybe Later</Text>
+              </TouchableOpacity>
+            </Animated.View>
+          </ScrollView>
+        </View>
+      </Modal>
     </ScreenWrapper>
   );
 }
@@ -357,7 +383,7 @@ const styles = StyleSheet.create({
   },
   header: {
     width: '100%',
-    alignItems: 'flex-end',
+    alignItems: 'flex-start',
     paddingVertical: 8,
   },
   closeBtn: {
@@ -376,11 +402,12 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: 560,
     alignSelf: 'center',
-    paddingHorizontal: 20,
-    gap: 6,
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    gap: 8,
   },
   compactScrollContent: {
-    gap: 4,
+    gap: 6,
   },
   compactHeader: {
     paddingVertical: 0,
@@ -395,10 +422,69 @@ const styles = StyleSheet.create({
   },
   hero: {
     alignItems: 'center',
-    gap: 5,
+    gap: 8,
+    paddingHorizontal: 4,
   },
   compactHero: {
-    gap: 3,
+    gap: 6,
+  },
+  brandRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  brandMark: {
+    width: 31,
+    height: 30,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  candle: {
+    width: 7,
+    position: 'relative',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  candleWick: {
+    width: 2,
+    height: '100%',
+    backgroundColor: '#31D15B',
+  },
+  candleBody: {
+    position: 'absolute',
+    width: 6,
+    backgroundColor: '#31D15B',
+  },
+  brandName: {
+    fontSize: 23,
+    fontFamily: 'Inter_700Bold',
+    color: '#FFFFFF',
+  },
+  brandAccent: {
+    color: '#31D15B',
+  },
+  trustedRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 9,
+    marginTop: 3,
+  },
+  trustedText: {
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    color: '#BFC2C5',
+  },
+  trustedCount: {
+    color: '#31D15B',
+    fontFamily: 'Inter_600SemiBold',
+  },
+  sectionDivider: {
+    width: '100%',
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: '#34363A',
+    marginVertical: 1,
   },
   logoBox: {
     width: 42,
@@ -416,27 +502,28 @@ const styles = StyleSheet.create({
     borderRadius: 10,
   },
   title: {
-    fontSize: 25,
-    lineHeight: 29,
+    fontSize: 30,
+    lineHeight: 36,
     fontFamily: 'Inter_700Bold',
     color: '#FFFFFF',
     textAlign: 'center',
-    letterSpacing: -1,
+    letterSpacing: -0.7,
   },
   compactTitle: {
-    fontSize: 21,
-    lineHeight: 25,
+    fontSize: 27,
+    lineHeight: 32,
   },
   subtitle: {
+    maxWidth: 440,
     fontSize: 14,
-    lineHeight: 18,
+    lineHeight: 20,
     fontFamily: 'Inter_400Regular',
-    color: '#F4F4F4',
+    color: '#B9B9B9',
     textAlign: 'center',
   },
   compactSubtitle: {
     fontSize: 13,
-    lineHeight: 17,
+    lineHeight: 18,
   },
   usageBanner: {
     minHeight: 34,
@@ -549,120 +636,52 @@ const styles = StyleSheet.create({
   },
   featuresList: {
     width: '100%',
-    gap: 6,
-    backgroundColor: '#191919',
-    borderRadius: 20,
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-    borderWidth: 1,
-    borderColor: '#2B2B2B',
+    gap: 9,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
   },
   compactFeaturesList: {
-    gap: 4,
-    paddingVertical: 6,
-    paddingHorizontal: 8,
+    gap: 7,
+    paddingVertical: 2,
   },
   featureRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 9,
+  },
+  featureCheck: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#31D15B',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  featureText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+    fontFamily: 'Inter_400Regular',
+    color: '#D5D7D9',
+  },
+  planSection: {
+    width: '100%',
     gap: 10,
   },
-  featureIconWrap: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: '#132D20',
-    borderWidth: 1,
-    borderColor: '#2EDB82',
-    alignItems: 'center',
-    justifyContent: 'center',
+  compactPlanSection: {
+    gap: 8,
   },
-  compactFeatureIconWrap: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-  },
-  featureTextWrap: {
-    flex: 1,
-    gap: 2,
-  },
-  featureTitle: {
-    fontSize: 13,
-    lineHeight: 16,
+  planSectionTitle: {
+    fontSize: 17,
     fontFamily: 'Inter_700Bold',
     color: '#FFFFFF',
+    marginBottom: 1,
   },
-  compactFeatureTitle: {
-    fontSize: 11,
-    lineHeight: 14,
-  },
-  featureSubtitle: {
-    fontSize: 11,
-    lineHeight: 15,
-    fontFamily: 'Inter_400Regular',
-    color: '#B9B9B9',
-  },
-  compactFeatureSubtitle: {
-    fontSize: 10,
-    lineHeight: 13,
-  },
-  socialProof: {
-    fontSize: 13,
-    fontFamily: 'Inter_700Bold',
-    textAlign: 'center',
-    color: '#39D98A',
-    marginTop: 0,
-  },
-  compactSocialProof: {
-    fontSize: 11,
-  },
-  ratingRow: {
-    minHeight: 22,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-  },
-  ratingText: {
-    fontSize: 13,
-    fontFamily: 'Inter_600SemiBold',
-    color: '#F0F0F0',
-  },
-  ratingCount: {
-    fontSize: 12,
-    fontFamily: 'Inter_400Regular',
-    color: '#999999',
-  },
-  testimonial: {
+  plansRow: {
     width: '100%',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderLeftWidth: 2,
-    borderLeftColor: '#777777',
-    backgroundColor: '#111111',
-    gap: 3,
-  },
-  testimonialQuote: {
-    fontSize: 12,
-    lineHeight: 16,
-    fontFamily: 'Inter_400Regular',
-    color: '#E0E0E0',
-  },
-  testimonialAttribution: {
-    fontSize: 10,
-    fontFamily: 'Inter_500Medium',
-    color: '#929292',
-  },
-  plans: {
-    width: '100%',
-    gap: 8,
     flexDirection: 'row',
-    flexWrap: 'nowrap',
     alignItems: 'stretch',
-    justifyContent: 'space-between',
-  },
-  compactPlans: {
-    gap: 6,
+    gap: 7,
   },
   loadingState: {
     borderRadius: 18,
@@ -683,102 +702,107 @@ const styles = StyleSheet.create({
   planCard: {
     flex: 1,
     minWidth: 0,
-    minHeight: 104,
-    backgroundColor: '#141414',
-    borderRadius: 18,
-    paddingVertical: 14,
-    paddingHorizontal: 6,
-    borderWidth: 2,
+    minHeight: 132,
+    backgroundColor: '#191A1E',
+    borderRadius: 12,
+    paddingTop: 27,
+    paddingBottom: 10,
+    paddingHorizontal: 8,
+    borderWidth: 1,
     borderColor: '#2A2A2A',
     position: 'relative',
     alignItems: 'center',
     justifyContent: 'center',
   },
   compactPlanCard: {
-    minHeight: 76,
-    paddingVertical: 6,
+    minHeight: 122,
+    paddingTop: 25,
+    paddingBottom: 8,
+    paddingHorizontal: 5,
   },
   planCardUnavailable: {
-    opacity: 0.45,
+    opacity: 1,
   },
   monthlyPlanCard: {
-    borderColor: '#00FF9D',
-    backgroundColor: '#111111',
-    shadowColor: '#00FF9D',
-    shadowOpacity: 0.2,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 0 },
-    elevation: 8,
+    backgroundColor: '#111A15',
+    borderColor: '#31D15B',
+    borderWidth: 2,
+    transform: [{ scaleY: 1.04 }],
   },
   planCardSelected: {
-    borderColor: '#00FF9D',
+    borderColor: '#31D15B',
   },
   planTag: {
     position: 'absolute',
-    top: -12,
-    left: '50%',
-    transform: [{ translateX: -45 }],
-    backgroundColor: '#FFD60A',
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-    borderRadius: 10,
+    top: 5,
+    left: 3,
+    right: 3,
+    backgroundColor: '#31D15B',
+    paddingHorizontal: 3,
+    paddingVertical: 4,
+    borderRadius: 6,
+    alignItems: 'center',
+  },
+  popularTag: {
+    top: -13,
+    left: '10%',
+    right: '10%',
+  },
+  bestValueTag: {
+    backgroundColor: '#102818',
   },
   planTagText: {
-    fontSize: 11,
+    fontSize: 9,
     fontFamily: 'Inter_700Bold',
-    color: '#000000',
-    textTransform: 'uppercase',
+    color: '#D9F7E2',
+    textAlign: 'center',
+  },
+  planTextColumn: {
+    width: '100%',
+    alignItems: 'flex-start',
+    gap: 2,
+  },
+  monthlyPlanText: {
+    alignItems: 'center',
   },
   planName: {
     fontSize: 13,
-    fontFamily: 'Inter_600SemiBold',
+    fontFamily: 'Inter_500Medium',
     color: '#FFFFFF',
-    marginBottom: 5,
+    marginBottom: 3,
+    paddingHorizontal: 2,
   },
   planNameSelected: {
     color: '#FFFFFF',
   },
-  planRadioWrap: {
-    position: 'absolute',
-    right: 8,
-    top: 10,
-  },
-  planRadio: {
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    borderWidth: 2,
-    borderColor: '#7E7E7E',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  planRadioSelected: {
-    borderColor: '#3CEB8C',
-    backgroundColor: '#0D1E14',
-  },
-  planRadioDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#3CEB8C',
+  planDescription: {
+    fontSize: 10,
+    lineHeight: 14,
+    fontFamily: 'Inter_400Regular',
+    color: '#A9A9A9',
   },
   planPrice: {
-    fontSize: 14,
+    fontSize: 24,
     fontFamily: 'Inter_700Bold',
     color: '#FFFFFF',
-    lineHeight: 19,
+    lineHeight: 28,
+    paddingHorizontal: 1,
   },
   planPriceSelected: {
     color: '#FFFFFF',
   },
   planPeriod: {
-    fontSize: 10,
+    fontSize: 11,
     fontFamily: 'Inter_500Medium',
-    color: '#9A9A9A',
-    marginTop: 4,
+    color: '#D5D7D9',
+    paddingHorizontal: 2,
   },
-  planPeriodSelected: {
-    color: '#FFFFFF',
+  dailyPrice: {
+    fontSize: 10,
+    lineHeight: 14,
+    fontFamily: 'Inter_500Medium',
+    color: '#31D15B',
+    paddingHorizontal: 2,
   },
   actions: {
     gap: 6,
@@ -791,42 +815,219 @@ const styles = StyleSheet.create({
   },
   subscribeBtn: {
     width: '100%',
-    minHeight: 58,
-    paddingHorizontal: 18,
-    paddingVertical: 12,
-    backgroundColor: '#F5F5F5',
-    borderRadius: 14,
+    minHeight: 54,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    backgroundColor: '#19B941',
+    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'space-between',
     flexDirection: 'row',
   },
   compactSubscribeBtn: {
-    minHeight: 52,
+    minHeight: 50,
     paddingVertical: 8,
-    borderRadius: 12,
+    borderRadius: 10,
   },
   subscribeBtnText: {
-    fontSize: 22,
-    lineHeight: 28,
-    fontFamily: 'Inter_700Bold',
-    color: '#000000',
+    flex: 1,
+    textAlign: 'center',
+    fontSize: 17,
+    lineHeight: 23,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#FFFFFF',
   },
   compactSubscribeText: {
-    fontSize: 18,
-    lineHeight: 24,
+    fontSize: 16,
+    lineHeight: 22,
   },
   cancellationNote: {
-    fontSize: 14,
-    fontFamily: 'Inter_500Medium',
-    color: '#D1D1D1',
+    fontSize: 11,
+    lineHeight: 16,
+    fontFamily: 'Inter_400Regular',
+    color: '#A9A9A9',
+    textAlign: 'center',
+    maxWidth: 420,
+  },
+  restoreText: {
+    fontSize: 13,
+    fontFamily: 'Inter_400Regular',
+    color: '#A9A9A9',
+    textAlign: 'center',
+    marginTop: 0,
+  },
+  restoreLink: {
+    color: '#D5D7D9',
+    fontFamily: 'Inter_600SemiBold',
+    textDecorationLine: 'underline',
+  },
+  securityNote: {
+    width: '100%',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'flex-start',
+    gap: 8,
+    marginTop: 4,
+  },
+  securityNoteText: {
+    flex: 1,
+    maxWidth: 350,
+    fontSize: 11,
+    lineHeight: 16,
+    fontFamily: 'Inter_400Regular',
+    color: '#A9A9A9',
+  },
+  trialNote: {
+    maxWidth: 360,
+    fontSize: 11,
+    lineHeight: 16,
+    fontFamily: 'Inter_400Regular',
+    color: '#A9A9A9',
+    textAlign: 'right',
+  },
+  exitOfferBackdrop: {
+    flex: 1,
+    overflow: 'hidden',
+    backgroundColor: '#050806',
+  },
+  exitOfferScrim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0, 0, 0, 0.58)',
+  },
+  exitOfferContent: {
+    width: '100%',
+    maxWidth: 500,
+    minHeight: '100%',
+    alignSelf: 'center',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 28,
+    gap: 20,
+  },
+  exitOfferGlow: {
+    position: 'absolute',
+    top: '13%',
+    right: '-20%',
+    width: 340,
+    height: 340,
+    borderRadius: 170,
+    backgroundColor: 'rgba(49, 209, 91, 0.08)',
+    transform: [{ scaleX: 1.3 }],
+  },
+  exitOfferGlowSecondary: {
+    position: 'absolute',
+    bottom: '-12%',
+    left: '-28%',
+    width: 300,
+    height: 300,
+    borderRadius: 150,
+    backgroundColor: 'rgba(49, 209, 91, 0.055)',
+  },
+  exitOfferEyebrowRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 11,
+    marginBottom: 4,
+  },
+  exitOfferIcon: {
+    width: 42,
+    height: 42,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(49, 209, 91, 0.42)',
+    backgroundColor: 'rgba(49, 209, 91, 0.10)',
+  },
+  exitOfferEyebrow: {
+    fontSize: 11,
+    letterSpacing: 2,
+    fontFamily: 'Inter_700Bold',
+    color: '#74E78F',
+  },
+  exitOfferTitle: {
+    maxWidth: 440,
+    fontSize: 34,
+    lineHeight: 42,
+    fontFamily: 'Inter_700Bold',
+    color: '#FFFFFF',
     textAlign: 'center',
   },
-  footerNote: {
-    fontSize: 12,
+  exitOfferDescription: {
+    maxWidth: 420,
+    fontSize: 15,
+    lineHeight: 24,
     fontFamily: 'Inter_400Regular',
-    color: '#9A9A9A',
+    color: '#C0CAC3',
     textAlign: 'center',
+  },
+  exitOfferBenefits: {
+    width: '100%',
+    maxWidth: 360,
+    gap: 15,
     marginTop: 2,
+    marginBottom: 8,
+  },
+  exitOfferBenefit: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 13,
+  },
+  exitOfferBenefitIcon: {
+    width: 26,
+    height: 26,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 13,
+    backgroundColor: 'rgba(49, 209, 91, 0.13)',
+  },
+  exitOfferBenefitText: {
+    flex: 1,
+    fontSize: 15,
+    lineHeight: 21,
+    fontFamily: 'Inter_500Medium',
+    color: '#E5ECE7',
+  },
+  exitOfferActions: {
+    width: '100%',
+    maxWidth: 400,
+    marginTop: 4,
+  },
+  exitOfferPrimary: {
+    minHeight: 58,
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 19,
+    borderRadius: 15,
+    backgroundColor: '#18BC43',
+    shadowColor: '#31D15B',
+    shadowOpacity: 0.32,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 8,
+  },
+  exitOfferPrimaryText: {
+    flex: 1,
+    fontSize: 16,
+    lineHeight: 22,
+    fontFamily: 'Inter_700Bold',
+    color: '#FFFFFF',
+    textAlign: 'center',
+  },
+  exitOfferSecondary: {
+    minHeight: 48,
+    minWidth: 120,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 18,
+  },
+  exitOfferSecondaryText: {
+    fontSize: 14,
+    fontFamily: 'Inter_500Medium',
+    color: '#AAB5AD',
   },
   legalRow: {
     flexDirection: 'row',
@@ -836,17 +1037,13 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   legalText: {
-    fontSize: 14,
+    fontSize: 12,
     fontFamily: 'Inter_500Medium',
-    color: '#CFCFCF',
+    color: '#858585',
     textAlign: 'center',
   },
   legalLink: {
     paddingVertical: 8,
     paddingHorizontal: 4,
-  },
-  legalDivider: {
-    fontSize: 14,
-    color: '#7A7A7A',
   },
 });

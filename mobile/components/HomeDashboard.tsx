@@ -72,8 +72,12 @@ export default function HomeDashboard() {
   const openProtectedFeature = async (feature: ProtectedFeature, route: '/analysis' | '/strategy') => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     try {
-      const access = await checkFeatureAccess(feature, route);
+      const access = await checkFeatureAccess(feature, route, route === '/analysis');
       if (access.error) {
+        if (route === '/analysis') {
+          router.push(route);
+          return;
+        }
         Alert.alert('Unable to verify access', access.error);
         return;
       }

@@ -4,11 +4,11 @@ import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { createAuth, verifyAuth, verifyFreeAnalysisIdentity } = require('../server/auth.js');
-const { API_BASE_URL, resolveApiBaseUrl } = require('../services/apiAuth.ts');
+const { API_BASE_URL, resolveApiBaseUrl, normalizeServerAnalysisAccess } = require('../services/apiAuth.ts');
 const { normalizeChartAnalysisError } = require('../services/chartDetection.ts');
 const { hasRevenueCatEntitlement } = require('../services/revenuecatEntitlements.ts');
 const { normalizePaywallRemoteConfig } = require('../services/paywallConfig.ts');
-const { getFeatureAccessDecision, isPremiumFeatureRoute, shouldGuardFeatureRoute } = require('../services/featureAccess.ts');
+const { canViewFullAnalysis, getFeatureAccessDecision, isFreeAnalysisExhausted, isPremiumFeatureRoute, shouldGuardFeatureRoute } = require('../services/featureAccess.ts');
 const { getInstrument, INSTRUMENTS } = require('../services/instruments.ts');
 
 test('signed anonymous tokens round-trip and reject tampering', () => {
@@ -41,6 +41,33 @@ test('legacy signed sessions remain valid when their free-analysis identity clai
 test('all app API URL resolution targets the production backend', () => {
   assert.equal(API_BASE_URL, 'https://fxsnap.vercel.app');
   assert.equal(resolveApiBaseUrl(), 'https://fxsnap.vercel.app');
+});
+
+test('analysis access accepts legacy quota responses without opening exhausted access', () => {
+  assert.deepEqual(normalizeServerAnalysisAccess({
+    canAnalyze: true,
+    freeAnalysisAvailable: true,
+    analysisInProgress: false,
+    freeAnalysesUsed: 0,
+    freeAnalysisLimit: 1,
+  }), {
+    canAnalyze: true,
+    freeAnalysisAvailable: true,
+    analysisInProgress: false,
+    freeAnalysesUsed: 0,
+    freeAnalysisLimit: 1,
+  });
+  assert.deepEqual(normalizeServerAnalysisAccess({
+    canAnalyze: false,
+    freeAnalysisAvailable: false,
+  }), {
+    canAnalyze: false,
+    freeAnalysisAvailable: false,
+    analysisInProgress: false,
+    freeAnalysesUsed: 1,
+    freeAnalysisLimit: 1,
+  });
+  assert.equal(normalizeServerAnalysisAccess({ canAnalyze: true }), null);
 });
 
 test('paywall remote proof only accepts verified rating data and up to two attributed quotes', () => {
@@ -130,11 +157,23 @@ test('the multi-timeframe selector includes every requested market', () => {
 
 test('AI analysis is available to start and the server gates only after the free run is used', () => {
   assert.deepEqual(getFeatureAccessDecision('AI_ANALYSIS', false), { allowed: true, requiresPaywall: false });
-  assert.deepEqual(getFeatureAccessDecision('TRADE_SETUP', false), { allowed: false, requiresPaywall: true });
+  assert.deepEqual(getFeatureAccessDecision('TRADE_SETUP', false), { allowed: true, requiresPaywall: false });
   assert.deepEqual(getFeatureAccessDecision('STRATEGY_GENERATOR', false), { allowed: false, requiresPaywall: true });
   assert.deepEqual(getFeatureAccessDecision('AI_ANALYSIS', true), { allowed: true, requiresPaywall: false });
   assert.deepEqual(getFeatureAccessDecision('TRADE_SETUP', true), { allowed: true, requiresPaywall: false });
   assert.deepEqual(getFeatureAccessDecision('STRATEGY_GENERATOR', true), { allowed: true, requiresPaywall: false });
   assert.deepEqual(getFeatureAccessDecision('LOT_SIZE', false), { allowed: true, requiresPaywall: false });
   assert.deepEqual(getFeatureAccessDecision('LIVE_CHARTS', false), { allowed: true, requiresPaywall: false });
+});
+
+test('only a completed free analysis triggers the early paywall', () => {
+  assert.equal(isFreeAnalysisExhausted(0, 1, false), false);
+  assert.equal(isFreeAnalysisExhausted(1, 1, false), true);
+  assert.equal(isFreeAnalysisExhausted(1, 1, true), false);
+});
+
+test('the completed first free analysis displays all result details', () => {
+  assert.equal(canViewFullAnalysis(false, true), true);
+  assert.equal(canViewFullAnalysis(true, false), true);
+  assert.equal(canViewFullAnalysis(false, false), false);
 });

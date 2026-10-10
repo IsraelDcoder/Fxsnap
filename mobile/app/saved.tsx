@@ -253,7 +253,7 @@ export default function SavedScreen() {
           <TouchableOpacity
             style={[styles.runBtn, { backgroundColor: colors.primary }]}
             onPress={async () => {
-              const access = await checkFeatureAccess('AI_ANALYSIS', '/analysis');
+              const access = await checkFeatureAccess('AI_ANALYSIS', '/analysis', true);
               if (access.error) {
                 Alert.alert('Unable to verify access', access.error);
                 return;

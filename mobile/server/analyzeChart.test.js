@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { parsePriceOrRange: parseRRPriceOrRange } = require('./rr');
 const {
   buildStructuredObservations,
   evaluateDecisionEngine,
@@ -122,6 +123,45 @@ test('vision instructions reserve invalid_image for clearly non-chart or unrecog
   const prompt = getTraderSystemPrompt();
   assert.match(prompt, /invalid_image" only when the image is clearly not a trading chart/i);
   assert.match(prompt, /chart is recognizable.*no_trade/i);
+  assert.match(prompt, /forex, cryptocurrency, metals, indices, and commodities/i);
+  assert.match(prompt, /do not assume forex pip conventions/i);
+});
+
+test('comma-formatted crypto prices and ranges parse as full price values', () => {
+  assert.deepEqual(parseRRPriceOrRange('67,500'), { type: 'price', value: 67500 });
+  assert.deepEqual(parseRRPriceOrRange('67,500 - 68,000'), {
+    type: 'range',
+    low: 67500,
+    high: 68000,
+    midpoint: 67750,
+  });
+
+  const result = evaluateDecisionEngine({
+    raw: {
+      chart: { is_chart: true },
+      analysis: {
+        trend: 'bullish',
+        market_structure: 'higher highs and higher lows',
+        structure: 'uptrend',
+      },
+      zones: { support: '67,400' },
+      m15: {
+        confirmation: 'Bullish engulfing at support.',
+        bos: { detected: true },
+        liquidity: { swept: true },
+      },
+      trade_setup: {
+        type: 'buy',
+        entry_zone: '67,500',
+        stop_loss: '66,800',
+        take_profit: '69,600',
+      },
+    },
+  });
+
+  assert.equal(result.status, 'success');
+  assert.equal(result.trade_setup.risk_reward, 3);
+  assert.equal(result.trade_setup.entry_zone, '67,500');
 });
 
 test('canonical JSON parsing accepts object, string, and fenced JSON payloads', () => {
@@ -138,6 +178,37 @@ test('canonical JSON parsing accepts object, string, and fenced JSON payloads', 
   assert.equal(b.analysis.trend, 'bearish');
   assert.equal(c.trade_setup.type, 'buy');
   assert.equal(c.trade_setup.risk_reward, 2.2);
+});
+
+test('structured reasoning, support/resistance, and multiple targets survive normalization', () => {
+  const canonical = canonicalizeRawAnalysis({
+    status: 'success',
+    analysis: {
+      trend: 'bullish',
+      reasoning: ['Higher highs are visible.', 'Price is holding above support.'],
+    },
+    zones: { support: '1.1000', resistance: '1.1200' },
+    support_resistance: {
+      support: ['1.1000', '1.0950'],
+      resistance: ['1.1200'],
+    },
+    trade_setup: {
+      type: 'buy',
+      entry_zone: '1.1050',
+      stop_loss: '1.1000',
+      take_profit: '1.1150',
+      take_profit_levels: ['1.1150', '1.1200'],
+      risk_reward: 2,
+    },
+  });
+  const normalized = normalizeAnalysis(canonical);
+
+  assert.deepEqual(normalized.reasoning, ['Higher highs are visible.', 'Price is holding above support.']);
+  assert.deepEqual(normalized.support_resistance, {
+    support: ['1.1000', '1.0950'],
+    resistance: ['1.1200'],
+  });
+  assert.deepEqual(normalized.trade_setup.take_profit_levels, ['1.1150', '1.1200']);
 });
 
 test('invalid image yields invalid_image status and no trade', () => {
@@ -182,7 +253,14 @@ test('valid evidence with m15 confirmation and numeric levels -> success', () =>
     zones: { h1: '1.0950', h4: '1.0900' },
     m15: { inside_zone: true, liquidity: { swept: true }, confirmation: 'engulfing', bos: { detected: true }, rsi: { visible: true, confirms: true } },
     strategy: {},
-    trade_setup: { type: 'buy', entry_zone: '1.1000', stop_loss: '1.0900', take_profit: '1.1200', risk_reward: 2.0 },
+    trade_setup: {
+      type: 'buy',
+      entry_zone: '1.1000',
+      stop_loss: '1.0900',
+      take_profit: '1.1200',
+      take_profit_levels: ['1.1200', '1.1300'],
+      risk_reward: 2.0,
+    },
     confidence: 80,
     reasons: [],
   };
@@ -190,6 +268,7 @@ test('valid evidence with m15 confirmation and numeric levels -> success', () =>
   const res = applyMentorStrategy(normalized);
   assert.equal(res.status, 'success');
   assert.equal(res.trade_setup.type, 'buy');
+  assert.deepEqual(res.trade_setup.take_profit_levels, ['1.1200', '1.1300']);
   assert.ok(res.confidence >= 70);
 });
 

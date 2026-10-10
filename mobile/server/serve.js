@@ -209,6 +209,7 @@ const TradeAnalysisSchema = z.object({
     sentiment: z.enum(['bullish', 'bearish', 'neutral']),
     indicators: z.string().trim().max(200),
     notes: z.string().trim().max(400),
+    reasoning: z.array(z.string().trim().max(300)).max(5).optional(),
   }),
   zones: z.object({
     support: z.string().trim().max(200),
@@ -230,10 +231,16 @@ const TradeAnalysisSchema = z.object({
     entry_zone: z.string().trim().max(200),
     stop_loss: z.string().trim().max(200),
     take_profit: z.string().trim().max(200),
+    take_profit_levels: z.array(z.string().trim().max(200)).max(2).optional(),
     risk_reward: z.number().nullable(),
   }),
   confidence: z.number().min(0).max(100),
   reasons: z.array(z.string().trim().max(300)),
+  reasoning: z.array(z.string().trim().max(300)).max(5).optional(),
+  support_resistance: z.object({
+    support: z.array(z.string().trim().max(200)).max(8).optional(),
+    resistance: z.array(z.string().trim().max(200)).max(8).optional(),
+  }).optional(),
   market_data_timestamp: z.string().optional().nullable(),
   market_data_source: z.string().trim().optional().nullable(),
 });
@@ -289,6 +296,41 @@ function parseStringArray(value) {
   return [];
 }
 
+function parseTakeProfitLevels(explicitLevels, fallbackLevel) {
+  const levels = Array.isArray(explicitLevels)
+    ? explicitLevels
+    : Array.isArray(fallbackLevel)
+      ? fallbackLevel
+      : typeof fallbackLevel === 'string'
+        ? fallbackLevel.split(/[,;|\n]+/)
+        : fallbackLevel == null
+          ? []
+          : [fallbackLevel];
+  return levels
+    .map((level) => String(level ?? '').trim())
+    .filter((level) => level && !['none', 'not_clear', 'unknown'].includes(level.toLowerCase()))
+    .slice(0, 2);
+}
+
+function validatedTakeProfitLevels(tradeSetup, proposedLevels) {
+  if (!tradeSetup || tradeSetup.type === 'none') return [];
+  const primary = String(tradeSetup.take_profit || '').trim();
+  const primaryPrice = parsePriceOrRange(primary);
+  if (!primary || !primaryPrice) return [];
+
+  const levels = [primary];
+  const entryPrice = parsePriceOrRange(tradeSetup.entry_zone)?.mid;
+  const secondary = proposedLevels?.[1];
+  const secondaryPrice = secondary ? parsePriceOrRange(secondary)?.mid : null;
+  if (entryPrice == null || secondaryPrice == null) return levels;
+
+  const isFurtherTarget = tradeSetup.type === 'buy'
+    ? secondaryPrice > primaryPrice.mid && secondaryPrice > entryPrice
+    : secondaryPrice < primaryPrice.mid && secondaryPrice < entryPrice;
+  if (isFurtherTarget) levels.push(secondary);
+  return levels;
+}
+
 function parseIndicatorList(value) {
   if (Array.isArray(value)) {
     return value
@@ -331,7 +373,7 @@ function parseRiskReward(value) {
 function parsePriceOrRange(value) {
   if (value == null) return null;
   if (typeof value === 'number') return { min: value, max: value, mid: value };
-  const s = String(value).trim();
+  const s = String(value).trim().replace(/(\d),(?=\d{3}(?:,|\.|$))/g, '$1');
   if (!s) return null;
   // Accept ranges like '158.60-158.75', '158.60 – 158.75', '158.60–158.75', '158.60 to 158.75'
   const rangeMatch = s.match(/(\d+(?:\.\d+)?)[\s]*[-–—to]+[\s]*(\d+(?:\.\d+)?)/i);
@@ -431,6 +473,10 @@ function canonicalizeRawAnalysis(raw) {
   const zonesRaw = parseJsonField(raw.zones) || {};
   const strategyRaw = parseJsonField(raw.strategy) || {};
   const tradeRaw = parseJsonField(raw.trade_setup) || {};
+  const takeProfitLevels = parseTakeProfitLevels(tradeRaw.take_profit_levels, tradeRaw.take_profit);
+  const reasoning = parseStringArray(raw.reasoning).length
+    ? parseStringArray(raw.reasoning).slice(0, 5)
+    : parseStringArray(analysisRaw.reasoning).slice(0, 5);
 
   const chartQuality = canonicalizeEnum(chartRaw.chart_quality, {
     good: 'good',
@@ -510,6 +556,7 @@ function canonicalizeRawAnalysis(raw) {
       }) || 'neutral',
       indicators: ensureString(analysisRaw.indicators, 'none'),
       notes: ensureString(analysisRaw.notes),
+      reasoning: parseStringArray(analysisRaw.reasoning).slice(0, 5),
     },
     zones: {
       ...DEFAULT_ZONES,
@@ -568,11 +615,17 @@ function canonicalizeRawAnalysis(raw) {
       }) || 'none',
       entry_zone: ensureString(tradeRaw.entry_zone, 'none'),
       stop_loss: ensureString(tradeRaw.stop_loss, 'none'),
-      take_profit: ensureString(tradeRaw.take_profit, 'none'),
+      take_profit: takeProfitLevels[0] || ensureString(tradeRaw.take_profit, 'none'),
+      take_profit_levels: takeProfitLevels,
       risk_reward: parseRiskReward(tradeRaw.risk_reward),
     },
     confidence: parseConfidence(raw.confidence),
     reasons: parseStringArray(raw.reasons),
+    reasoning,
+    support_resistance: {
+      support: parseStringArray(raw.support_resistance?.support).slice(0, 8),
+      resistance: parseStringArray(raw.support_resistance?.resistance).slice(0, 8),
+    },
     whyNotNow: parseStringArray(raw.whyNotNow),
     dataLimitations: parseStringArray(raw.dataLimitations),
     market_data_timestamp: ensureNullableString(raw.market_data_timestamp),
@@ -617,6 +670,12 @@ function normalizeAnalysis(raw) {
     trade_setup: {
       ...DEFAULT_TRADE_SETUP,
       ...(trade || {}),
+      take_profit_levels: parseTakeProfitLevels(trade?.take_profit_levels, trade?.take_profit),
+    },
+    reasoning: Array.isArray(raw.reasoning) ? parseStringArray(raw.reasoning).slice(0, 5) : [],
+    support_resistance: {
+      support: Array.isArray(raw.support_resistance?.support) ? parseStringArray(raw.support_resistance.support).slice(0, 8) : [],
+      resistance: Array.isArray(raw.support_resistance?.resistance) ? parseStringArray(raw.support_resistance.resistance).slice(0, 8) : [],
     },
     confidence: parseConfidence(raw.confidence),
     reasons: Array.isArray(raw.reasons) ? parseStringArray(raw.reasons) : [],
@@ -1121,9 +1180,29 @@ function applyMentorStrategy(normalized) {
   // Start from normalized object and override with deterministic outputs
   const response = { ...normalized };
   response.status = evalRes.status || normalized.status || 'no_trade';
-  response.trade_setup = evalRes.trade_setup || { ...DEFAULT_TRADE_SETUP };
+  response.trade_setup = {
+    ...(evalRes.trade_setup || { ...DEFAULT_TRADE_SETUP }),
+    take_profit_levels: validatedTakeProfitLevels(
+      evalRes.trade_setup,
+      parseTakeProfitLevels(normalized.trade_setup?.take_profit_levels, normalized.trade_setup?.take_profit),
+    ),
+  };
   response.confidence = typeof evalRes.strategy_score === 'number' ? evalRes.strategy_score : (normalized.confidence || 0);
   response.reasons = Array.isArray(normalized.reasons) ? Array.from(new Set([...normalized.reasons, ...(evalRes.failed_conditions || [])])) : Array.from(new Set([...(evalRes.failed_conditions || [])]));
+  response.reasoning = mergeUniqueStrings([
+    ...(Array.isArray(normalized.reasoning) ? normalized.reasoning : []),
+    ...(Array.isArray(normalized.reasons) ? normalized.reasons : []),
+  ]).slice(0, 5);
+  response.support_resistance = {
+    support: mergeUniqueStrings([
+      ...(normalized.support_resistance?.support || []),
+      ...(normalized.zones?.support && normalized.zones.support !== 'not_clear' ? [normalized.zones.support] : []),
+    ]),
+    resistance: mergeUniqueStrings([
+      ...(normalized.support_resistance?.resistance || []),
+      ...(normalized.zones?.resistance && normalized.zones.resistance !== 'not_clear' ? [normalized.zones.resistance] : []),
+    ]),
+  };
 
   // Copy back high-level strategy flags
   response.strategy = {
@@ -1186,12 +1265,14 @@ IMPORTANT RULES:
 1. The analysis is based ONLY on the uploaded chart image.
 2. Do NOT assume real-time market data.
 3. Do NOT hallucinate unknown data (news, fundamentals, unseen candles).
-4. Set chart.is_chart=true when the image shows recognizable market-price chart content, including chart screenshots with platform controls, labels, or overlays.
-5. Return "invalid_image" only when the image is clearly not a trading chart, is blank/corrupted, or the chart content is completely unrecognizable.
-6. If a chart is recognizable but cropped, low-resolution, partially obscured, or has unreadable details, keep chart.is_chart=true, set chart_quality="poor", describe the limitation, and return "no_trade" rather than "invalid_image".
-7. If there is no clear, high-probability setup, return "no_trade". Do not confuse an unclear setup with an invalid image.
-8. You must be conservative. Avoid forcing trades. Confidence must reflect visible evidence, not guesswork.
-9. Keep explanations short, precise, and professional.
+4. Support every selected instrument, including forex, cryptocurrency, metals, indices, and commodities. Do not reject or misclassify a readable chart because it is not forex.
+5. Use the selected instrument and visible chart price scale; do not assume forex pip conventions for other asset classes.
+6. Set chart.is_chart=true when the image shows recognizable market-price chart content, including chart screenshots with platform controls, labels, or overlays.
+7. Return "invalid_image" only when the image is clearly not a trading chart, is blank/corrupted, or the chart content is completely unrecognizable.
+8. If a chart is recognizable but cropped, low-resolution, partially obscured, or has unreadable details, keep chart.is_chart=true, set chart_quality="poor", describe the limitation, and return "no_trade" rather than "invalid_image".
+9. If there is no clear, high-probability setup, return "no_trade". Do not confuse an unclear setup with an invalid image.
+10. You must be conservative. Avoid forcing trades. Confidence must reflect visible evidence, not guesswork.
+11. Keep explanations short, precise, and professional.
 
 ANALYSIS REQUIREMENTS:
 
@@ -1238,7 +1319,8 @@ OUTPUT FORMAT (STRICT JSON):
     "volume": "low | moderate | high | not_visible",
     "sentiment": "bullish | bearish | neutral",
     "indicators": "list or 'none'",
-    "notes": "short explanation"
+    "notes": "short explanation",
+    "reasoning": ["3 to 5 concise evidence-based analysis bullets"]
   },
 
   "zones": {
@@ -1247,11 +1329,21 @@ OUTPUT FORMAT (STRICT JSON):
     "liquidity": "description or 'not_clear'"
   },
 
+  "support_resistance": {
+    "support": ["visible support level or zone"],
+    "resistance": ["visible resistance level or zone"]
+  },
+
+  "reasoning": [
+    "3 to 5 concise bullets based only on visible trend, structure, key levels, pattern, or confluence"
+  ],
+
   "trade_setup": {
     "type": "buy | sell | none",
     "entry_zone": "zone or 'none'",
     "stop_loss": "level or 'none'",
-    "take_profit": "level or 'none'",
+    "take_profit": "first target level or 'none'",
+    "take_profit_levels": ["TP1", "TP2 when a second distinct, chart-supported target is visible"],
     "risk_reward": "number or 'none'"
   },
 
@@ -1262,6 +1354,9 @@ FINAL RULES:
 
 - If status = "no_trade", a conditional trade_setup may still be provided when directional bias is strong but the current price is not an actionable entry.
 - If status = "invalid_image", all fields except status can be null or minimal
+- Return only price levels that can be read or conservatively derived from visible chart structure. Never invent a second target, exact price, indicator, or confirmation that is not visible.
+- Calculate risk_reward from entry, stop_loss, and TP1 only. Use the same TP1 value in take_profit and as the first take_profit_levels item.
+- Include 3 to 5 short reasoning bullets when the chart provides enough evidence; state uncertainty and chart limitations explicitly.
 - Do NOT include extra text outside JSON
 - Do NOT explain beyond what is required`;
 }
@@ -1747,7 +1842,7 @@ async function callGeminiTrader(imageBase64, mimeType, pair, model, timeoutMs = 
     body: JSON.stringify({
       contents: [{
         parts: [
-          { text: `Analyze this forex chart image for ${pair || 'unknown'} with careful market structure and risk-aware trade setup.\n\n${getTraderSystemPrompt()}` },
+          { text: `Analyze this trading chart for the selected instrument ${pair || 'unknown'} with careful market structure and risk-aware trade setup. The selected instrument may be forex, cryptocurrency, metal, index, or commodity; do not apply forex-specific price-scale assumptions to non-forex markets.\n\n${getTraderSystemPrompt()}` },
           { inline_data: { mime_type: mimeType, data: imageBase64 } },
         ],
       }],
@@ -1822,7 +1917,7 @@ async function callGeminiTraderWithFallback(imageBase64, mimeType, pair, timeout
 async function callOpenRouterTrader(imageBase64, mimeType, pair, timeoutMs = 45000) {
   const messages = [
     { role: 'system', content: getTraderSystemPrompt() },
-    { role: 'user', content: [{ type: 'text', text: `Analyze this trading chart image for ${pair || 'unknown'}.` }, { type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageBase64}` } }] },
+    { role: 'user', content: [{ type: 'text', text: `Analyze this trading chart image for the selected instrument ${pair || 'unknown'}. The instrument may be forex, cryptocurrency, a metal, an index, or a commodity. Do not apply forex-specific price-scale assumptions to non-forex markets.` }, { type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageBase64}` } }] },
   ];
   return callVisionModel(messages, timeoutMs);
 }
@@ -2243,6 +2338,7 @@ async function getAnalysisAccess(req, res) {
     return sendJson(res, 200, {
       canAnalyze: premium === true || freeAnalysisAvailable,
       freeAnalysisAvailable,
+      analysisInProgress: premium !== true && !used && pending > 0,
       freeAnalysesUsed: used ? 1 : 0,
       freeAnalysisLimit: 1,
     });
