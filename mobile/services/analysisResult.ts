@@ -2,6 +2,27 @@ import type { AnalysisResult } from '@/context/AppContext';
 import type { ChartAnalysisResult } from '@/services/chartDetection';
 import { resolveAnalysisDirection } from '@/services/analysisDirection';
 
+export function getMissingTradeLevelsExplanation(analysis: Pick<AnalysisResult, 'status' | 'direction' | 'tradeSetup' | 'takeProfitLevels'>): string | null {
+  if (analysis.status !== 'no_trade' || !analysis.direction) return null;
+
+  const isAvailable = (value: string | number | undefined) => value != null
+    && String(value).trim() !== ''
+    && !['none', 'not_clear', 'unknown', 'n/a', 'na', '—'].includes(String(value).trim().toLowerCase());
+  const hasTakeProfit = (analysis.takeProfitLevels ?? []).some(isAvailable)
+    || isAvailable(analysis.tradeSetup?.takeProfit);
+  const missing = [
+    !isAvailable(analysis.tradeSetup?.entryZone) ? 'Entry' : null,
+    !isAvailable(analysis.tradeSetup?.stopLoss) ? 'Stop Loss' : null,
+    !hasTakeProfit ? 'Take Profit 1' : null,
+  ].filter((level): level is string => level != null);
+
+  if (missing.length === 0) return null;
+  const missingLevels = missing.length === 1
+    ? missing[0]
+    : `${missing.slice(0, -1).join(', ')} and ${missing[missing.length - 1]}`;
+  return `This is a ${analysis.direction} market read, not a validated trade setup. ${missingLevels} could not be established from the chart, so no prices have been inferred. Risk : Reward cannot be calculated without complete levels.`;
+}
+
 export function buildAnalysisResult(chart: ChartAnalysisResult, pair: string, imageUri?: string): AnalysisResult {
   const direction = resolveAnalysisDirection(
     chart.trade_setup.type,

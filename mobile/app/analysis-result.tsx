@@ -43,6 +43,7 @@ import { canViewFullAnalysis } from '@/services/featureAccess';
 import { getInstrument } from '@/services/instruments';
 import { shareAnalysisCardOnWeb } from '@/services/shareAnalysisCard';
 import { formatAnalysisDirection, resolveAnalysisDirection } from '@/services/analysisDirection';
+import { getMissingTradeLevelsExplanation } from '@/services/analysisResult';
 
 type ResultTab = 'analysis' | 'insights';
 
@@ -273,6 +274,9 @@ export default function AnalysisResultScreen() {
   const entryLevelText = entryLevel === '—' ? unavailableLevelLabel : entryLevel;
   const stopLevelText = stopLevel === '—' ? unavailableLevelLabel : stopLevel;
   const tp1LevelText = tp1Level === '—' ? unavailableLevelLabel : tp1Level;
+  const missingLevelsExplanation = currentAnalysis
+    ? getMissingTradeLevelsExplanation(currentAnalysis)
+    : null;
   const shareAnalysis = currentAnalysis && !hasFullAnalysisAccess ? {
     ...currentAnalysis,
     entry: entryLevel,
@@ -718,6 +722,12 @@ export default function AnalysisResultScreen() {
               <TradeLevelRow label="Take Profit 2" value={usableTargetLevels.length > 1 ? (hasFullAnalysisAccess ? tp2Level : '••••••') : 'Not provided'} color="#39E58C" locked={!hasFullAnalysisAccess && usableTargetLevels.length > 1} onPress={() => openLockedContent('tp2')} /><View style={styles.tableDivider} />
                 <TradeLevelRow label="Risk : Reward" value={hasFullAnalysisAccess ? riskRewardText : '••••'} color="#39E58C" locked={!hasFullAnalysisAccess} onPress={() => openLockedContent('risk-reward')} />
             </View>
+            {missingLevelsExplanation ? (
+              <View style={styles.missingLevelsNotice}>
+                <Feather name="info" size={16} color="#FFC857" />
+                <Text style={styles.missingLevelsText}>{missingLevelsExplanation}</Text>
+              </View>
+            ) : null}
             <View style={styles.levelsCard}>
               <TouchableOpacity style={styles.aiHeading} onPress={() => {
                 if (!hasFullAnalysisAccess) { openLockedContent('ai-analysis'); return; }
@@ -1017,6 +1027,8 @@ const styles = StyleSheet.create({
     borderColor: '#2A2A2A',
     gap: 14,
   },
+  missingLevelsNotice: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, padding: 14, borderRadius: 12, backgroundColor: '#211D12', borderWidth: 1, borderColor: '#574820' },
+  missingLevelsText: { flex: 1, color: '#E6D8B0', fontSize: 12, lineHeight: 18, fontFamily: 'Inter_400Regular' },
   cardTitle: {
     fontSize: 13,
     fontFamily: 'Inter_600SemiBold',

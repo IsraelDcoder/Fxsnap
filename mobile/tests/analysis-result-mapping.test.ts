@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { normalizeChartTradeSetup, type ChartAnalysisResult } from '../services/chartDetection';
-import { buildAnalysisResult } from '../services/analysisResult';
+import { buildAnalysisResult, getMissingTradeLevelsExplanation } from '../services/analysisResult';
 
 function chartResult(overrides: Partial<ChartAnalysisResult> = {}): ChartAnalysisResult {
   return {
@@ -216,4 +216,29 @@ test('renders a directional market read when analysis has no established trade l
   assert.equal(result.tradeSetup?.takeProfit, 'none');
   assert.equal(result.confidence, 71);
   assert.deepEqual(result.reasoning, apiPayload.reasoning);
+});
+
+test('explains missing directional no-trade levels without implying a fabricated setup', () => {
+  const result = buildAnalysisResult(chartResult({
+    status: 'no_trade',
+    trade_setup: {
+      type: 'none',
+      entry_zone: 'none',
+      stop_loss: 'none',
+      take_profit: 'none',
+      take_profit_levels: [],
+      risk_reward: 'none',
+    },
+  }), 'BTCUSD');
+
+  assert.equal(
+    getMissingTradeLevelsExplanation(result),
+    'This is a BUY market read, not a validated trade setup. Entry, Stop Loss and Take Profit 1 could not be established from the chart, so no prices have been inferred. Risk : Reward cannot be calculated without complete levels.',
+  );
+  assert.equal(getMissingTradeLevelsExplanation({ ...result, status: 'success' }), null);
+  assert.equal(getMissingTradeLevelsExplanation({
+    ...result,
+    tradeSetup: { ...result.tradeSetup!, entryZone: '1.1000', stopLoss: '1.0950' },
+    takeProfitLevels: ['1.1100'],
+  }), null);
 });
