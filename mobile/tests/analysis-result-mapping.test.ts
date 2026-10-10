@@ -182,3 +182,38 @@ test('maps technical analysis failures as failures without manufacturing analysi
   assert.equal(result.marketBias, 'neutral');
   assert.deepEqual(result.reasoning, []);
 });
+
+test('renders a directional market read when analysis has no established trade levels', () => {
+  const apiPayload = {
+    status: 'no_trade' as const,
+    analysis: {
+      trend: 'bearish' as const,
+      structure: 'Lower highs and lower lows are visible.',
+      volatility: 'moderate' as const,
+      volume: 'not_visible' as const,
+      sentiment: 'bearish' as const,
+      indicators: 'none',
+      notes: 'Exact entry and invalidation prices are not readable.',
+    },
+    zones: { support: 'not_clear', resistance: 'not_clear', liquidity: 'not_clear' },
+    reasoning: ['Visible swing structure is bearish.', 'Exact entry and stop prices are not established.'],
+    confidence: 71,
+  };
+  const tradeSetup = normalizeChartTradeSetup(apiPayload);
+  const result = buildAnalysisResult(chartResult({
+    ...apiPayload,
+    trade_setup: tradeSetup,
+    marketBias: 'bearish',
+    marketConfidence: apiPayload.confidence,
+    confidence: apiPayload.confidence,
+  }), 'GBP/USD');
+
+  assert.equal(result.status, 'no_trade');
+  assert.equal(result.marketBias, 'bearish');
+  assert.equal(result.direction, 'SELL');
+  assert.equal(result.tradeSetup?.entryZone, 'none');
+  assert.equal(result.tradeSetup?.stopLoss, 'none');
+  assert.equal(result.tradeSetup?.takeProfit, 'none');
+  assert.equal(result.confidence, 71);
+  assert.deepEqual(result.reasoning, apiPayload.reasoning);
+});

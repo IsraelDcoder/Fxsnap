@@ -215,18 +215,46 @@ test('provider responses require the minimum analysis contract before normalizat
     status: 'no_trade',
     chart: { is_chart: true },
     analysis: { trend: 'bullish' },
-    zones: {},
-    trade_setup: { type: 'none' },
     confidence: 64,
   };
 
   assert.equal(hasRequiredAnalysisPayload(validNoTrade), true);
   assert.equal(hasRequiredAnalysisPayload({ ...validNoTrade, chart: undefined }), false);
-  assert.equal(hasRequiredAnalysisPayload({ ...validNoTrade, trade_setup: undefined }), false);
   assert.equal(hasRequiredAnalysisPayload({ ...validNoTrade, analysis: { trend: 'uncertain' } }), false);
   assert.equal(hasRequiredAnalysisPayload({ ...validNoTrade, confidence: 'unknown' }), false);
   assert.equal(hasRequiredAnalysisPayload({ status: 'invalid_image' }), true);
   assert.equal(hasRequiredAnalysisPayload({}), false);
+});
+
+test('useful directional analysis survives when the provider omits setup levels and zones', () => {
+  const raw = {
+    status: 'success',
+    chart: { is_chart: true, chart_quality: 'good', price_scale_visible: true, candles_visible: true, has_enough_candles: true },
+    analysis: {
+      trend: 'bearish',
+      structure: 'Lower highs and lower lows are visible.',
+      sentiment: 'bearish',
+      notes: 'The chart supports a bearish market read, but price levels cannot be anchored reliably.',
+    },
+    confidence: 71,
+    reasoning: ['Visible swing structure is bearish.', 'Exact entry and invalidation prices are not readable.'],
+  };
+
+  assert.equal(hasRequiredAnalysisPayload(raw), true);
+  const canonical = canonicalizeRawAnalysis(raw);
+  const parsed = TradeAnalysisSchema.safeParse(canonical);
+  assert.equal(parsed.success, true);
+
+  const result = applyMentorStrategy(normalizeAnalysis(parsed.data));
+  assert.equal(result.status, 'no_trade');
+  assert.equal(result.marketBias, 'bearish');
+  assert.equal(result.trade_setup.type, 'none');
+  assert.equal(result.trade_setup.entry_zone, 'none');
+  assert.equal(result.trade_setup.stop_loss, 'none');
+  assert.equal(result.trade_setup.take_profit, 'none');
+  assert.ok(result.confidence > 0);
+  assert.match(result.analysis.notes, /cannot be anchored reliably/i);
+  assert.ok(result.reasoning.some((reason) => /bearish/i.test(reason)));
 });
 
 test('directional no-trade without price levels remains valid and never invents levels', () => {

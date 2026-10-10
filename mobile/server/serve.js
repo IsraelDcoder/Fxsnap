@@ -702,8 +702,6 @@ function hasRequiredAnalysisPayload(raw) {
 
   const chart = parseJsonField(raw.chart);
   const analysis = parseJsonField(raw.analysis);
-  const zones = parseJsonField(raw.zones);
-  const tradeSetup = parseJsonField(raw.trade_setup ?? raw.tradeSetup ?? raw.trade);
   const trend = canonicalizeEnumOr(analysis?.trend, {
     bullish: 'bullish',
     bearish: 'bearish',
@@ -714,8 +712,6 @@ function hasRequiredAnalysisPayload(raw) {
   return Boolean(
     chart && typeof chart.is_chart === 'boolean'
       && analysis && trend
-      && zones && typeof zones === 'object' && !Array.isArray(zones)
-      && tradeSetup && typeof tradeSetup === 'object' && !Array.isArray(tradeSetup)
       && Number.isFinite(confidence) && confidence >= 0 && confidence <= 100
   );
 }
