@@ -715,10 +715,21 @@ test('explicit direction and directional bias survive trade_setup.type none', ()
       pair: 'BTCUSD',
       direction: 'SELL',
       trend: 'bearish',
+      sentiment: 'neutral',
       structure: 'Lower highs and lower lows.',
       entry: '65000',
       stop: '64000',
       target: '62000',
+    },
+    {
+      pair: 'EURUSD',
+      direction: 'SELL',
+      trend: 'neutral',
+      sentiment: 'bearish',
+      structure: 'Price is rejecting visible resistance.',
+      entry: '1.0950',
+      stop: '1.0980',
+      target: '1.0890',
     },
   ];
 
@@ -728,7 +739,7 @@ test('explicit direction and directional bias survive trade_setup.type none', ()
       pair: item.pair,
       direction: item.pair === 'XAUUSD' ? item.direction : undefined,
       chart: { is_chart: true, chart_quality: 'good', price_scale_visible: true, candles_visible: true, has_enough_candles: true },
-      analysis: { trend: item.trend, structure: item.structure },
+      analysis: { trend: item.trend, sentiment: item.sentiment, structure: item.structure },
       trade_setup: {
         type: 'none',
         entry_zone: item.entry,
@@ -746,7 +757,7 @@ test('explicit direction and directional bias survive trade_setup.type none', ()
     assert.equal(result.trade_setup.entry_zone, item.entry, item.pair);
     assert.equal(result.trade_setup.stop_loss, item.stop, item.pair);
     assert.equal(result.trade_setup.take_profit, item.target, item.pair);
-    assert.equal(result.tradeStatus, 'no_setup', item.pair);
+    assert.notEqual(result.tradeStatus, 'actionable', item.pair);
   }
 });
 

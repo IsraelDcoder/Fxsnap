@@ -832,8 +832,9 @@ function normalizeText(value) {
 function deriveMarketBias(norm) {
   const trend = normalizeText(norm.analysis?.trend);
   const structureBias = normalizeText(norm.analysis?.structure_bias);
-  const bullish = trend === 'bullish' || structureBias === 'bullish';
-  const bearish = trend === 'bearish' || structureBias === 'bearish';
+  const sentiment = normalizeText(norm.analysis?.sentiment);
+  const bullish = trend === 'bullish' || structureBias === 'bullish' || sentiment === 'bullish';
+  const bearish = trend === 'bearish' || structureBias === 'bearish' || sentiment === 'bearish';
   if (bullish && bearish) return 'mixed';
   if (bullish) return 'bullish';
   if (bearish) return 'bearish';
