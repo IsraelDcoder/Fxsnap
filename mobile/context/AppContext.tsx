@@ -45,7 +45,7 @@ export interface AnalysisResult {
     trend: 'bullish' | 'bearish' | 'neutral';
     structure: string;
     volatility: 'low' | 'moderate' | 'high';
-    volume: 'low' | 'moderate' | 'high' | 'not_visible';
+    volume: 'low' | 'moderate' | 'high' | 'visible' | 'not_visible';
     sentiment: 'bullish' | 'bearish' | 'neutral';
     indicators: string;
     notes: string;
