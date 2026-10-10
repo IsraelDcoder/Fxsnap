@@ -13,6 +13,7 @@ const {
   canonicalizeRawAnalysis,
   normalizeAnalysis,
   TradeAnalysisSchema,
+  hasRequiredAnalysisPayload,
 } = require('./serve');
 
 test('multi-timeframe request requires two bounded supported chart images', () => {
@@ -131,6 +132,8 @@ test('vision instructions reserve invalid_image for clearly non-chart or unrecog
   assert.match(prompt, /no win probability has been established/i);
   assert.match(prompt, /do not call a move a breakout unless a candle close is visibly beyond a prior level/i);
   assert.match(prompt, /NO TRADE means no validated entry, not necessarily no directional bias/i);
+  assert.match(prompt, /always return those candidate levels in trade_setup/i);
+  assert.match(prompt, /Use trade_setup.type="none".*direction is unclear/i);
   assert.match(prompt, /Context: instrument, timeframe, chart quality/i);
   assert.match(prompt, /Structure: visible swing sequence and directional bias/i);
   assert.match(prompt, /Decision: BUY, SELL, or NO TRADE/i);
@@ -143,6 +146,17 @@ test('comma-formatted crypto prices and ranges parse as full price values', () =
     low: 67500,
     high: 68000,
     midpoint: 67750,
+  });
+  assert.deepEqual(canonicalizeRawAnalysis({
+    status: 'no_trade',
+    trade_setup: { type: 'sell', entry: '68,000', sl: '69,000', targets: ['65,500', '64,000'], rr: 2.5 },
+  }).trade_setup, {
+    type: 'sell',
+    entry_zone: '68,000',
+    stop_loss: '69,000',
+    take_profit: '65,500',
+    take_profit_levels: ['65,500', '64,000'],
+    risk_reward: 2.5,
   });
 
   const result = evaluateDecisionEngine({
@@ -188,6 +202,46 @@ test('canonical JSON parsing accepts object, string, and fenced JSON payloads', 
   assert.equal(b.analysis.trend, 'bearish');
   assert.equal(c.trade_setup.type, 'buy');
   assert.equal(c.trade_setup.risk_reward, 2.2);
+});
+
+test('provider responses require the minimum analysis contract before normalization', () => {
+  const validNoTrade = {
+    status: 'no_trade',
+    chart: { is_chart: true },
+    analysis: { trend: 'bullish' },
+    zones: {},
+    trade_setup: { type: 'none' },
+    confidence: 64,
+  };
+
+  assert.equal(hasRequiredAnalysisPayload(validNoTrade), true);
+  assert.equal(hasRequiredAnalysisPayload({ ...validNoTrade, chart: undefined }), false);
+  assert.equal(hasRequiredAnalysisPayload({ ...validNoTrade, trade_setup: undefined }), false);
+  assert.equal(hasRequiredAnalysisPayload({ ...validNoTrade, analysis: { trend: 'uncertain' } }), false);
+  assert.equal(hasRequiredAnalysisPayload({ ...validNoTrade, confidence: 'unknown' }), false);
+  assert.equal(hasRequiredAnalysisPayload({ status: 'invalid_image' }), true);
+  assert.equal(hasRequiredAnalysisPayload({}), false);
+});
+
+test('directional no-trade without price levels remains valid and never invents levels', () => {
+  const canonical = canonicalizeRawAnalysis({
+    status: 'no_trade',
+    chart: { is_chart: true, chart_quality: 'good', price_scale_visible: true, candles_visible: true, has_enough_candles: true },
+    analysis: { trend: 'bullish', sentiment: 'bullish', structure: 'Higher highs and higher lows.' },
+    zones: { support: '1.1000', resistance: '1.1100' },
+    trade_setup: { type: 'none', entry_zone: 'none', stop_loss: 'none', take_profit: 'none', risk_reward: null },
+    confidence: 64,
+  });
+  const result = applyMentorStrategy(normalizeAnalysis(canonical));
+
+  assert.equal(result.status, 'no_trade');
+  assert.equal(result.marketBias, 'bullish');
+  assert.equal(result.trade_setup.type, 'none');
+  assert.equal(result.trade_setup.entry_zone, 'none');
+  assert.equal(result.trade_setup.stop_loss, 'none');
+  assert.equal(result.trade_setup.take_profit, 'none');
+  assert.equal(result.tradeStatus, 'no_setup');
+  assert.equal(result.entryReadiness, 0);
 });
 
 test('incomplete model success is returned as an explainable no-trade analysis', () => {

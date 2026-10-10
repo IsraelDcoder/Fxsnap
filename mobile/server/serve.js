@@ -130,28 +130,6 @@ const DEFAULT_STRATEGY = {
   bos: 'none',
   rsi_confirmation: 'unavailable',
 };
-const DEFAULT_STRATEGY_METRICS = {
-  market_bias: 'neutral',
-  market_bias_confidence: 0,
-  market_structure: 'consolidation',
-  short_term_momentum: 'neutral',
-  price_location: 'unknown',
-  setup_direction: 'none',
-  setup_status: 'NO_SETUP',
-  setup_quality: 0,
-  setup_confidence: 0,
-  entry_quality: 0,
-  confirmation_status: 'awaiting_confirmation',
-  decision: 'NO_TRADE',
-  why_not_now: [],
-  confidence_boosts: [],
-  confidence_reductions: [],
-  data_limitations: [],
-  potential_bullish_scenario: '',
-  potential_bearish_scenario: '',
-  invalidation_conditions: [],
-};
-const SETUP_STATUSES = ['NO_SETUP', 'DEVELOPING', 'READY', 'CONFIRMED', 'INVALIDATED'];
 const DEFAULT_TRADE_SETUP = {
   type: 'none',
   entry_zone: 'none',
@@ -159,7 +137,6 @@ const DEFAULT_TRADE_SETUP = {
   take_profit: 'none',
   risk_reward: null,
 };
-const DEFAULT_REASONS = [];
 const FREE_ANALYSIS_KEY_PREFIX = 'fxsnap:free-analysis:v1:';
 const FREE_ANALYSIS_LOCK_TTL_SECONDS = 150;
 
@@ -287,18 +264,6 @@ const MultiTimeframeInputSchema = z.object({
   }),
 });
 
-function truncateText(value, maxLength = 2000) {
-  if (typeof value !== 'string') return '';
-  if (value.length <= maxLength) return value;
-  return `${value.slice(0, maxLength - 3)}...`;
-}
-
-function normalizeGeminiModelName(model) {
-  return String(model || '')
-    .replace(/^models\//i, '')
-    .trim();
-}
-
 function parseBoolean(value, fallback = false) {
   if (typeof value === 'boolean') return value;
   if (typeof value === 'string') {
@@ -372,7 +337,7 @@ function parseTakeProfitLevels(explicitLevels, fallbackLevel) {
     : Array.isArray(fallbackLevel)
       ? fallbackLevel
       : typeof fallbackLevel === 'string'
-        ? fallbackLevel.split(/[,;|\n]+/)
+        ? fallbackLevel.split(/(?:,\s+|,(?!\d{3}(?:\D|$))|[;|\n])+/)
         : fallbackLevel == null
           ? []
           : [fallbackLevel];
@@ -399,12 +364,6 @@ function parseIndicatorList(value) {
       .filter((item) => item.name.length > 0);
   }
   return [];
-}
-
-function computeEntryQuality(rr) {
-  if (typeof rr !== 'number' || Number.isNaN(rr) || rr <= 0) return 0;
-  const capped = Math.min(rr, 3);
-  return Math.round(Math.min(100, (capped / 3) * 100));
 }
 
 function mergeUniqueStrings(items) {
@@ -534,12 +493,15 @@ function canonicalizeRawAnalysis(raw) {
   const zonesRaw = parseJsonField(raw.zones) || {};
   const strategyRaw = parseJsonField(raw.strategy) || {};
   const tradeRaw = parseJsonField(raw.trade_setup ?? raw.tradeSetup ?? raw.trade) || {};
-  const rawTakeProfit = tradeRaw.take_profit ?? tradeRaw.takeProfit ?? tradeRaw.take_profit_price
-    ?? tradeRaw.tp ?? tradeRaw.target ?? raw.take_profit ?? raw.takeProfit ?? raw.tp ?? raw.target;
-  const takeProfitLevels = parseTakeProfitLevels(
-    tradeRaw.take_profit_levels ?? tradeRaw.takeProfitLevels ?? tradeRaw.targets,
-    rawTakeProfit,
-  );
+  const rawTakeProfit = [
+    tradeRaw.take_profit, tradeRaw.takeProfit, tradeRaw.take_profit_price,
+    tradeRaw.tp, tradeRaw.target, raw.take_profit, raw.takeProfit, raw.tp, raw.target,
+  ].find(hasMeaningfulLevel);
+  const explicitTakeProfitLevels = [
+    tradeRaw.take_profit_levels, tradeRaw.takeProfitLevels, tradeRaw.targets,
+    raw.take_profit_levels, raw.takeProfitLevels, raw.targets,
+  ].find((levels) => Array.isArray(levels) && levels.length > 0);
+  const takeProfitLevels = parseTakeProfitLevels(explicitTakeProfitLevels, rawTakeProfit);
   const reasoning = parseBoundedStringArray(raw.reasoning, 5, 300).length
     ? parseBoundedStringArray(raw.reasoning, 5, 300)
     : parseBoundedStringArray(analysisRaw.reasoning, 5, 300);
@@ -564,17 +526,19 @@ function canonicalizeRawAnalysis(raw) {
   const rawTradeType = tradeTypeCandidates.find((type) => type === 'buy' || type === 'sell')
     || tradeTypeCandidates.find((type) => type === 'none')
     || 'none';
-  const entryZone = boundedString(ensurePriceString(
-    tradeRaw.entry_zone ?? tradeRaw.entry ?? tradeRaw.entry_price ?? raw.entry_zone ?? raw.entry ?? raw.entry_price,
-  ), 'none');
-  const stopLoss = boundedString(ensurePriceString(
-    tradeRaw.stop_loss ?? tradeRaw.stopLoss ?? tradeRaw.stop_loss_price ?? tradeRaw.sl ?? tradeRaw.stop
-      ?? raw.stop_loss ?? raw.stopLoss ?? raw.sl,
-  ), 'none');
+  const entryZone = boundedString(ensurePriceString([
+    tradeRaw.entry_zone, tradeRaw.entry, tradeRaw.entry_price,
+    raw.entry_zone, raw.entry, raw.entry_price,
+  ].find(hasMeaningfulLevel)), 'none');
+  const stopLoss = boundedString(ensurePriceString([
+    tradeRaw.stop_loss, tradeRaw.stopLoss, tradeRaw.stop_loss_price, tradeRaw.sl, tradeRaw.stop,
+    raw.stop_loss, raw.stopLoss, raw.sl, raw.stop,
+  ].find(hasMeaningfulLevel)), 'none');
   const takeProfit = boundedString(ensurePriceString(takeProfitLevels[0] || rawTakeProfit), 'none');
-  let riskReward = parseRiskReward(
-    tradeRaw.risk_reward ?? tradeRaw.riskReward ?? tradeRaw.rr ?? raw.risk_reward ?? raw.riskReward ?? raw.rr,
-  );
+  let riskReward = parseRiskReward([
+    tradeRaw.risk_reward, tradeRaw.riskReward, tradeRaw.rr,
+    raw.risk_reward, raw.riskReward, raw.rr,
+  ].find(hasMeaningfulLevel));
 
   const message = boundedString(raw.message, '', 1000);
   const reasons = parseBoundedStringArray(raw.reasons, 20, 300);
@@ -719,6 +683,42 @@ function canonicalizeRawAnalysis(raw) {
     market_data_timestamp: ensureNullableString(raw.market_data_timestamp),
     market_data_source: ensureNullableString(raw.market_data_source),
   };
+}
+
+function hasRequiredAnalysisPayload(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
+  const status = canonicalizeEnumOr(raw.status, {
+    success: 'success',
+    completed: 'success',
+    analysis_complete: 'success',
+    no_trade: 'no_trade',
+    'no trade': 'no_trade',
+    wait: 'no_trade',
+    waiting: 'no_trade',
+    invalid_image: 'invalid_image',
+    'invalid image': 'invalid_image',
+  }, ['success', 'no_trade', 'invalid_image'], null);
+  if (!status) return false;
+  if (status === 'invalid_image') return true;
+
+  const chart = parseJsonField(raw.chart);
+  const analysis = parseJsonField(raw.analysis);
+  const zones = parseJsonField(raw.zones);
+  const tradeSetup = parseJsonField(raw.trade_setup ?? raw.tradeSetup ?? raw.trade);
+  const trend = canonicalizeEnumOr(analysis?.trend, {
+    bullish: 'bullish',
+    bearish: 'bearish',
+    neutral: 'neutral',
+  }, ['bullish', 'bearish', 'neutral'], null);
+  const confidence = Number(raw.confidence);
+
+  return Boolean(
+    chart && typeof chart.is_chart === 'boolean'
+      && analysis && trend
+      && zones && typeof zones === 'object' && !Array.isArray(zones)
+      && tradeSetup && typeof tradeSetup === 'object' && !Array.isArray(tradeSetup)
+      && Number.isFinite(confidence) && confidence >= 0 && confidence <= 100
+  );
 }
 
 function normalizeAnalysis(raw) {
@@ -888,45 +888,12 @@ function deriveConfirmationStatus(norm, m15) {
   return 'INVALIDATED';
 }
 
-function determineWhyNotNow(norm, derived) {
-  const reasons = [];
-  if (derived.priceLocation === 'middle_of_range') reasons.push('Price is in the middle of the range rather than near a high-probability zone.');
-  if (derived.confirmationStatus === 'DEVELOPING') reasons.push('A setup exists but confirmation is still developing.');
-  if (derived.confirmationStatus === 'INVALIDATED') reasons.push('The setup has been invalidated by the current structure or momentum.');
-  if (derived.priceLocation === 'near_resistance' && derived.setupDirection === 'buy') reasons.push('Entry is too close to resistance.');
-  if (derived.priceLocation === 'near_support' && derived.setupDirection === 'sell') reasons.push('Entry is too close to support.');
-  if (norm.trade_setup?.risk_reward != null && Number(norm.trade_setup.risk_reward) < 1.5) reasons.push('Risk/reward is below the minimum tolerance.');
-  if (!norm.zones || (!norm.zones.support && !norm.zones.resistance)) reasons.push('Key levels are not clearly defined on the chart.');
-  return mergeUniqueStrings(reasons);
-}
-
 function deriveDataLimitations(norm) {
   const limits = [];
   if (!norm.analysis?.volume || normalizeText(norm.analysis.volume) === 'not_visible') limits.push('Volume data is not available.');
   if (!norm.analysis?.indicators || normalizeText(norm.analysis.indicators) === 'none') limits.push('Indicator data is not available.');
   if (!norm.timeframe && !norm.chart?.timeframe) limits.push('Timeframe could not be identified.');
   return mergeUniqueStrings(limits);
-}
-
-function computeSetupScores(norm, derived, m15) {
-  const confirmationWeight = derived.confirmationStatus === 'CONFIRMED' ? 25 : derived.confirmationStatus === 'DEVELOPING' ? 12 : 0;
-  const locationWeight = derived.priceLocation === 'at_support' || derived.priceLocation === 'at_resistance' ? 20 : derived.priceLocation === 'near_support' || derived.priceLocation === 'near_resistance' ? 12 : derived.priceLocation === 'middle_of_range' ? 2 : 8;
-  const momentumWeight = derived.shortTermMomentum === 'strong_bullish' || derived.shortTermMomentum === 'strong_bearish' ? 15 : derived.shortTermMomentum === 'bullish' || derived.shortTermMomentum === 'bearish' ? 10 : 5;
-  const structureWeight = derived.marketStructure === 'uptrend' || derived.marketStructure === 'downtrend' ? 18 : derived.marketStructure === 'range' ? 12 : 8;
-
-  const rr = typeof norm.trade_setup?.risk_reward === 'number' ? norm.trade_setup.risk_reward : parseRiskReward(norm.trade_setup?.risk_reward);
-  const rrWeight = rr >= 2 ? 20 : rr >= 1.5 ? 10 : rr > 0 ? 2 : 0;
-  const rrPenalty = rr > 0 && rr < 1.5 ? -12 : 0;
-
-  const dataPenalty = deriveDataLimitations(norm).length > 0 ? -8 : 0;
-  const poorSetupPenalty = derived.confirmationStatus === 'INVALIDATED' ? -15 : 0;
-
-  const rawScore = 10 + confirmationWeight + locationWeight + momentumWeight + structureWeight + rrWeight + dataPenalty + rrPenalty + poorSetupPenalty;
-  const score = Math.max(0, Math.min(100, Math.round(rawScore)));
-  const entryQuality = computeEntryQuality(rr);
-  const setupQuality = Math.max(0, Math.min(100, score + (derived.priceLocation === 'at_support' || derived.priceLocation === 'at_resistance' ? 5 : 0)));
-
-  return { score, setupQuality, entryQuality, rr: rr || 0 };
 }
 
 /** Deterministic mentor-rule evaluation.
@@ -1422,7 +1389,13 @@ Use this order for every chart:
 
 TRADE DECISION RULES:
 
-Only return a trade if ALL conditions are met:
+Keep directional bias, a proposed conditional setup, and trade validation separate.
+
+When a readable chart shows a clear bullish or bearish direction and the visible price scale and structure support defensible candidate levels, always return those candidate levels in trade_setup, even when the setup is not actionable yet. Set trade_setup.type to buy or sell for that candidate and set status to no_trade when any execution condition below is unmet. Include entry_zone, stop_loss, take_profit, and the AI-calculated risk_reward when they can be supported by visible chart evidence. State the exact unmet condition in reasons or reasoning.
+
+Use trade_setup.type="none" and "none" for all candidate price fields only when direction is unclear/conflicting, required values cannot be read or supported by visible structure, or there is genuinely no candidate setup. Never invent or estimate exact prices just to fill fields.
+
+A trade is actionable only if ALL conditions are met:
 - Clear trend or strong range structure
 - Clear entry zone
 - Logical stop loss placement
@@ -1430,7 +1403,7 @@ Only return a trade if ALL conditions are met:
 - Minimum risk-reward ratio of 1.5, calculated from the proposed entry, stop, and TP1
 - No conflicting signals
 
-If any condition fails → return "no_trade"
+If any condition fails, return status="no_trade" but preserve any defensible directional candidate levels as described above.
 
 OUTPUT FORMAT (STRICT JSON):
 
@@ -1490,7 +1463,7 @@ OUTPUT FORMAT (STRICT JSON):
 
 FINAL RULES:
 
-- If status = "no_trade", a conditional trade_setup may still be provided when directional bias is strong but the current price is not an actionable entry.
+- If status = "no_trade" and a conditional candidate is supported by visible prices, include its levels while keeping the result non-actionable.
 - If status = "invalid_image", all fields except status can be null or minimal
 - Return only price levels that can be read or conservatively derived from visible chart structure. Never invent an exact price, indicator, or confirmation that is not visible.
 - Return exactly one take-profit target. Calculate risk_reward from the same entry, stop_loss, and take_profit values.
@@ -1963,102 +1936,7 @@ async function callVisionModel(messages, timeoutMs = 30000) {
  * the existing fetchWithTimeout helper. Primary/fallback Gemini models are
  * defined by GEMINI_VISION_MODEL_PRIMARY and GEMINI_VISION_MODEL_FALLBACK.
  */
-const DEFAULT_GEMINI_PRIMARY_MODEL = 'gemini-3.5-flash';
-const DEFAULT_GEMINI_FALLBACK_MODEL = 'gemini-3.5';
-
-async function callGeminiTrader(imageBase64, mimeType, pair, model, timeoutMs = 30000) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey || apiKey.startsWith('replace_')) {
-    throw new Error('Gemini API key is not configured.');
-  }
-
-  const modelName = normalizeGeminiModelName(model || process.env.GEMINI_VISION_MODEL_PRIMARY || DEFAULT_GEMINI_PRIMARY_MODEL);
-  if (!modelName) {
-    throw new Error('Gemini model name is not configured.');
-  }
-
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent`;
-  const response = await fetchWithTimeout(url, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-goog-api-key': apiKey,
-    },
-    body: JSON.stringify({
-      contents: [{
-        parts: [
-          { text: `Analyze this trading chart for the selected instrument ${pair || 'unknown'} with careful market structure and risk-aware trade setup. The selected instrument may be forex, cryptocurrency, metal, index, or commodity; do not apply forex-specific price-scale assumptions to non-forex markets.\n\n${getTraderSystemPrompt()}` },
-          { inline_data: { mime_type: mimeType, data: imageBase64 } },
-        ],
-      }],
-      generationConfig: { response_mime_type: 'application/json', temperature: 0.2 },
-    }),
-  }, timeoutMs);
-
-  const rawText = await response.text();
-  const payload = parseJsonPayload(rawText);
-  logProviderResponse('gemini', modelName, {
-    httpStatus: response.status,
-    rawText,
-    parsedJson: payload,
-    error: response.ok ? null : payload?.error?.message || `Gemini HTTP ${response.status}`,
-  });
-
-  if (!response.ok) {
-    throw new Error(payload?.error?.message || `Gemini HTTP ${response.status}`);
-  }
-
-  const text = String(
-    payload?.candidates?.[0]?.content?.parts?.map((part) => part.text || '').filter(Boolean).join('') || ''
-  ).trim();
-  if (!text) throw new Error('Gemini returned an empty response.');
-
-  const parsed = parseJsonPayload(text);
-  if (!parsed) {
-    logProviderResponse('gemini', modelName, {
-      httpStatus: response.status,
-      rawText: text,
-      error: 'Could not parse Gemini JSON from text response.',
-    });
-  }
-  return parsed;
-}
-
-async function callGeminiTraderWithFallback(imageBase64, mimeType, pair, timeoutMs = 30000) {
-  const models = [
-    process.env.GEMINI_VISION_MODEL_PRIMARY || DEFAULT_GEMINI_PRIMARY_MODEL,
-    process.env.GEMINI_VISION_MODEL_FALLBACK || DEFAULT_GEMINI_FALLBACK_MODEL,
-  ];
-
-  let lastError = null;
-  for (let modelIndex = 0; modelIndex < models.length; modelIndex += 1) {
-    const model = models[modelIndex];
-    const isFallback = modelIndex === 1;
-
-    for (let attempt = 1; attempt <= 2; attempt += 1) {
-      try {
-        console.log(`[Chart AI] Gemini ${isFallback ? 'fallback' : 'primary'} model ${model} attempt ${attempt}`);
-        const result = await callGeminiTrader(imageBase64, mimeType, pair, model, timeoutMs);
-        if (attempt > 1) {
-          console.log(`[Chart AI] Gemini model ${model} succeeded after retry ${attempt}`);
-        }
-        return result;
-      } catch (error) {
-        lastError = error;
-        console.error(`[Chart AI] Gemini model failure: ${model} attempt ${attempt} - ${(error instanceof Error ? error.message : String(error))}`);
-        if (attempt < 2) continue;
-      }
-    }
-
-    if (isFallback) {
-      console.error(`[Chart AI] Falling back to Gemini model: ${model}`);
-    }
-  }
-
-  throw lastError || new Error('Gemini analysis failed after retries and fallback.');
-}
-
-/** OpenRouter vision fallback — single-pass disciplined chart analysis. */
+/** OpenRouter vision analysis — single-pass disciplined chart analysis. */
 async function callOpenRouterTrader(imageBase64, mimeType, pair, timeoutMs = 45000) {
   const messages = [
     { role: 'system', content: getTraderSystemPrompt() },
@@ -2250,6 +2128,17 @@ async function analyzeChart(req, res) {
         console.error('[Chart AI] Provider failed:', lastError);
         const message = `Chart AI could not analyze the image. ${(lastError instanceof Error ? lastError.message : 'unknown provider error')}`;
         return sendJson(res, 200, aiUnavailableResponse(input, message));
+      }
+
+      if (!hasRequiredAnalysisPayload(raw)) {
+        console.error('[Chart AI] Provider returned an incomplete analysis payload.', {
+          keys: Object.keys(raw),
+          hasChart: Boolean(raw.chart && typeof raw.chart === 'object'),
+          hasAnalysis: Boolean(raw.analysis && typeof raw.analysis === 'object'),
+          hasZones: Boolean(raw.zones && typeof raw.zones === 'object'),
+          hasTradeSetup: Boolean(raw.trade_setup || raw.tradeSetup || raw.trade),
+        });
+        return sendJson(res, 200, aiInvalidResponse(input, 'The analysis engine returned an incomplete response. Please retry the analysis.'));
       }
 
       const canonical = canonicalizeRawAnalysis(raw);
@@ -2784,3 +2673,4 @@ module.exports.MultiTimeframeInputSchema = MultiTimeframeInputSchema;
 module.exports.TradeAnalysisSchema = TradeAnalysisSchema;
 module.exports.enforceMultiTimeframeAlignment = enforceMultiTimeframeAlignment;
 module.exports.enforceValidationRules = enforceValidationRules;
+module.exports.hasRequiredAnalysisPayload = hasRequiredAnalysisPayload;

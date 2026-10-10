@@ -147,6 +147,90 @@ function emptyAnalysis(status: AnalysisStatus, message: string): ChartAnalysisRe
   };
 }
 
+function firstAnalysisValue(...values: unknown[]): unknown {
+  return values.find((value) => value != null && String(value).trim() !== ''
+    && !['none', 'not_clear', 'unknown', 'n/a', 'na'].includes(String(value).trim().toLowerCase()));
+}
+
+export function normalizeChartTradeSetup(payload: unknown): ChartAnalysisResult['trade_setup'] {
+  const root = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+  const nested = root.trade_setup && typeof root.trade_setup === 'object'
+    ? root.trade_setup as Record<string, unknown>
+    : root.tradeSetup && typeof root.tradeSetup === 'object'
+      ? root.tradeSetup as Record<string, unknown>
+      : {};
+  const rawTarget = firstAnalysisValue(
+    nested.take_profit,
+    nested.takeProfit,
+    nested.take_profit_price,
+    nested.tp,
+    nested.target,
+    root.take_profit,
+    root.takeProfit,
+    root.tp,
+    root.target,
+  );
+  const rawTargetLevels = [
+    nested.take_profit_levels,
+    nested.takeProfitLevels,
+    nested.targets,
+    root.take_profit_levels,
+    root.takeProfitLevels,
+    root.targets,
+  ].find((levels) => Array.isArray(levels) && levels.length > 0);
+  const splitTargetList = (value: string) => value.split(/(?:,\s+|,(?!\d{3}(?:\D|$))|[;|\n])+/)
+    .map((level) => level.trim())
+    .filter((level) => firstAnalysisValue(level) != null)
+    .slice(0, 2);
+  const takeProfitLevels = Array.isArray(rawTargetLevels)
+    ? rawTargetLevels.map((level) => String(level).trim()).filter((level) => firstAnalysisValue(level) != null).slice(0, 2)
+    : Array.isArray(rawTarget)
+      ? rawTarget.map((level) => String(level).trim()).filter((level) => firstAnalysisValue(level) != null).slice(0, 2)
+      : typeof rawTarget === 'string'
+        ? splitTargetList(rawTarget)
+        : rawTarget == null ? [] : [String(rawTarget).trim()];
+  const rawType = String(firstAnalysisValue(
+    nested.type,
+    nested.trade_type,
+    nested.direction,
+    root.trade_type,
+    root.trade_direction,
+    root.direction,
+  ) ?? 'none').trim().toLowerCase();
+  const type = ['buy', 'long'].includes(rawType) ? 'buy'
+    : ['sell', 'short'].includes(rawType) ? 'sell' : 'none';
+  const entry = firstAnalysisValue(
+    nested.entry_zone,
+    nested.entry,
+    nested.entry_price,
+    root.entry_zone,
+    root.entry,
+    root.entry_price,
+  );
+  const stop = firstAnalysisValue(
+    nested.stop_loss,
+    nested.stopLoss,
+    nested.stop_loss_price,
+    nested.sl,
+    nested.stop,
+    root.stop_loss,
+    root.stopLoss,
+    root.sl,
+    root.stop,
+  );
+  const takeProfit = takeProfitLevels[0] ?? rawTarget;
+  const rawRiskReward = firstAnalysisValue(nested.risk_reward, nested.riskReward, nested.rr, root.risk_reward, root.riskReward, root.rr);
+
+  return {
+    type,
+    entry_zone: entry == null ? 'none' : String(entry).trim(),
+    stop_loss: stop == null ? 'none' : String(stop).trim(),
+    take_profit: takeProfit == null ? 'none' : String(takeProfit).trim(),
+    take_profit_levels: takeProfitLevels,
+    risk_reward: typeof rawRiskReward === 'number' || typeof rawRiskReward === 'string' ? rawRiskReward : 'none',
+  };
+}
+
 /**
  * Send a chart image to the backend for strict, disciplined price-action
  * analysis. The server enforces the full system prompt + validation layer and
@@ -198,17 +282,12 @@ async function sendChartAnalysis(path: string, body: Record<string, unknown>): P
       ? payload.status
       : 'ai_unavailable';
 
-    if (status === 'ai_unavailable') {
+    if (status === 'ai_unavailable' || status === 'ai_invalid_response') {
       return emptyAnalysis(status, payload.message || 'Chart AI is unavailable right now. Please try again shortly.');
     }
 
-    const rawTakeProfit = payload.trade_setup?.take_profit ?? payload.take_profit;
-    const rawTakeProfitLevels = payload.trade_setup?.take_profit_levels ?? (Array.isArray(rawTakeProfit) ? rawTakeProfit : undefined);
-    const takeProfitLevels = Array.isArray(rawTakeProfitLevels)
-      ? rawTakeProfitLevels.map((level: unknown) => String(level).trim()).filter(Boolean)
-      : typeof rawTakeProfit === 'string'
-        ? rawTakeProfit.split(/[,|]/).map((level: string) => level.trim()).filter(Boolean)
-        : [];
+    const tradeSetup = normalizeChartTradeSetup(payload);
+    const takeProfitLevels = tradeSetup.take_profit_levels ?? [];
     const rawSeries = payload.price_series ?? payload.chart_data?.price_series;
     const priceSeries = Array.isArray(rawSeries)
       ? rawSeries.map((point: unknown) => {
@@ -252,14 +331,7 @@ async function sendChartAnalysis(path: string, body: Record<string, unknown>): P
         resistance: payload.zones?.resistance || 'not_clear',
         liquidity: payload.zones?.liquidity || 'not_clear',
       },
-      trade_setup: {
-        type: payload.trade_setup?.type || 'none',
-        entry_zone: payload.trade_setup?.entry_zone || 'none',
-        stop_loss: payload.trade_setup?.stop_loss || 'none',
-        take_profit: typeof rawTakeProfit === 'string' ? rawTakeProfit : takeProfitLevels.join(', ') || 'none',
-        take_profit_levels: takeProfitLevels,
-        risk_reward: payload.trade_setup?.risk_reward ?? 'none',
-      },
+      trade_setup: tradeSetup,
       marketBias: payload.marketBias || 'neutral',
       marketBiasConfidence: Math.max(0, Math.min(100, Number(payload.marketBiasConfidence) || 0)),
       tradeStatus: payload.tradeStatus || 'no_setup',
