@@ -373,6 +373,43 @@ test('non-actionable AI no-trade response preserves its validated candidate leve
   assert.ok(result.reasons.some((reason) => /confirmation/i.test(reason)));
 });
 
+test('candidate levels without a directional bias remain visible without throwing or becoming a trade', () => {
+  const canonical = canonicalizeRawAnalysis({
+    status: 'no_trade',
+    chart: { is_chart: true, chart_quality: 'good', price_scale_visible: true, candles_visible: true, has_enough_candles: true },
+    analysis: {
+      trend: 'neutral',
+      sentiment: 'neutral',
+      structure: 'The chart is consolidating without a clear direction.',
+    },
+    zones: { support: '1.0800', resistance: '1.0900' },
+    trade_setup: {
+      type: 'none',
+      entry_zone: '1.0850',
+      stop_loss: '1.0880',
+      take_profit: '1.0800',
+      take_profit_levels: ['1.0800', '1.0760'],
+      risk_reward: '1:1.67',
+    },
+    confidence: 52,
+    reasoning: ['Price is consolidating between visible levels.'],
+    reasons: ['No directional bias is established.'],
+  });
+  const parsed = TradeAnalysisSchema.safeParse(canonical);
+  assert.equal(parsed.success, true);
+
+  const result = applyMentorStrategy(normalizeAnalysis(parsed.data));
+  assert.equal(result.status, 'no_trade');
+  assert.equal(result.trade_setup.type, 'none');
+  assert.equal(result.trade_setup.entry_zone, '1.0850');
+  assert.equal(result.trade_setup.stop_loss, '1.0880');
+  assert.equal(result.trade_setup.take_profit, '1.0800');
+  assert.deepEqual(result.trade_setup.take_profit_levels, ['1.0800', '1.0760']);
+  assert.equal(result.trade_setup.risk_reward, 1.67);
+  assert.equal(result.tradeStatus, 'no_setup');
+  assert.ok(result.reasons.some((reason) => /directional bias/i.test(reason)));
+});
+
 test('common model level aliases are normalized instead of dropped', () => {
   const canonical = canonicalizeRawAnalysis({
     status: 'success',

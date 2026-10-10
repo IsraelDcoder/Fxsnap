@@ -963,6 +963,9 @@ function evaluateDecisionEngine(obs) {
   const rawTrade = norm.trade_setup || {};
   const reportedTargets = parseTakeProfitLevels(rawTrade.take_profit_levels, rawTrade.take_profit);
   const firstTarget = reportedTargets[0] || rawTrade.take_profit;
+  const parsedRiskReward = typeof rawTrade.risk_reward === 'number'
+    ? rawTrade.risk_reward
+    : parseRiskReward(rawTrade.risk_reward);
   const hasProposedLevels = [
     rawTrade.entry_zone,
     rawTrade.stop_loss,
@@ -979,14 +982,13 @@ function evaluateDecisionEngine(obs) {
     const entryRange = parsePriceOrRange(rawTrade.entry_zone);
     const slRange = parsePriceOrRange(rawTrade.stop_loss);
     const tpRange = parsePriceOrRange(firstTarget);
-    const rr = typeof rawTrade.risk_reward === 'number' ? rawTrade.risk_reward : parseRiskReward(rawTrade.risk_reward);
     const computed = computeRRFromLevels({
       entry: rawTrade.entry_zone,
       sl: rawTrade.stop_loss,
       tp: firstTarget,
       direction: dir,
     });
-    const reportedRR = Number.isFinite(rr) ? rr : null;
+    const reportedRR = Number.isFinite(parsedRiskReward) ? parsedRiskReward : null;
     const ratioMismatch = computed.rr != null && reportedRR != null
       && Math.abs(computed.rr - reportedRR) > Math.max(0.1, computed.rr * 0.05);
 
@@ -1031,7 +1033,7 @@ function evaluateDecisionEngine(obs) {
       stop_loss: stop ? String(rawTrade.stop_loss) : 'none',
       take_profit: targets[0] || 'none',
       take_profit_levels: targets,
-      risk_reward: Number.isFinite(rr) ? rr : null,
+      risk_reward: Number.isFinite(parsedRiskReward) ? parsedRiskReward : null,
     };
   }
 
@@ -1333,8 +1335,6 @@ function applyMentorStrategy(normalized) {
   // Expose RR parsing/validation issues for UI diagnostics
   response.rrIssues = Array.isArray(evalRes.rrIssues) ? Array.from(new Set(evalRes.rrIssues)) : [];
 
-  // If evaluation failed mandatory conditions, ensure trade_setup is none
-  // If evaluation failed mandatory conditions, only clear trade_setup when no candidate was provided.
   if (response.status === 'success' && !hasActionableTradeSetup(response.trade_setup)) {
     response.status = 'no_trade';
     response.decision = 'NO_TRADE';
@@ -1687,9 +1687,11 @@ function analyzeMarketFromCandles(symbol, interval, candles) {
   };
 
   if (result.status !== 'success' && result.trade_setup && result.trade_setup.type !== 'none') {
-    result.trade_setup = { ...result.trade_setup, type: 'none', entry_zone: 'none', stop_loss: 'none', take_profit: 'none', risk_reward: null };
     result.decision = 'NO_TRADE';
     result.setupStatus = 'NO_SETUP';
+    result.tradeStatus = 'no_setup';
+    result.tradeDecision = 'NONE';
+    result.entryReadiness = 0;
   }
 
   return result;

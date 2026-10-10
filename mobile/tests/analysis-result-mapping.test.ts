@@ -59,6 +59,40 @@ test('maps no-trade analysis content and every available level into the result m
   assert.deepEqual(result.supportResistance, { support: ['1.0950'], resistance: ['1.1100'] });
 });
 
+test('keeps candidate levels visible in the result model when trade direction is not established', () => {
+  const result = buildAnalysisResult(chartResult({
+    analysis: {
+      trend: 'neutral',
+      structure: 'The chart is consolidating without a clear direction.',
+      volatility: 'moderate',
+      volume: 'not_visible',
+      sentiment: 'neutral',
+      indicators: 'none',
+      notes: 'No directional bias is established.',
+    },
+    trade_setup: {
+      type: 'none',
+      entry_zone: '1.0850',
+      stop_loss: '1.0880',
+      take_profit: '1.0800',
+      take_profit_levels: ['1.0800', '1.0760'],
+      risk_reward: 1.67,
+    },
+    marketBias: 'neutral',
+  }), 'EUR/USD');
+
+  assert.equal(result.status, 'no_trade');
+  assert.equal(result.direction, undefined);
+  assert.deepEqual(result.tradeSetup, {
+    type: 'none',
+    entryZone: '1.0850',
+    stopLoss: '1.0880',
+    takeProfit: '1.0800',
+    riskReward: 1.67,
+  });
+  assert.deepEqual(result.takeProfitLevels, ['1.0800', '1.0760']);
+});
+
 test('maps a backend API payload through client normalization into visible result fields', () => {
   const apiPayload = {
     status: 'no_trade' as const,
