@@ -1,4 +1,4 @@
-# FXSnap Terms of Use
+~# ~FXSnap Terms of Use
 
 _Last updated: 1 August 2026_
 

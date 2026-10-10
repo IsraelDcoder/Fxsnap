@@ -12,6 +12,7 @@ const {
   enforceMultiTimeframeAlignment,
   canonicalizeRawAnalysis,
   normalizeAnalysis,
+  TradeAnalysisSchema,
 } = require('./serve');
 
 test('multi-timeframe request requires two bounded supported chart images', () => {
@@ -209,6 +210,64 @@ test('structured reasoning, support/resistance, and multiple targets survive nor
     resistance: ['1.1200'],
   });
   assert.deepEqual(normalized.trade_setup.take_profit_levels, ['1.1150', '1.1200']);
+});
+
+test('a successful analysis must include actionable trade geometry before it is accepted', () => {
+  const result = TradeAnalysisSchema.safeParse({
+    status: 'success',
+    chart: {
+      is_chart: true,
+      pair: 'BTCUSD',
+      timeframe: '4H',
+      chart_quality: 'good',
+      price_scale_visible: true,
+      candles_visible: true,
+      has_enough_candles: true,
+    },
+    analysis: {
+      trend: 'bullish',
+      market_structure: 'higher highs and higher lows',
+      structure_bias: 'bullish',
+      volatility: 'moderate',
+      volume: 'not_visible',
+      indicators_detected: [],
+      price_action: ['breakout'],
+      structure: 'Bullish continuation.',
+      sentiment: 'bullish',
+      indicators: 'none',
+      notes: 'Trend is intact.',
+      reasoning: ['Higher highs are visible.'],
+    },
+    zones: {
+      support: '1.1000',
+      resistance: '1.1200',
+      demand: ['1.1000'],
+      supply: ['1.1200'],
+      liquidity: ['1.1100'],
+    },
+    strategy: {
+      daily_trend: 'bullish',
+      higher_timeframe_confirmation: 'confirmed',
+      zone_status: 'inside_zone',
+      liquidity_sweep: 'bullish',
+      bos: 'bullish',
+      rsi_confirmation: 'bullish',
+    },
+    trade_setup: {
+      type: 'buy',
+      entry_zone: '',
+      stop_loss: '',
+      take_profit: '',
+      take_profit_levels: [],
+      risk_reward: 1.8,
+    },
+    confidence: 72,
+    reasons: ['Trend is intact.'],
+    reasoning: ['Higher highs are visible.'],
+  });
+
+  assert.equal(result.success, false);
+  assert.ok(result.error);
 });
 
 test('invalid image yields invalid_image status and no trade', () => {

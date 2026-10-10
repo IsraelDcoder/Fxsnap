@@ -163,6 +163,24 @@ const DEFAULT_REASONS = [];
 const FREE_ANALYSIS_KEY_PREFIX = 'fxsnap:free-analysis:v1:';
 const FREE_ANALYSIS_LOCK_TTL_SECONDS = 150;
 
+function hasMeaningfulLevel(value) {
+  if (value == null) return false;
+  if (typeof value !== 'string') return true;
+  const normalized = value.trim();
+  return normalized.length > 0 && !['none', 'not_clear', 'unknown', 'n/a', 'na'].includes(normalized.toLowerCase());
+}
+
+function hasActionableTradeSetup(tradeSetup) {
+  if (!tradeSetup || tradeSetup.type === 'none') return false;
+  const rrValue = Number(tradeSetup.risk_reward);
+  return (
+    hasMeaningfulLevel(tradeSetup.entry_zone) &&
+    hasMeaningfulLevel(tradeSetup.stop_loss) &&
+    hasMeaningfulLevel(tradeSetup.take_profit) &&
+    Number.isFinite(rrValue) && rrValue > 0
+  );
+}
+
 const TradeAnalysisSchema = z.object({
   status: z.enum(ANALYSIS_STATUS),
   message: z.string().trim().optional(),
@@ -243,6 +261,34 @@ const TradeAnalysisSchema = z.object({
   }).optional(),
   market_data_timestamp: z.string().optional().nullable(),
   market_data_source: z.string().trim().optional().nullable(),
+}).superRefine((value, ctx) => {
+  if (value.status === 'success') {
+    const directionalEvidence =
+      hasMeaningfulLevel(value.analysis?.structure) ||
+      hasMeaningfulLevel(value.analysis?.market_structure) ||
+      hasMeaningfulLevel(value.zones?.support) ||
+      hasMeaningfulLevel(value.zones?.resistance) ||
+      (Array.isArray(value.reasoning) && value.reasoning.length > 0)
+      || (typeof value.analysis?.trend === 'string' && value.analysis.trend !== 'neutral');
+
+    if (!directionalEvidence) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'A successful analysis must include directional chart evidence.' });
+    }
+
+    if (!hasActionableTradeSetup(value.trade_setup)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'A successful analysis must include a complete trade setup with entry, stop, take-profit, and risk/reward.' });
+    }
+  }
+
+  if (value.status === 'no_trade' && value.trade_setup && value.trade_setup.type !== 'none') {
+    const hasTradeGeometry = hasMeaningfulLevel(value.trade_setup.entry_zone)
+      || hasMeaningfulLevel(value.trade_setup.stop_loss)
+      || hasMeaningfulLevel(value.trade_setup.take_profit)
+      || Number.isFinite(Number(value.trade_setup.risk_reward));
+    if (!hasTradeGeometry && value.trade_setup.type !== 'none') {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'A no-trade response cannot contain an incomplete trade setup.' });
+    }
+  }
 });
 const MultiTimeframeInputSchema = z.object({
   pair: z.string().trim().min(1).max(20),
@@ -1244,6 +1290,17 @@ function applyMentorStrategy(normalized) {
   // If evaluation failed mandatory conditions, only clear trade_setup when no candidate was provided.
   if (response.status !== 'success' && (!evalRes.trade_setup || !evalRes.trade_setup.type || evalRes.trade_setup.type === 'none') && !evalRes.candidate) {
     response.trade_setup = { ...DEFAULT_TRADE_SETUP };
+  }
+
+  if (response.status === 'success' && !hasActionableTradeSetup(response.trade_setup)) {
+    response.status = 'no_trade';
+    response.trade_setup = { ...DEFAULT_TRADE_SETUP };
+    response.decision = 'NO_TRADE';
+    response.tradeDecision = 'NONE';
+    response.setupStatus = 'NO_SETUP';
+    response.tradeStatus = 'no_setup';
+    response.entryReadiness = 0;
+    response.setupConfidence = 0;
   }
 
   // Enforce additional server-side rules (should not wipe out valid analysis)
@@ -2636,5 +2693,6 @@ module.exports.applyMentorStrategy = applyMentorStrategy;
 module.exports.analyzeMarketFromCandles = analyzeMarketFromCandles;
 module.exports.buildMultiTimeframeMessages = buildMultiTimeframeMessages;
 module.exports.MultiTimeframeInputSchema = MultiTimeframeInputSchema;
+module.exports.TradeAnalysisSchema = TradeAnalysisSchema;
 module.exports.enforceMultiTimeframeAlignment = enforceMultiTimeframeAlignment;
 module.exports.enforceValidationRules = enforceValidationRules;
