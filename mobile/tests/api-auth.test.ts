@@ -7,6 +7,7 @@ const { createAuth, verifyAuth, verifyFreeAnalysisIdentity } = require('../serve
 const { API_BASE_URL, resolveApiBaseUrl } = require('../services/apiAuth.ts');
 const { normalizeChartAnalysisError } = require('../services/chartDetection.ts');
 const { hasRevenueCatEntitlement } = require('../services/revenuecatEntitlements.ts');
+const { normalizePaywallRemoteConfig } = require('../services/paywallConfig.ts');
 const { getFeatureAccessDecision, isPremiumFeatureRoute, shouldGuardFeatureRoute } = require('../services/featureAccess.ts');
 const { getInstrument, INSTRUMENTS } = require('../services/instruments.ts');
 
@@ -42,6 +43,37 @@ test('all app API URL resolution targets the production backend', () => {
   assert.equal(resolveApiBaseUrl(), 'https://fxsnap.vercel.app');
 });
 
+test('paywall remote proof only accepts verified rating data and up to two attributed quotes', () => {
+  assert.deepEqual(normalizePaywallRemoteConfig({
+    traderCount: 3700,
+    googlePlayRating: 4.6,
+    googlePlayRatingCount: 24,
+    testimonials: [
+      { quote: 'Clear levels.', attribution: 'Verified reviewer' },
+      { quote: 'Easy to read.', attribution: 'Verified reviewer' },
+      { quote: 'Ignored third quote.', attribution: 'Verified reviewer' },
+    ],
+  }), {
+    traderCount: 3700,
+    googlePlayRating: 4.6,
+    googlePlayRatingCount: 24,
+    testimonials: [
+      { quote: 'Clear levels.', attribution: 'Verified reviewer' },
+      { quote: 'Easy to read.', attribution: 'Verified reviewer' },
+    ],
+  });
+  assert.deepEqual(normalizePaywallRemoteConfig({
+    googlePlayRating: 4.6,
+    googlePlayRatingCount: 0,
+    testimonials: [{ quote: 'Unattributed claim.' }],
+  }), {
+    traderCount: null,
+    googlePlayRating: null,
+    googlePlayRatingCount: null,
+    testimonials: [],
+  });
+});
+
 test('premium-required backend payloads are normalized into a paywall flow', () => {
   assert.deepEqual(normalizeChartAnalysisError({ code: 'PREMIUM_REQUIRED' }), {
     status: 'premium_required',
@@ -73,13 +105,12 @@ test('exhausted API quota is shown as a temporary analysis outage instead of a r
 });
 
 test('premium routes are centrally recognized and must gate before navigation', () => {
-  assert.equal(isPremiumFeatureRoute('/analysis'), true);
+  assert.equal(isPremiumFeatureRoute('/analysis'), false);
   assert.equal(isPremiumFeatureRoute('/strategy'), true);
   assert.equal(isPremiumFeatureRoute('/risk-management'), false);
   assert.equal(isPremiumFeatureRoute('/lot-size-calculator'), false);
   assert.equal(isPremiumFeatureRoute('/daily-brief'), false);
-  assert.equal(shouldGuardFeatureRoute('/analysis', false), true);
-  assert.equal(shouldGuardFeatureRoute('/analysis', false, true), false);
+  assert.equal(shouldGuardFeatureRoute('/analysis', false), false);
   assert.equal(shouldGuardFeatureRoute('/analysis', true), false);
   assert.equal(shouldGuardFeatureRoute('/strategy', false), true);
   assert.equal(shouldGuardFeatureRoute('/strategy', true), false);
@@ -97,11 +128,9 @@ test('the multi-timeframe selector includes every requested market', () => {
   }
 });
 
-test('only an available free analysis bypasses the premium gate for AI analysis', () => {
-  assert.deepEqual(getFeatureAccessDecision('AI_ANALYSIS', false), { allowed: false, requiresPaywall: true });
-  assert.deepEqual(getFeatureAccessDecision('AI_ANALYSIS', false, true), { allowed: true, requiresPaywall: false });
+test('AI analysis is available to start and the server gates only after the free run is used', () => {
+  assert.deepEqual(getFeatureAccessDecision('AI_ANALYSIS', false), { allowed: true, requiresPaywall: false });
   assert.deepEqual(getFeatureAccessDecision('TRADE_SETUP', false), { allowed: false, requiresPaywall: true });
-  assert.deepEqual(getFeatureAccessDecision('TRADE_SETUP', false, true), { allowed: false, requiresPaywall: true });
   assert.deepEqual(getFeatureAccessDecision('STRATEGY_GENERATOR', false), { allowed: false, requiresPaywall: true });
   assert.deepEqual(getFeatureAccessDecision('AI_ANALYSIS', true), { allowed: true, requiresPaywall: false });
   assert.deepEqual(getFeatureAccessDecision('TRADE_SETUP', true), { allowed: true, requiresPaywall: false });

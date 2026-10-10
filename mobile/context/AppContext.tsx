@@ -3,7 +3,6 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router } from 'expo-router';
 import { addBillingListener, billingIsConfigured, configureBilling, getPremiumStatus, purchasePlan, restorePurchases, type BillingPlan } from '@/services/billing';
 import { getFeatureAccessDecision, type FeatureAccessDecision, type ProtectedFeature } from '@/services/featureAccess';
-import { getServerAnalysisAccess } from '@/services/apiAuth';
 import { setHapticsEnabled } from '@/services/haptics';
 import { createDailyRiskActivity, getLocalRiskDateKey, normalizeDailyRiskActivity, type DailyRiskActivity, type OpenRiskPosition } from '@/services/risk';
 
@@ -18,7 +17,16 @@ export interface AnalysisResult {
   id: string;
   pair: string;
   status?: AnalysisStatus;
+  message?: string;
   direction?: 'BUY' | 'SELL';
+  timeframe?: string;
+  takeProfitLevels?: string[];
+  priceSeries?: number[];
+  reasoning?: string[];
+  supportResistance?: {
+    support: string[];
+    resistance: string[];
+  };
   confidence: number;
   confidenceType?: 'composite_score';
   // Legacy live-data fields (kept optional for old saved entries)
@@ -381,11 +389,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
 
     const subscriptionActive = isSubscribed;
-    const freeAnalysisAvailable = !subscriptionActive && feature === 'AI_ANALYSIS'
-      ? await getServerAnalysisAccess()
-      : false;
-
-    const decision = getFeatureAccessDecision(feature, subscriptionActive, freeAnalysisAvailable !== false);
+    const decision = getFeatureAccessDecision(feature, subscriptionActive);
     console.log(`[ACCESS] Feature: ${feature}`);
     console.log(`[ACCESS] Subscription status: ${subscriptionActive}`);
     console.log(`[ACCESS] Result: ${decision.allowed ? 'ALLOWED' : 'PAYWALL'}`);

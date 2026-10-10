@@ -2240,10 +2240,37 @@ async function getAnalysisAccess(req, res) {
       getRevenueCatPremiumStatus(deviceId),
     ]);
     const freeAnalysisAvailable = !used && pending < 1;
-    return sendJson(res, 200, { canAnalyze: premium === true || freeAnalysisAvailable, freeAnalysisAvailable });
+    return sendJson(res, 200, {
+      canAnalyze: premium === true || freeAnalysisAvailable,
+      freeAnalysisAvailable,
+      freeAnalysesUsed: used ? 1 : 0,
+      freeAnalysisLimit: 1,
+    });
   } catch (error) {
     return sendJson(res, 503, { error: error.message || 'Unable to check analysis access.' });
   }
+}
+
+function getPaywallRemoteConfig(req, res) {
+  const configuredCount = Number(process.env.FXSNAP_TRADER_COUNT || 3700);
+  const configuredRating = Number(process.env.FXSNAP_GOOGLE_PLAY_RATING);
+  const configuredRatingCount = Number(process.env.FXSNAP_GOOGLE_PLAY_RATING_COUNT);
+  let testimonials = [];
+  try {
+    const parsed = JSON.parse(process.env.FXSNAP_PAYWALL_TESTIMONIALS_JSON || '[]');
+    if (Array.isArray(parsed)) {
+      testimonials = parsed
+        .filter((item) => item && typeof item.quote === 'string' && item.quote.trim() && typeof item.attribution === 'string' && item.attribution.trim())
+        .slice(0, 2)
+        .map((item) => ({ quote: item.quote.trim().slice(0, 220), attribution: item.attribution.trim().slice(0, 60) }));
+    }
+  } catch {}
+  return sendJson(res, 200, {
+    traderCount: Number.isInteger(configuredCount) && configuredCount > 0 ? configuredCount : null,
+    googlePlayRating: configuredRating >= 1 && configuredRating <= 5 && configuredRatingCount > 0 ? configuredRating : null,
+    googlePlayRatingCount: configuredRating >= 1 && configuredRating <= 5 && configuredRatingCount > 0 ? configuredRatingCount : null,
+    testimonials,
+  });
 }
 
 async function recordSignal(req, res) {
@@ -2441,6 +2468,7 @@ function createRequestHandler() {
     if (pathname === '/api/multi-timeframe-analysis' && req.method === 'POST') return analyzeMultiTimeframeCharts(req, res);
     if (pathname === '/api/events' && req.method === 'POST') return receiveEvent(req, res);
     if (pathname === '/api/analysis-access' && req.method === 'GET') return getAnalysisAccess(req, res);
+    if (pathname === '/api/paywall-config' && req.method === 'GET') return getPaywallRemoteConfig(req, res);
     if (pathname === '/api/entitlement' && req.method === 'GET') return getEntitlement(req, res);
     if (pathname === '/api/signals' && req.method === 'POST') return recordSignal(req, res);
     if (pathname.startsWith('/api/signals/') && req.method === 'PATCH') return updateSignalOutcome(req, res);
@@ -2514,4 +2542,3 @@ module.exports.buildMultiTimeframeMessages = buildMultiTimeframeMessages;
 module.exports.MultiTimeframeInputSchema = MultiTimeframeInputSchema;
 module.exports.enforceMultiTimeframeAlignment = enforceMultiTimeframeAlignment;
 module.exports.enforceValidationRules = enforceValidationRules;
-

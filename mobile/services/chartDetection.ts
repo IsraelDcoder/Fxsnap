@@ -43,6 +43,12 @@ export interface ChartAnalysisResult {
   freeAnalysisUsed?: boolean;
   detectedPair?: string | null;
   timeframe?: string | null;
+  priceSeries?: number[];
+  reasoning?: string[];
+  supportResistance?: {
+    support: string[];
+    resistance: string[];
+  };
   analysis: {
     trend: 'bullish' | 'bearish' | 'neutral';
     structure: string;
@@ -62,6 +68,7 @@ export interface ChartAnalysisResult {
     entry_zone: string;
     stop_loss: string;
     take_profit: string;
+    take_profit_levels?: string[];
     risk_reward: number | string;
   };
   marketBias?: 'bullish' | 'bearish' | 'neutral' | 'mixed';
@@ -195,12 +202,42 @@ async function sendChartAnalysis(path: string, body: Record<string, unknown>): P
       return emptyAnalysis(status, payload.message || 'Chart AI is unavailable right now. Please try again shortly.');
     }
 
+    const rawTakeProfit = payload.trade_setup?.take_profit ?? payload.take_profit;
+    const rawTakeProfitLevels = payload.trade_setup?.take_profit_levels ?? (Array.isArray(rawTakeProfit) ? rawTakeProfit : undefined);
+    const takeProfitLevels = Array.isArray(rawTakeProfitLevels)
+      ? rawTakeProfitLevels.map((level: unknown) => String(level).trim()).filter(Boolean)
+      : typeof rawTakeProfit === 'string'
+        ? rawTakeProfit.split(/[,|]/).map((level: string) => level.trim()).filter(Boolean)
+        : [];
+    const rawSeries = payload.price_series ?? payload.chart_data?.price_series;
+    const priceSeries = Array.isArray(rawSeries)
+      ? rawSeries.map((point: unknown) => {
+        if (typeof point === 'number') return point;
+        if (point && typeof point === 'object') {
+          const value = Number((point as { price?: unknown; close?: unknown }).price ?? (point as { close?: unknown }).close);
+          return value;
+        }
+        return Number.NaN;
+      }).filter(Number.isFinite)
+      : [];
+    const supportResistance = payload.support_resistance ?? {};
+
     return {
       status,
       message: payload.message || undefined,
       freeAnalysisUsed: payload.freeAnalysisUsed === true,
       detectedPair: payload.detectedPair ?? null,
       timeframe: payload.timeframe ?? null,
+      priceSeries,
+      reasoning: Array.isArray(payload.reasoning)
+        ? payload.reasoning.map((item: unknown) => String(item).trim()).filter(Boolean).slice(0, 5)
+        : Array.isArray(payload.analysis?.reasoning)
+          ? payload.analysis.reasoning.map((item: unknown) => String(item).trim()).filter(Boolean).slice(0, 5)
+          : [],
+      supportResistance: {
+        support: Array.isArray(supportResistance.support) ? supportResistance.support.map(String) : [],
+        resistance: Array.isArray(supportResistance.resistance) ? supportResistance.resistance.map(String) : [],
+      },
       analysis: {
         trend: payload.analysis?.trend || 'neutral',
         structure: payload.analysis?.structure || '',
@@ -219,7 +256,8 @@ async function sendChartAnalysis(path: string, body: Record<string, unknown>): P
         type: payload.trade_setup?.type || 'none',
         entry_zone: payload.trade_setup?.entry_zone || 'none',
         stop_loss: payload.trade_setup?.stop_loss || 'none',
-        take_profit: payload.trade_setup?.take_profit || 'none',
+        take_profit: typeof rawTakeProfit === 'string' ? rawTakeProfit : takeProfitLevels.join(', ') || 'none',
+        take_profit_levels: takeProfitLevels,
         risk_reward: payload.trade_setup?.risk_reward ?? 'none',
       },
       marketBias: payload.marketBias || 'neutral',
@@ -256,4 +294,3 @@ async function sendChartAnalysis(path: string, body: Record<string, unknown>): P
     );
   }
 }
-

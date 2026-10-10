@@ -237,7 +237,15 @@ function buildAnalysisResult(chart: ChartAnalysisResult, pair: string, imageUri?
     id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
     pair,
     status: chart.status,
+    message: chart.message,
     direction: isBuy ? 'BUY' : isSell ? 'SELL' : undefined,
+    timeframe: chart.timeframe || undefined,
+    takeProfitLevels: chart.trade_setup.take_profit_levels?.length
+      ? chart.trade_setup.take_profit_levels
+      : chart.trade_setup.take_profit.split(/[,|]/).map((level) => level.trim()).filter(Boolean),
+    priceSeries: chart.priceSeries,
+    reasoning: chart.reasoning,
+    supportResistance: chart.supportResistance,
     // Primary market confidence (preferred). Fall back to legacy composite confidence when missing.
     confidence: typeof chart.marketConfidence === 'number' ? chart.marketConfidence : chart.confidence,
     confidenceType: 'composite_score',
@@ -299,13 +307,12 @@ export default function AnalysisScreen() {
   const checkAccessBeforeAnalysis = async (feature: 'AI_ANALYSIS' | 'TRADE_SETUP' = 'AI_ANALYSIS'): Promise<boolean> => {
     if (isLoading) return false;
     const decision = await checkFeatureAccess(feature, '/analysis');
+    if (decision.error) {
+      setAnalysisError(decision.error);
+      Alert.alert('Unable to start analysis', decision.error);
+    }
     return decision.allowed;
   };
-
-  useEffect(() => {
-    if (isLoading) return;
-    void checkFeatureAccess('AI_ANALYSIS', '/analysis');
-  }, [isLoading, isSubscribed]);
 
   const pickFromGallery = async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -399,7 +406,6 @@ export default function AnalysisScreen() {
 
   const handleImageSelected = async () => {
     if (isLoading) return;
-    if (!(await checkAccessBeforeAnalysis())) return;
     trackEvent('analysis_started');
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     if (!imageUri) return;
@@ -427,7 +433,7 @@ export default function AnalysisScreen() {
     if (chart.status === 'premium_required') {
       setAnalysisError(chart.message || 'A Premium subscription is required for chart analysis.');
       returnToInput();
-      router.replace('/paywall');
+      router.replace({ pathname: '/paywall', params: { source: 'analysis-limit', used: '1', limit: '1' } });
       return;
     }
 
@@ -456,14 +462,13 @@ export default function AnalysisScreen() {
     trackEvent('analysis_succeeded', { pair, status: chart.status, confidence: chart.confidence });
     await recordRatingEligibleAnalysis();
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    router.replace(chart.freeAnalysisUsed
-      ? { pathname: '/analysis-result', params: { postFreePaywall: '1' } }
-      : '/analysis-result');
+    router.replace('/analysis-result');
   };
 
   const handlePairSelected = async (pair: string) => {
     if (isLoading) return;
-    if (!(await checkAccessBeforeAnalysis())) return;
+    const requiredFeature = mode === 'multiTimeframe' ? 'TRADE_SETUP' : 'AI_ANALYSIS';
+    if (!(await checkAccessBeforeAnalysis(requiredFeature))) return;
     if (mode === 'quick' && (!imageBase64 || !imageUri)) return;
     const sourceImageUri = imageUri ?? '';
     if (mode === 'multiTimeframe' && selectedPair && selectedPair !== pair) {
@@ -548,7 +553,7 @@ export default function AnalysisScreen() {
     <View style={[styles.container, { paddingTop: topPad, backgroundColor: colors.background }]}>
       {stage !== 'analyzing' && (
         <Animated.View entering={FadeIn.duration(300)} style={styles.header}>
-          <TouchableOpacity style={[styles.backBtn, { backgroundColor: colors.card, borderColor: colors.cardBorder }]} onPress={() => router.back()}>
+          <TouchableOpacity style={[styles.backBtn, { backgroundColor: colors.card, borderColor: colors.cardBorder }]} onPress={() => router.replace('/home')}>
             <Feather name="arrow-left" size={22} color="#FFFFFF" />
           </TouchableOpacity>
           <Text style={[styles.headerTitle, { color: colors.text }]}>Chart Analysis</Text>

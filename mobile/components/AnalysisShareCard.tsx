@@ -6,11 +6,12 @@ import { Image, View, Text, StyleSheet } from 'react-native';
 type Props = {
   analysis: any;
   colors: any;
+  isPremium?: boolean;
   onReady?: () => void;
 };
 
 const AnalysisShareCard = React.forwardRef(function AnalysisShareCard(props: Props, ref: any) {
-  const { analysis, colors, onReady } = props;
+  const { analysis, colors, isPremium = false, onReady } = props;
   const readyRef = React.useRef(false);
 
   const handleLayout = () => {
@@ -67,7 +68,7 @@ const AnalysisShareCard = React.forwardRef(function AnalysisShareCard(props: Pro
 
       <Text style={[styles.shareSectionTitle, { color: colors.text }]}>TRADE SETUP</Text>
       <View style={styles.shareGrid}>
-        {[["ENTRY", entry], ["STOP LOSS", stopLoss], ["TAKE PROFIT", takeProfit], ["RISK / REWARD", riskReward]].filter(([, value]) => value != null && value !== '').map(([label, value]) => (
+        {[["ENTRY", entry], ["STOP LOSS", stopLoss], ["TAKE PROFIT", takeProfit], ...(isPremium ? [["RISK / REWARD", riskReward]] : [])].filter(([, value]) => value != null && value !== '').map(([label, value]) => (
           <View key={String(label)} style={styles.shareMetric}>
             <Text style={styles.shareLabel}>{label}</Text>
             <Text numberOfLines={2} style={[styles.shareValue, { color: colors.text }]}>{String(value)}</Text>
@@ -77,7 +78,7 @@ const AnalysisShareCard = React.forwardRef(function AnalysisShareCard(props: Pro
 
       <View style={styles.shareDivider} />
       <Text style={[styles.shareSectionTitle, { color: colors.buy }]}>FXSNAP AI INSIGHT</Text>
-      <Text numberOfLines={4} style={[styles.shareInsight, { color: colors.text }]}>{insight || structure || whyNotNow || 'Analysis generated from the submitted chart.'}</Text>
+      <Text numberOfLines={4} style={[styles.shareInsight, { color: colors.text }]}>{isPremium ? insight || structure || whyNotNow || 'Analysis generated from the submitted chart.' : 'Unlock full analysis in FXSnap to view the AI reasoning.'}</Text>
 
       <View style={styles.shareFooter}>
         <Text style={[styles.shareFooterText, { color: colors.textSecondary }]}>Smarter Analysis. Better Trades.</Text>

@@ -83,12 +83,3 @@ export async function getServerPremiumStatus(): Promise<boolean | null> {
     return typeof payload.active === 'boolean' ? payload.active : null;
   } catch { return null; }
 }
-
-export async function getServerAnalysisAccess(): Promise<boolean | null> {
-  try {
-    const response = await fetch(`${API_URL}/api/analysis-access`, { headers: await getApiHeaders() });
-    if (!response.ok) return null;
-    const payload = await response.json();
-    return typeof payload.canAnalyze === 'boolean' ? payload.canAnalyze : null;
-  } catch { return null; }
-}
