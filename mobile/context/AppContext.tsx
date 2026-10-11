@@ -24,6 +24,7 @@ export interface AnalysisResult {
   direction?: 'BUY' | 'SELL';
   timeframe?: string;
   takeProfitLevels?: string[];
+  latestVisiblePrice?: number;
   priceSeries?: number[];
   reasoning?: string[];
   supportResistance?: {

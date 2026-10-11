@@ -326,10 +326,8 @@ export const INSTRUMENT_GROUPS: readonly {
 }[] = [
   { key: 'popular', title: 'Popular', icon: 'star', description: 'Core instruments we focus on first' },
   { key: 'forex', title: 'Forex', icon: 'bar-chart-2', description: 'Liquid currency pairs' },
-  { key: 'crypto', title: 'Crypto', icon: 'bitcoin', description: 'Digital assets and major crypto pairs' },
   { key: 'metals', title: 'Metals', icon: 'gem', description: 'Precious metals and currencies' },
   { key: 'indices', title: 'Indices', icon: 'trending-up', description: 'Major global and regional indices' },
-  { key: 'commodities', title: 'Commodities', icon: 'layers', description: 'Energy and other commodity markets' },
   { key: 'others', title: 'Others', icon: 'layers', description: 'Extended coverage for advanced users' },
 ];
 

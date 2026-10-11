@@ -43,6 +43,7 @@ export interface ChartAnalysisResult {
   freeAnalysisUsed?: boolean;
   detectedPair?: string | null;
   timeframe?: string | null;
+  latestVisiblePrice?: number;
   priceSeries?: number[];
   reasoning?: string[];
   supportResistance?: {
@@ -299,6 +300,11 @@ async function sendChartAnalysis(path: string, body: Record<string, unknown>): P
         return Number.NaN;
       }).filter(Number.isFinite)
       : [];
+    const latestVisiblePriceValue = payload.chart?.latest_visible_price ?? payload.latestVisiblePrice;
+    const latestVisiblePriceNumber = Number(latestVisiblePriceValue);
+    const latestVisiblePrice = Number.isFinite(latestVisiblePriceNumber) && latestVisiblePriceNumber > 0
+      ? latestVisiblePriceNumber
+      : undefined;
     const supportResistance = payload.support_resistance ?? {};
 
     return {
@@ -307,6 +313,7 @@ async function sendChartAnalysis(path: string, body: Record<string, unknown>): P
       freeAnalysisUsed: payload.freeAnalysisUsed === true,
       detectedPair: payload.detectedPair ?? null,
       timeframe: payload.timeframe ?? null,
+      latestVisiblePrice,
       priceSeries,
       reasoning: Array.isArray(payload.reasoning)
         ? payload.reasoning.map((item: unknown) => String(item).trim()).filter(Boolean).slice(0, 5)

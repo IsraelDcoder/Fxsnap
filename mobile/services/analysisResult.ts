@@ -23,6 +23,45 @@ export function getMissingTradeLevelsExplanation(analysis: Pick<AnalysisResult, 
   return `This is a ${analysis.direction} market read, not a validated trade setup. ${missingLevels} could not be established from the chart, so no prices have been inferred. Risk : Reward cannot be calculated without complete levels.`;
 }
 
+export function getTradeReadinessLabel(
+  tradeStatus: string | undefined,
+  entry: string,
+  stopLoss: string,
+  takeProfit: string,
+  direction?: string,
+  riskReward?: number | string,
+): string {
+  if (tradeStatus === 'actionable') return 'Ready';
+  if (tradeStatus?.startsWith('waiting')) return 'Waiting for confirmation';
+
+  const isIdentified = (value: string) => value.trim() !== ''
+    && !['—', 'not established', 'not provided', 'none', 'unknown', 'not_clear'].includes(value.trim().toLowerCase());
+  if (isIdentified(entry) && isIdentified(stopLoss) && isIdentified(takeProfit)) {
+    const side = direction === 'BUY' || direction === 'SELL' ? `${direction} ` : '';
+    const ratio = Number(riskReward);
+    const reason = Number.isFinite(ratio) && ratio > 0 && ratio < 1.5
+      ? `RR ${Number(ratio.toFixed(2))} below 1.5 minimum`
+      : 'awaiting validation';
+    return `${side}candidate setup · ${reason}`;
+  }
+  if (isIdentified(entry)) return 'Entry identified · setup incomplete';
+  return 'Setup not identified';
+}
+
+export function formatTradeReadiness(
+  readiness: number,
+  tradeStatus: string | undefined,
+  entry: string,
+  stopLoss: string,
+  takeProfit: string,
+  direction?: string,
+  riskReward?: number | string,
+): string {
+  const label = getTradeReadinessLabel(tradeStatus, entry, stopLoss, takeProfit, direction, riskReward);
+  const score = Math.round(Math.max(0, Math.min(100, readiness)));
+  return score > 0 ? `${score}% · ${label}` : label;
+}
+
 export function buildAnalysisResult(chart: ChartAnalysisResult, pair: string, imageUri?: string): AnalysisResult {
   const direction = resolveAnalysisDirection(
     chart.trade_setup.type,
@@ -42,6 +81,7 @@ export function buildAnalysisResult(chart: ChartAnalysisResult, pair: string, im
     freeAnalysisUsed: chart.freeAnalysisUsed,
     direction,
     timeframe: chart.timeframe || undefined,
+    latestVisiblePrice: chart.latestVisiblePrice,
     takeProfitLevels,
     priceSeries: chart.priceSeries,
     reasoning: chart.reasoning,

@@ -9,7 +9,7 @@ const { normalizeChartAnalysisError } = require('../services/chartDetection.ts')
 const { hasRevenueCatEntitlement } = require('../services/revenuecatEntitlements.ts');
 const { normalizePaywallRemoteConfig } = require('../services/paywallConfig.ts');
 const { canViewFullAnalysis, getFeatureAccessDecision, isFreeAnalysisExhausted, isPremiumFeatureRoute, shouldGuardFeatureRoute } = require('../services/featureAccess.ts');
-const { getInstrument, INSTRUMENTS } = require('../services/instruments.ts');
+const { getInstrument, INSTRUMENTS, INSTRUMENT_GROUPS } = require('../services/instruments.ts');
 
 test('signed anonymous tokens round-trip and reject tampering', () => {
   const token = createAuth('test-secret', 'device-1234567890');
@@ -146,13 +146,20 @@ test('premium routes are centrally recognized and must gate before navigation', 
   assert.equal(shouldGuardFeatureRoute('/daily-brief', false), false);
 });
 
-test('the multi-timeframe selector includes every requested market', () => {
+test('the instrument registry retains supported markets while the asset list hides crypto and commodities', () => {
   const requestedPairs = ['BTCUSD', 'ETHUSD', 'XAUUSD', 'XAGUSD', 'US30', 'NAS100', 'SPX500', 'GER40', 'UK100', 'USOIL'];
   for (const pair of requestedPairs) {
     const instrument = getInstrument(pair);
     assert.ok(instrument, `${pair} must be available in the instrument registry`);
-    assert.ok((INSTRUMENTS as Array<{ id: string }>).some((candidate) => candidate.id === pair), `${pair} must be selectable`);
+    assert.ok((INSTRUMENTS as Array<{ id: string }>).some((candidate) => candidate.id === pair), `${pair} must remain in the instrument registry`);
   }
+
+  const visibleCategories = (INSTRUMENT_GROUPS as Array<{ key: string }>).map((group) => group.key);
+  assert.equal(visibleCategories.includes('crypto'), false);
+  assert.equal(visibleCategories.includes('commodities'), false);
+  assert.ok(visibleCategories.includes('forex'));
+  assert.ok(visibleCategories.includes('metals'));
+  assert.ok(visibleCategories.includes('indices'));
 });
 
 test('AI analysis is available to start and the server gates only after the free run is used', () => {

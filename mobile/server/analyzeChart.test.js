@@ -24,6 +24,10 @@ const {
   normalizeAnalysis,
   TradeAnalysisSchema,
   hasRequiredAnalysisPayload,
+  chartInstrumentRule,
+  getPriceConsistencyIssues,
+  holdSetupForPriceValidation,
+  buildPriceConsistencyRetryMessages,
 } = require('./serve');
 
 const directionalChartWithoutLevels = {
@@ -31,10 +35,15 @@ const directionalChartWithoutLevels = {
   marketBias: 'bullish',
   chart: {
     is_chart: true,
+    pair: 'EURUSD',
     chart_quality: 'acceptable',
     price_scale_visible: true,
     candles_visible: true,
     has_enough_candles: true,
+    latest_visible_price: '1.10000',
+    current_price_source: 'visible_price_marker',
+    current_candle_status: 'completed',
+    latest_candle_timestamp: new Date().toISOString(),
   },
   trade_setup: {
     type: 'none',
@@ -57,7 +66,7 @@ test('one conditional follow-up is requested only for readable directional chart
   assert.equal(shouldRequestCandidateLevelFollowup({
     ...directionalChartWithoutLevels,
     chart: { ...directionalChartWithoutLevels.chart, price_scale_visible: false },
-  }), true);
+  }), false);
   assert.equal(shouldRequestCandidateLevelFollowup({
     ...directionalChartWithoutLevels,
     chart: { ...directionalChartWithoutLevels.chart, chart_quality: 'poor' },
@@ -70,6 +79,186 @@ test('one conditional follow-up is requested only for readable directional chart
     ...directionalChartWithoutLevels,
     status: 'ai_unavailable',
   }), false);
+});
+
+const consistentPriceSetup = {
+  status: 'success',
+  detectedPair: 'EURUSD',
+  chart: {
+    is_chart: true,
+    pair: 'EURUSD',
+    chart_quality: 'good',
+    price_scale_visible: true,
+    candles_visible: true,
+    has_enough_candles: true,
+    latest_visible_price: '1.10000',
+    current_price_source: 'visible_price_marker',
+    current_candle_status: 'forming',
+    latest_candle_timestamp: new Date().toISOString(),
+  },
+  trade_setup: {
+    type: 'buy',
+    entry_zone: '1.10000',
+    stop_loss: '1.09900',
+    take_profit: '1.10200',
+    take_profit_levels: ['1.10200'],
+    risk_reward: 2,
+    setup_status: 'valid',
+  },
+};
+
+test('latest-price validation accepts a fresh setup and distinguishes a forming candle', () => {
+  assert.deepEqual(getPriceConsistencyIssues(consistentPriceSetup, 'EURUSD'), []);
+  assert.equal(consistentPriceSetup.chart.current_candle_status, 'forming');
+});
+
+test('latest-price validation rejects missed entries, distant entries, and invalidated or completed targets', () => {
+  const missed = getPriceConsistencyIssues({
+    ...consistentPriceSetup,
+    chart: { ...consistentPriceSetup.chart, latest_visible_price: '1.10500' },
+    trade_setup: { ...consistentPriceSetup.trade_setup, setup_status: 'missed' },
+  }, 'EURUSD');
+  assert.ok(missed.some((issue) => /entry has already been missed/i.test(issue)));
+  assert.ok(missed.some((issue) => /too far from the latest visible price/i.test(issue)));
+
+  const distant = getPriceConsistencyIssues({
+    ...consistentPriceSetup,
+    chart: { ...consistentPriceSetup.chart, latest_visible_price: '1.10500' },
+    trade_setup: {
+      ...consistentPriceSetup.trade_setup,
+      take_profit: '1.11000',
+      take_profit_levels: ['1.11000'],
+    },
+  }, 'EURUSD');
+  assert.ok(distant.some((issue) => /too far from the latest visible price/i.test(issue)));
+
+  const invalidated = getPriceConsistencyIssues({
+    ...consistentPriceSetup,
+    chart: { ...consistentPriceSetup.chart, latest_visible_price: '1.09800' },
+  }, 'EURUSD');
+  assert.ok(invalidated.some((issue) => /crossed the setup stop/i.test(issue)));
+
+  const targetReached = getPriceConsistencyIssues({
+    ...consistentPriceSetup,
+    chart: { ...consistentPriceSetup.chart, latest_visible_price: '1.10200' },
+  }, 'EURUSD');
+  assert.ok(targetReached.some((issue) => /already reached TP1/i.test(issue)));
+});
+
+test('latest-price validation enforces SELL invalidation and TP direction', () => {
+  const sellSetup = {
+    ...consistentPriceSetup,
+    trade_setup: {
+      type: 'sell',
+      entry_zone: '1.10000',
+      stop_loss: '1.10100',
+      take_profit: '1.09800',
+      take_profit_levels: ['1.09800'],
+      risk_reward: 2,
+      setup_status: 'valid',
+    },
+  };
+  assert.deepEqual(getPriceConsistencyIssues(sellSetup, 'EURUSD'), []);
+
+  const stopped = getPriceConsistencyIssues({
+    ...sellSetup,
+    chart: { ...sellSetup.chart, latest_visible_price: '1.10200' },
+  }, 'EURUSD');
+  assert.ok(stopped.some((issue) => /crossed the setup stop/i.test(issue)));
+
+  const targetReached = getPriceConsistencyIssues({
+    ...sellSetup,
+    chart: { ...sellSetup.chart, latest_visible_price: '1.09800' },
+  }, 'EURUSD');
+  assert.ok(targetReached.some((issue) => /already reached TP1/i.test(issue)));
+});
+
+test('latest-price validation abstains on unreadable price scales, insufficient charts, and stale timestamps', () => {
+  const unreadable = getPriceConsistencyIssues({
+    ...consistentPriceSetup,
+    chart: {
+      ...consistentPriceSetup.chart,
+      latest_visible_price: null,
+      current_price_source: 'unreadable',
+    },
+  }, 'EURUSD');
+  assert.ok(unreadable.some((issue) => /cannot be reliably read/i.test(issue)));
+
+  const insufficient = getPriceConsistencyIssues({
+    ...consistentPriceSetup,
+    chart: { ...consistentPriceSetup.chart, has_enough_candles: false },
+  }, 'EURUSD');
+  assert.ok(insufficient.some((issue) => /not show enough clear/i.test(issue)));
+
+  const previousMaxAge = process.env.FXSNAP_CHART_MAX_AGE_MINUTES;
+  process.env.FXSNAP_CHART_MAX_AGE_MINUTES = '1440';
+  try {
+    const stale = getPriceConsistencyIssues({
+      ...consistentPriceSetup,
+      chart: { ...consistentPriceSetup.chart, latest_candle_timestamp: '2020-01-01T00:00:00Z' },
+    }, 'EURUSD', Date.parse('2020-01-03T00:00:00Z'));
+    assert.ok(stale.some((issue) => /timestamp is stale/i.test(issue)));
+
+    const missingTimestamp = getPriceConsistencyIssues({
+      ...consistentPriceSetup,
+      chart: { ...consistentPriceSetup.chart, latest_candle_timestamp: null },
+    }, 'EURUSD');
+    assert.ok(missingTimestamp.some((issue) => /freshness cannot be verified/i.test(issue)));
+  } finally {
+    if (previousMaxAge == null) delete process.env.FXSNAP_CHART_MAX_AGE_MINUTES;
+    else process.env.FXSNAP_CHART_MAX_AGE_MINUTES = previousMaxAge;
+  }
+});
+
+test('latest-price validation uses instrument-specific ticks and distance limits', () => {
+  assert.equal(chartInstrumentRule('EUR/USD').tickSize, 0.00001);
+  assert.equal(chartInstrumentRule('USDJPY').tickSize, 0.001);
+  assert.equal(chartInstrumentRule('XAUUSD').tickSize, 0.01);
+  assert.notEqual(chartInstrumentRule('EURUSD').maxEntryDistanceTicks, chartInstrumentRule('XAUUSD').maxEntryDistanceTicks);
+
+  const previousRules = process.env.FXSNAP_CHART_INSTRUMENT_RULES;
+  process.env.FXSNAP_CHART_INSTRUMENT_RULES = JSON.stringify({
+    EURUSD: { tickSize: 0.0001, pricePrecision: 4, maxEntryDistanceTicks: 75 },
+  });
+  try {
+    assert.deepEqual(chartInstrumentRule('EURUSD'), {
+      tickSize: 0.0001,
+      pricePrecision: 4,
+      maxEntryDistanceTicks: 75,
+    });
+  } finally {
+    if (previousRules == null) delete process.env.FXSNAP_CHART_INSTRUMENT_RULES;
+    else process.env.FXSNAP_CHART_INSTRUMENT_RULES = previousRules;
+  }
+
+  const badPrecision = getPriceConsistencyIssues({
+    ...consistentPriceSetup,
+    chart: { ...consistentPriceSetup.chart, latest_visible_price: '1.100001' },
+  }, 'EURUSD');
+  assert.ok(badPrecision.some((issue) => /precision\/tick size/i.test(issue)));
+});
+
+test('failed latest-price validation strips candidate levels and returns an explicit no-trade reason', () => {
+  const held = holdSetupForPriceValidation(consistentPriceSetup, ['The entry is stale.']);
+  assert.equal(held.status, 'no_trade');
+  assert.equal(held.trade_setup.type, 'none');
+  assert.equal(held.trade_setup.entry_zone, 'none');
+  assert.equal(held.tradeDecision, 'NONE');
+  assert.match(held.reasons.join(' '), /entry is stale/i);
+});
+
+test('price-consistency retry prompt forces a fresh review of the same image', () => {
+  const messages = buildPriceConsistencyRetryMessages(
+    'image-data',
+    'image/jpeg',
+    'EURUSD',
+    consistentPriceSetup,
+    ['The planned entry is too far away.'],
+  );
+  assert.match(messages[0].content, /single allowed regeneration/i);
+  assert.match(messages[0].content, /do not claim the screenshot price is live/i);
+  assert.match(messages[1].content[0].text, /validation feedback, not as market evidence/i);
+  assert.equal(messages[1].content[1].image_url.url, 'data:image/jpeg;base64,image-data');
 });
 
 test('follow-up prompt sends the same chart and treats the selected pair as an unverified hint', () => {
@@ -89,6 +278,7 @@ test('valid follow-up levels fill missing fields but remain a non-actionable no-
     entry_zone: '1.1000',
     stop_loss: '1.0900',
     take_profit_levels: ['1.1200', '1.1300'],
+    setup_status: 'valid',
     reason: 'Entry is at visible support; stop is below the swing low.',
   });
 
@@ -117,6 +307,7 @@ test('follow-up cannot overwrite supported first-pass levels or add contradictor
     entry_zone: '1.1000',
     stop_loss: '1.1100',
     take_profit_levels: ['1.0800'],
+    setup_status: 'valid',
     reason: 'Conflicting bearish read.',
   });
 
@@ -131,6 +322,7 @@ test('follow-up cannot overwrite supported first-pass levels or add contradictor
     entry_zone: '1.1000',
     stop_loss: '1.1100',
     take_profit_levels: ['1.1200'],
+    setup_status: 'valid',
     reason: 'Invalid stop placement.',
   });
   assert.equal(wrongGeometry.trade_setup.entry_zone, 'none');
@@ -163,6 +355,7 @@ test('level recovery makes at most one provider request and preserves the origin
       entry_zone: '1.1000',
       stop_loss: '1.0900',
       take_profit_levels: ['1.1200'],
+      setup_status: 'valid',
       reason: 'Entry at visible support; stop below the swing low.',
     };
   });
@@ -229,6 +422,7 @@ test('nested and aliased numeric BUY and SELL levels normalize into the canonica
         take_profit: '1.12',
         take_profit_levels: ['1.12', '1.13'],
         risk_reward: 2,
+        setup_status: 'unknown',
       },
       evaluatedRiskReward: 1.7272727272727548,
     },
@@ -248,6 +442,7 @@ test('nested and aliased numeric BUY and SELL levels normalize into the canonica
         take_profit: '65,500',
         take_profit_levels: ['65,500', '64,000'],
         risk_reward: 2.5,
+        setup_status: 'unknown',
       },
       evaluatedRiskReward: 2.5,
     },
@@ -396,6 +591,10 @@ test('vision instructions reserve invalid_image for clearly non-chart or unrecog
   assert.match(prompt, /first take-profit target/i);
   assert.match(prompt, /no win probability has been established/i);
   assert.match(prompt, /do not call a move a breakout unless a candle close is visibly beyond a prior level/i);
+  assert.match(prompt, /start at the right edge and analyze the latest visible candles/i);
+  assert.match(prompt, /never substitute an older candle close/i);
+  assert.match(prompt, /setup_status: "valid"/i);
+  assert.match(prompt, /screenshot-derived price is not a verified live quote/i);
   assert.match(prompt, /NO TRADE means no validated entry, not necessarily no directional bias/i);
   assert.match(prompt, /return the complete trade_setup object with all canonical keys/i);
   assert.match(prompt, /Use trade_setup.type="none".*direction is unclear/i);
@@ -442,6 +641,7 @@ test('comma-formatted crypto prices and ranges parse as full price values', () =
     take_profit: '65,500',
     take_profit_levels: ['65,500', '64,000'],
     risk_reward: 2.5,
+    setup_status: 'unknown',
   });
 
   const result = evaluateDecisionEngine({
@@ -544,11 +744,16 @@ test('authenticated chart upload returns normalized candidate levels through the
     status: 'no_trade',
     chart: {
       is_chart: true,
+      pair: 'EURUSD',
       timeframe: 'M15',
       chart_quality: 'good',
       price_scale_visible: true,
       candles_visible: true,
       has_enough_candles: true,
+      latest_visible_price: '1.10000',
+      current_price_source: 'visible_price_marker',
+      current_candle_status: 'forming',
+      latest_candle_timestamp: new Date().toISOString(),
     },
     analysis: {
       trend: 'bullish',
@@ -562,11 +767,12 @@ test('authenticated chart upload returns normalized candidate levels through the
     zones: { support: '100', resistance: '110', liquidity: 'not_clear' },
     trade_setup: {
       type: 'buy',
-      entry_zone: 100,
-      stop_loss: '95',
-      take_profit: '110',
-      take_profit_levels: ['110', '120'],
+      entry_zone: '1.10000',
+      stop_loss: '1.09900',
+      take_profit: '1.10200',
+      take_profit_levels: ['1.10200', '1.10300'],
       risk_reward: '9',
+      setup_status: 'valid',
     },
     confidence: 72,
     reasoning: ['Entry at visible support; stop below the swing low.'],
@@ -637,11 +843,11 @@ test('authenticated chart upload returns normalized candidate levels through the
     assert.equal(responseBody.body.status, 'no_trade');
     assert.equal(responseBody.body.analysis.volume, 'high');
     assert.equal(responseBody.body.trade_setup.type, 'buy');
-    assert.equal(responseBody.body.trade_setup.entry_zone, '100');
-    assert.equal(responseBody.body.trade_setup.stop_loss, '95');
-    assert.equal(responseBody.body.trade_setup.take_profit, '110');
-    assert.deepEqual(responseBody.body.trade_setup.take_profit_levels, ['110', '120']);
-    assert.equal(responseBody.body.trade_setup.risk_reward, 2);
+    assert.equal(responseBody.body.trade_setup.entry_zone, '1.10000');
+    assert.equal(responseBody.body.trade_setup.stop_loss, '1.09900');
+    assert.equal(responseBody.body.trade_setup.take_profit, '1.10200');
+    assert.deepEqual(responseBody.body.trade_setup.take_profit_levels, ['1.10200', '1.10300']);
+    assert.ok(Math.abs(responseBody.body.trade_setup.risk_reward - 2) < 1e-8);
     assert.equal(responseBody.body.tradeDecision, 'WAIT');
     assert.ok(responseBody.body.rrIssues.length > 0);
 
@@ -650,9 +856,10 @@ test('authenticated chart upload returns normalized candidate levels through the
       {
         status: 'candidate',
         direction: 'buy',
-        entry_zone: '100',
-        stop_loss: '95',
-        take_profit_levels: ['110'],
+        entry_zone: '1.10000',
+        stop_loss: '1.09900',
+        take_profit_levels: ['1.10200'],
+        setup_status: 'valid',
         reason: 'Entry at support; stop below the visible swing low.',
       },
     ];
@@ -662,11 +869,53 @@ test('authenticated chart upload returns normalized candidate levels through the
     assert.equal(providerCalls, 2);
     assert.equal(recoveredResponse.body.status, 'no_trade');
     assert.equal(recoveredResponse.body.levelFollowupStatus, 'completed');
-    assert.equal(recoveredResponse.body.trade_setup.entry_zone, '100');
-    assert.equal(recoveredResponse.body.trade_setup.stop_loss, '95');
-    assert.deepEqual(recoveredResponse.body.trade_setup.take_profit_levels, ['110']);
-    assert.equal(recoveredResponse.body.trade_setup.risk_reward, 2);
+    assert.equal(recoveredResponse.body.trade_setup.entry_zone, '1.10000');
+    assert.equal(recoveredResponse.body.trade_setup.stop_loss, '1.09900');
+    assert.deepEqual(recoveredResponse.body.trade_setup.take_profit_levels, ['1.10200']);
+    assert.ok(Math.abs(recoveredResponse.body.trade_setup.risk_reward - 2) < 1e-8);
     assert.equal(recoveredResponse.body.tradeDecision, 'NONE');
+
+    const movedPriceCandidate = {
+      ...providerAnalysis,
+      status: 'success',
+      chart: { ...providerAnalysis.chart, latest_visible_price: '1.10500' },
+      trade_setup: {
+        ...providerAnalysis.trade_setup,
+        take_profit: '1.11000',
+        take_profit_levels: ['1.11000'],
+      },
+    };
+    const noTradeRetry = {
+      ...providerAnalysis,
+      status: 'no_trade',
+      chart: { ...providerAnalysis.chart, latest_visible_price: null, current_price_source: 'unreadable' },
+      trade_setup: {
+        type: 'none',
+        entry_zone: 'none',
+        stop_loss: 'none',
+        take_profit: 'none',
+        take_profit_levels: [],
+        setup_status: 'unclear',
+      },
+      reasons: ['The current price marker is unreadable.'],
+    };
+    providerResponses = [movedPriceCandidate, noTradeRetry];
+    providerCalls = 0;
+    const regeneratedResponse = await postAnalysis();
+    assert.equal(providerCalls, 2);
+    assert.equal(regeneratedResponse.body.status, 'no_trade');
+    assert.equal(regeneratedResponse.body.trade_setup.type, 'none');
+    assert.equal(regeneratedResponse.body.trade_setup.entry_zone, 'none');
+    assert.ok(regeneratedResponse.body.dataLimitations.some((item) => /current price cannot be reliably read/i.test(item)));
+
+    providerResponses = [movedPriceCandidate, movedPriceCandidate];
+    providerCalls = 0;
+    const rejectedRetryResponse = await postAnalysis();
+    assert.equal(providerCalls, 2);
+    assert.equal(rejectedRetryResponse.body.status, 'no_trade');
+    assert.equal(rejectedRetryResponse.body.trade_setup.type, 'none');
+    assert.equal(rejectedRetryResponse.body.trade_setup.entry_zone, 'none');
+    assert.ok(rejectedRetryResponse.body.reasons.some((item) => /maximum 200 ticks/i.test(item)));
   } finally {
     await new Promise((resolve) => server.close(resolve));
     global.fetch = previousFetch;
@@ -984,6 +1233,10 @@ test('incomplete successful payloads reach the decision engine and cannot produc
       price_scale_visible: true,
       candles_visible: true,
       has_enough_candles: true,
+      latest_visible_price: '65000.00',
+      current_price_source: 'visible_price_marker',
+      current_candle_status: 'completed',
+      latest_candle_timestamp: null,
     },
     analysis: {
       trend: 'bullish',
@@ -1021,6 +1274,7 @@ test('incomplete successful payloads reach the decision engine and cannot produc
       take_profit: '',
       take_profit_levels: [],
       risk_reward: 1.8,
+      setup_status: 'unknown',
     },
     confidence: 72,
     reasons: ['Trend is intact.'],

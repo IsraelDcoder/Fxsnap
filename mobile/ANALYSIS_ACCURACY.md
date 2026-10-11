@@ -3,13 +3,23 @@
 ## Audit findings
 
 - Uploaded-chart analysis is a vision-model interpretation. The model reports trend, structure, zones, patterns, indicators, and proposed trade levels from pixels; exact market prices and broker tick size are not independently recoverable when the chart scale is unreadable.
+- The previous upload contract asked for general chart structure and trade levels but did not require the model to identify the right-edge price/candle state. The backend then validated trade-level geometry and R:R without comparing the setup to a current screenshot price. This allowed an otherwise well-formed historical setup to appear fresh.
+- The client sends the selected image as base64 without cropping; the server passes that same image to OpenRouter. There is no server-side image crop that removes the right edge or price scale, no live quote used in this screenshot-only path, and no cached server analysis reused as a new response. A retry request intentionally reuses the chosen image and starts a new model request.
 - The single-chart flow does not have higher-timeframe data unless those charts are supplied. The separate H4/M15 flow checks alignment and suppresses contradictory or unsupported setups.
 - The deterministic candle path compares closing-price movement over a 24-bar minimum, recent/prior 12-bar highs and lows, and average true range as a percent of price. These are measurable observations, not a complete swing-structure, false-breakout, or reversal classifier.
 - The old candle path fabricated entry/stop/target levels, fixed five-decimal formatting, and a hard-coded 1.8 R:R. It now abstains instead of presenting those unsupported levels as a trade.
-- AI trade levels are parsed and checked independently. BUY/SELL zones must be fully ordered, prices must be positive and finite, R:R is recomputed conservatively from range bounds, and a reported ratio must agree with the computed value. Tick alignment is supported by the validator when a tick size is supplied, but reliable broker tick-size metadata is not currently wired into the chart-analysis request.
+- AI trade levels are parsed and checked independently. BUY/SELL zones must be fully ordered, prices must be positive and finite, R:R is recomputed conservatively from range bounds, and a reported ratio must agree with the computed value. Tick alignment uses per-instrument defaults or server-configured overrides; exact broker/venue tick metadata is still not sourced automatically.
 - The vision prompt follows a fixed evidence-first sequence, requires explanations for entry/invalidation/one TP1, prohibits unsupported probability language, and directs the model to abstain when scale or context is inadequate. Any model-proposed TP2 is omitted from the final result.
 - Confidence is a weighted evidence score. It is not calibrated against historical trade outcomes. The result UI labels it as an evidence score, not a probability of profit.
 - Model-level NO TRADE, invalid image, unavailable model, and invalid model response remain distinct states. The local candle analyzer returns NO TRADE where it cannot justify chart-supported levels.
+
+## Latest-price consistency hotfix
+
+- The OpenRouter prompt and response contract now require analysis to start from the rightmost candles, identify the forming/completed state, and report the screenshot's visible current-price marker and latest candle timestamp. A screenshot-derived value is explicitly not represented as a live quote.
+- Before either single-chart or H4/M15 results are returned, the server checks chart readability, price source, candle state, screenshot timestamp/age, instrument-specific tick size and precision, entry distance, stop/target invalidation, setup status, and recalculated risk/reward. A missing latest-candle timestamp or unreadable current price cannot produce candidate levels.
+- Instrument rules use different defaults for supported forex pairs, gold/silver, crypto, indices, and oil. Operators can override per-symbol rules with `FXSNAP_CHART_INSTRUMENT_RULES`, a JSON object keyed by symbol with `tickSize`, `pricePrecision`, and `maxEntryDistanceTicks`; screenshot age is configurable with `FXSNAP_CHART_MAX_AGE_MINUTES` (default 1440 minutes).
+- If a proposed setup fails any check, the server makes one additional OpenRouter review of the same image with the failed checks and asks for a fresh setup. If the retry does not return a verified setup, the response is NO TRADE and candidate prices are cleared.
+- Automated regression coverage uses known synthetic reference prices to test moved markets, forming candles, distant entries, invalidation/TP already reached, unreadable scales, insufficient/stale charts, and one-retry fail-closed behavior. No approved chart screenshot/reference-price fixtures were available for automated tests, and the repository has no labeled historical screenshot corpus, so screenshot-model accuracy still requires release validation against approved real chart screenshots.
 
 ## Changes in this release
 
@@ -23,7 +33,7 @@
 
 ## Test results and measured baseline
 
-The latest `npm test` run passed 47 TypeScript tests and 42 server tests. This measures parsing, contract integrity, conservative geometry, RR arithmetic, split-boundary handling, and regression behavior; it does not measure predictive trading accuracy. Synthetic cross-asset candles are regression fixtures, not historical performance evidence.
+The latest `npm test` run passed 63 TypeScript tests and 72 server tests. This measures parsing, contract integrity, conservative geometry, RR arithmetic, split-boundary handling, and regression behavior; it does not measure predictive trading accuracy. Synthetic cross-asset candles are regression fixtures, not historical performance evidence.
 
 The workspace contains no historical OHLC research dataset or labeled chart corpus. Its local market service can generate simulated candles, and its Twelve Data adapter can request candles when configured, but neither is an archived, cost-adjusted, chronological evaluation dataset. Therefore there is no defensible baseline win rate, expectancy, or net return to report, and no improved-accuracy claim is made.
 

@@ -43,7 +43,7 @@ import { canViewFullAnalysis } from '@/services/featureAccess';
 import { getInstrument } from '@/services/instruments';
 import { shareAnalysisCardOnWeb } from '@/services/shareAnalysisCard';
 import { formatAnalysisDirection, resolveAnalysisDirection } from '@/services/analysisDirection';
-import { getMissingTradeLevelsExplanation } from '@/services/analysisResult';
+import { formatTradeReadiness, getMissingTradeLevelsExplanation } from '@/services/analysisResult';
 
 type ResultTab = 'analysis' | 'insights';
 
@@ -287,7 +287,7 @@ export default function AnalysisResultScreen() {
       : undefined,
   } : currentAnalysis;
   const stopDistance = currentAnalysis?.slPips ?? getPipDistance(entryLevel, stopLevel, pair);
-  const currentPrice = currentAnalysis?.priceSeries?.at(-1);
+  const currentPrice = currentAnalysis?.latestVisiblePrice ?? currentAnalysis?.priceSeries?.at(-1);
   const entryPrice = entryLevel.match(/-?\d+(?:\.\d+)?/g)?.map(Number).filter(Number.isFinite)[0];
   const priceChangePercent = currentPrice != null && entryPrice != null && entryPrice !== 0
     ? ((currentPrice - entryPrice) / entryPrice) * 100
@@ -304,12 +304,20 @@ export default function AnalysisResultScreen() {
     : riskReward.includes(':') ? riskReward : `1:${riskReward}`;
   const confidence = currentAnalysis?.marketConfidence ?? currentAnalysis?.confidence ?? 0;
   const entryReadiness = Math.round(Math.max(0, Math.min(100, currentAnalysis?.entryReadiness ?? 0)));
-  const readinessLabel = currentAnalysis?.tradeStatus === 'actionable'
-    ? 'Ready'
-    : currentAnalysis?.tradeStatus?.startsWith('waiting')
-      ? 'Waiting for confirmation'
-      : 'Entry not identified';
-  const readinessText = isAnalysisUnavailable ? 'Unavailable' : `${entryReadiness}% · ${readinessLabel}`;
+  const readinessText = isAnalysisUnavailable
+    ? 'Unavailable'
+    : formatTradeReadiness(
+      entryReadiness,
+      currentAnalysis?.tradeStatus,
+      entryLevel,
+      stopLevel,
+      tp1Level,
+      displayDirection,
+      currentAnalysis?.tradeSetup?.riskReward,
+    );
+  const marketEntryText = currentPrice != null
+    ? formatLevelPrice(currentPrice, pair)
+    : entryLevelText;
   const chartPaths = buildSmoothChartPaths(currentAnalysis?.priceSeries);
   const confidenceLabel = confidence >= 70 ? 'High' : confidence >= 40 ? 'Medium' : 'Low';
   const reasoning = currentAnalysis ? currentAnalysis.reasoning?.length ? currentAnalysis.reasoning.slice(0, 5) : [
@@ -423,7 +431,7 @@ export default function AnalysisResultScreen() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
     const lines: string[] = [];
-    if (isNoTrade) {
+    if (isNoTrade || !hasTradeSetup) {
       lines.push('FXSnap — Market Read');
       lines.push('');
       lines.push(`Pair: ${currentAnalysis.pair}`);
@@ -710,6 +718,7 @@ export default function AnalysisResultScreen() {
           <>
             <Animated.View entering={FadeInUp.duration(350)} style={styles.verdictCard}>
               <View style={styles.verdictTop}><Text style={styles.sectionTitle}>MARKET READ</Text><View style={[styles.verdictBadge, { backgroundColor: `${directionColor}20` }]}><View style={[styles.verdictDot, { backgroundColor: directionColor }]} /><Text style={[styles.verdictText, { color: directionColor }]}>{directionLabel}</Text></View></View>
+              <View style={styles.confidenceLine}><Text style={styles.bodyMuted}>Entry (chart snapshot)</Text><Text style={styles.confidenceText}>{marketEntryText}</Text></View>
               <View style={styles.confidenceLine}><Text style={styles.bodyMuted}>Trade readiness</Text><Text style={styles.confidenceText}>{readinessText}</Text></View>
               <View style={styles.confidenceLine}><Text style={styles.bodyMuted}>Evidence score</Text><Text style={styles.confidenceText}>{confidenceLabel} · {confidence}%</Text></View>
               <View style={styles.confidenceTrack}><View style={[styles.confidenceProgress, { width: `${Math.max(0, Math.min(confidence, 100))}%`, backgroundColor: directionColor }]} /></View>

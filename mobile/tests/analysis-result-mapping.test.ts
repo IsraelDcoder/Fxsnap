@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { normalizeChartTradeSetup, type ChartAnalysisResult } from '../services/chartDetection';
-import { buildAnalysisResult, getMissingTradeLevelsExplanation } from '../services/analysisResult';
+import { buildAnalysisResult, formatTradeReadiness, getMissingTradeLevelsExplanation, getTradeReadinessLabel } from '../services/analysisResult';
 
 function chartResult(overrides: Partial<ChartAnalysisResult> = {}): ChartAnalysisResult {
   return {
@@ -27,6 +27,7 @@ function chartResult(overrides: Partial<ChartAnalysisResult> = {}): ChartAnalysi
     marketBias: 'bullish',
     marketBiasConfidence: 64,
     marketConfidence: 64,
+    latestVisiblePrice: 1.1025,
     entryReadiness: 0,
     tradeStatus: 'no_setup',
     setupStatus: 'NO_SETUP',
@@ -45,6 +46,7 @@ test('maps no-trade analysis content and every available level into the result m
   assert.equal(result.direction, 'BUY');
   assert.equal(result.marketBias, 'bullish');
   assert.equal(result.confidence, 64);
+  assert.equal(result.latestVisiblePrice, 1.1025);
   assert.equal(result.entryReadiness, 0);
   assert.deepEqual(result.takeProfitLevels, ['1.1100', '1.1200']);
   assert.deepEqual(result.tradeSetup, {
@@ -241,4 +243,32 @@ test('explains missing directional no-trade levels without implying a fabricated
     tradeSetup: { ...result.tradeSetup!, entryZone: '1.1000', stopLoss: '1.0950' },
     takeProfitLevels: ['1.1100'],
   }), null);
+});
+
+test('trade readiness describes provided levels instead of reporting entry as unidentified', () => {
+  assert.equal(
+    getTradeReadinessLabel('no_setup', '158.23000', '158.15500', '158.29000', 'BUY', 0.8),
+    'BUY candidate setup · RR 0.8 below 1.5 minimum',
+  );
+  assert.equal(
+    getTradeReadinessLabel(undefined, '1.10000', 'Not established', 'Not established'),
+    'Entry identified · setup incomplete',
+  );
+  assert.equal(
+    getTradeReadinessLabel(undefined, 'Not established', 'Not established', 'Not established'),
+    'Setup not identified',
+  );
+  assert.equal(getTradeReadinessLabel('actionable', '1.10', '1.09', '1.12'), 'Ready');
+  assert.equal(getTradeReadinessLabel('waiting_for_confirmation', '1.10', '1.09', '1.12'), 'Waiting for confirmation');
+});
+
+test('readiness status stays visible without showing a zero-percent score', () => {
+  assert.equal(
+    formatTradeReadiness(0, 'no_setup', '158.23000', '158.15500', '158.29000', 'BUY', 0.8),
+    'BUY candidate setup · RR 0.8 below 1.5 minimum',
+  );
+  assert.equal(
+    formatTradeReadiness(64, 'waiting_for_confirmation', '1.10', '1.09', '1.12'),
+    '64% · Waiting for confirmation',
+  );
 });
