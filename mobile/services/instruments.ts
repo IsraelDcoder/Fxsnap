@@ -11,6 +11,7 @@ export interface InstrumentConfig {
   kind: InstrumentKind;
   signalProfile: SignalProfile;
   decimals: number;
+  fixedPricePrecision?: number;
   pipSize: number;
   minimumConfidence: number;
   recentWindow: number;

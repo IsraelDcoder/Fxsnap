@@ -22,6 +22,7 @@ import { useApp } from '@/context/AppContext';
 import type { AnalysisResult } from '@/context/AppContext';
 import { useColors } from '@/hooks/useColors';
 import { formatAnalysisDirection, resolveAnalysisDirection } from '@/services/analysisDirection';
+import { formatInstrumentPriceText } from '@/services/priceFormatting';
 
 type Filter = 'all' | 'BUY' | 'SELL';
 
@@ -140,9 +141,12 @@ function AnalysisCard({
   const isSell = displayDirection === 'SELL';
   const color = isBuy ? colors.buy : isSell ? colors.sell : colors.textSecondary;
   const dirLabel = formatAnalysisDirection(displayDirection, item.status === 'success' && item.tradeStatus === 'actionable', 'DIRECTION UNCLEAR');
-  const entryText = item.entry ?? item.tradeSetup?.entryZone ?? '—';
-  const slText = item.sl ?? item.tradeSetup?.stopLoss ?? '—';
-  const tpText = item.tp ?? item.tradeSetup?.takeProfit ?? '—';
+  const entryText = formatInstrumentPriceText(item.entry ?? item.tradeSetup?.entryZone, item.pair);
+  const slText = formatInstrumentPriceText(item.sl ?? item.tradeSetup?.stopLoss, item.pair);
+  const tpText = formatInstrumentPriceText(
+    item.takeProfitLevels?.join(', ') ?? item.tp ?? item.tradeSetup?.takeProfit,
+    item.pair,
+  );
   const lotLabel = typeof item.lotSize === 'number' && item.lotSize > 0
     ? `${item.lotSize.toFixed(2)} lot`
     : item.status === 'success'

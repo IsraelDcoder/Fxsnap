@@ -1,5 +1,6 @@
 import type { AnalysisResult } from '@/context/AppContext';
 import { formatAnalysisDirection, resolveAnalysisDirection } from '@/services/analysisDirection';
+import { formatInstrumentPriceText } from '@/services/priceFormatting';
 
 type ShareNavigator = Navigator & {
   canShare?: (data: ShareData) => boolean;
@@ -67,9 +68,9 @@ async function createAnalysisCardBlob(analysis: AnalysisResult, isPremium: boole
   const direction = analysis.status === 'invalid_image'
     ? 'INVALID'
     : formatAnalysisDirection(displayDirection, analysis.status === 'success' && analysis.tradeStatus === 'actionable');
-  const entry = analysis.tradeSetup?.entryZone || analysis.entry || '—';
-  const stopLoss = analysis.tradeSetup?.stopLoss || analysis.sl || '—';
-  const takeProfit = analysis.tradeSetup?.takeProfit || analysis.takeProfitLevels?.join(', ') || analysis.tp || '—';
+  const entry = formatInstrumentPriceText(analysis.tradeSetup?.entryZone || analysis.entry, analysis.pair);
+  const stopLoss = formatInstrumentPriceText(analysis.tradeSetup?.stopLoss || analysis.sl, analysis.pair);
+  const takeProfit = formatInstrumentPriceText(analysis.tradeSetup?.takeProfit || analysis.takeProfitLevels?.join(', ') || analysis.tp, analysis.pair);
   const riskReward = analysis.tradeSetup?.riskReward ?? '—';
   const insight = isPremium
     ? analysis.analysis?.notes || analysis.tradeTrigger || analysis.reasoning?.join(' ') || analysis.analysis?.structure || 'Analysis generated from the submitted chart.'

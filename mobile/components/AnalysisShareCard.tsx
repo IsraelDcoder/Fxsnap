@@ -1,6 +1,7 @@
 import React from 'react';
 import { Image, View, Text, StyleSheet } from 'react-native';
 import { formatAnalysisDirection, resolveAnalysisDirection } from '@/services/analysisDirection';
+import { formatInstrumentPriceText } from '@/services/priceFormatting';
 
 // Minimal share card component used for off-screen capture.
 // Calls onReady after the first layout + short delay to ensure fonts/assets have rendered.
@@ -91,7 +92,9 @@ const AnalysisShareCard = React.forwardRef(function AnalysisShareCard(props: Pro
         {[["ENTRY", entry], ["STOP LOSS", stopLoss], ["TAKE PROFIT", takeProfit], ...(isPremium ? [["RISK / REWARD", riskReward]] : [])].filter(([, value]) => value != null && value !== '').map(([label, value]) => (
           <View key={String(label)} style={styles.shareMetric}>
             <Text style={styles.shareLabel}>{label}</Text>
-            <Text numberOfLines={2} style={[styles.shareValue, { color: colors.text }]}>{String(value)}</Text>
+            <Text numberOfLines={2} style={[styles.shareValue, { color: colors.text }]}>
+              {label === 'RISK / REWARD' ? String(value) : formatInstrumentPriceText(value, analysis.pair)}
+            </Text>
           </View>
         ))}
       </View>

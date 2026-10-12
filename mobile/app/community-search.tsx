@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, FlatList, Image, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { router } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
@@ -15,6 +15,7 @@ import {
   toggleCommunityReaction,
   unfollowCommunityMember,
   type CommunityMessage,
+  type CommunityReaction,
   type CommunitySearchKind,
   type CommunitySearchResults,
 } from '@/services/community';
@@ -49,6 +50,8 @@ export default function CommunitySearchScreen() {
   const [error, setError] = useState('');
   const [retryCount, setRetryCount] = useState(0);
   const [recentSearches, setRecentSearches] = useState<string[]>([]);
+  const [reactionBusyIds, setReactionBusyIds] = useState<Set<string>>(() => new Set());
+  const pendingReactionIds = useRef(new Set<string>());
 
   useEffect(() => {
     const normalized = query.trim();
@@ -82,42 +85,39 @@ export default function CommunitySearchScreen() {
     };
   }, [kind, query, retryCount]);
 
-  const toggleLike = async (post: CommunityMessage) => {
-    const current = post.reactions.find((reaction) => reaction.reaction === 'like');
-    const reacted = current?.reacted === true;
-    const baseCount = current?.count || 0;
-    setResults((previous) => ({
-      ...previous,
-      posts: previous.posts.map((item) => item.id !== post.id ? item : {
-        ...item,
-        reactions: [
-          ...item.reactions.filter((reaction) => reaction.reaction !== 'like'),
-          { reaction: 'like', reacted: !reacted, count: Math.max(0, (current?.count || 0) + (reacted ? -1 : 1)) },
-        ],
-      }),
-    }));
+  const toggleReaction = async (post: CommunityMessage, reaction: CommunityReaction) => {
+    if (pendingReactionIds.current.has(post.id)) return;
+    pendingReactionIds.current.add(post.id);
+    setReactionBusyIds((current) => new Set(current).add(post.id));
     try {
-      const response = await toggleCommunityReaction(post.id, 'like');
+      const response = await toggleCommunityReaction(post.id, reaction);
       setResults((previous) => ({
         ...previous,
-        posts: previous.posts.map((item) => {
-          if (item.id !== post.id) return item;
-          const delta = Number(response.reacted) - Number(reacted);
-          return {
-            ...item,
-            reactions: [
-              ...item.reactions.filter((reaction) => reaction.reaction !== 'like'),
-              { reaction: 'like', reacted: response.reacted, count: Math.max(0, baseCount + delta) },
-            ],
-          };
-        }),
+        posts: previous.posts.map((item) => item.id === post.id ? { ...item, reactions: response.reactions } : item),
       }));
     } catch (failure) {
-      setResults((previous) => ({
-        ...previous,
-        posts: previous.posts.map((item) => item.id === post.id ? post : item),
-      }));
       Alert.alert('Could not update reaction', messageFor(failure));
+    } finally {
+      pendingReactionIds.current.delete(post.id);
+      setReactionBusyIds((current) => {
+        const updated = new Set(current);
+        updated.delete(post.id);
+        return updated;
+      });
+    }
+  };
+
+  const sharePost = async (post: CommunityMessage, cardView: View | null) => {
+    try {
+      const shareCount = await shareCommunityPost(post, cardView);
+      if (shareCount !== null) {
+        setResults((previous) => ({
+          ...previous,
+          posts: previous.posts.map((item) => item.id === post.id ? { ...item, shareCount } : item),
+        }));
+      }
+    } catch (failure) {
+      Alert.alert('Could not share post', messageFor(failure));
     }
   };
 
@@ -245,9 +245,10 @@ export default function CommunitySearchScreen() {
             <CommunityPostCard
               post={item}
               ownAccount={false}
-              onLike={() => void toggleLike(item)}
+              reactionBusy={reactionBusyIds.has(item.id)}
+              onReact={(reaction) => void toggleReaction(item, reaction)}
               onComment={() => router.push({ pathname: '/community', params: { postId: item.id } })}
-              onShare={() => { void shareCommunityPost(item).catch((failure) => Alert.alert('Could not share post', messageFor(failure))); }}
+              onShare={(cardView) => { void sharePost(item, cardView); }}
               onMore={() => router.push({ pathname: '/community', params: { postId: item.id } })}
               onFollow={() => void toggleFollow(item)}
               onAuthorPress={() => router.push({ pathname: '/community-member', params: { username: item.authorUsername } })}

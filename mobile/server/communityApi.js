@@ -15,7 +15,7 @@ const ALLOWED_MESSAGE_IMAGES = new Map([
   ['image/webp', 'webp'],
 ]);
 const COMMUNITY_CATEGORIES = ['trading', 'investing', 'finance', 'market_discussion', 'learning', 'chart_analysis', 'questions', 'events'];
-const MESSAGE_REACTIONS = ['like', 'helpful', 'insightful', 'interesting'];
+const MESSAGE_REACTIONS = ['love', 'fire', 'funny', 'clap', 'wow'];
 const USERNAME_PATTERN = /^[a-z0-9_]{3,24}$/;
 const RESERVED_USERNAMES = new Set(['admin', 'administrator', 'fxsnap', 'fxsnap_official', 'moderator', 'support', 'system']);
 
@@ -196,6 +196,13 @@ function createCommunityApi({ getActor, sendJson, readJsonBody, saveCommunityUse
     return [...groups.values()];
   }
 
+  function groupMessageReactions(reactions, accountId, messageId) {
+    const grouped = groupReactions(reactions.filter((reaction) => reaction.message_id === messageId), accountId);
+    const love = grouped.find((reaction) => reaction.reaction === 'love');
+    // Keep old clients' Like label working while new clients use the Love reaction.
+    return love ? [...grouped, { ...love, reaction: 'like' }] : grouped;
+  }
+
   async function serializeMessages(rows, actor) {
       if (!rows.length) return [];
       const ids = rows.map((row) => row.id);
@@ -247,8 +254,10 @@ function createCommunityApi({ getActor, sendJson, readJsonBody, saveCommunityUse
       pinnedAt: row.pinned_at,
       createdAt: row.created_at,
       commentCount: commentCountByMessage.get(row.id) || 0,
+      viewCount: Number(row.view_count) || 0,
+      shareCount: Number(row.share_count) || 0,
       removed: Boolean(row.removed_at),
-      reactions: groupReactions(reactions.filter((reaction) => reaction.message_id === row.id), actor.accountId),
+      reactions: groupMessageReactions(reactions, actor.accountId, row.id),
     }));
   }
 
@@ -259,7 +268,7 @@ function createCommunityApi({ getActor, sendJson, readJsonBody, saveCommunityUse
     }
     const rows = parseRows(await getRows(
       'fxsnap_community_messages',
-      `id=eq.${encodeURIComponent(id)}&select=id,account_id,author_username,is_official,kind,body,payload,reply_to_id,pinned_at,pinned_by,removed_at,created_at,client_message_id&limit=1`,
+      `id=eq.${encodeURIComponent(id)}&select=id,account_id,author_username,is_official,kind,body,payload,reply_to_id,pinned_at,pinned_by,removed_at,created_at,client_message_id,view_count,share_count&limit=1`,
     ));
     if (!rows.length || rows[0].removed_at) {
       sendJson(res, 404, { error: 'Community message not found.' });
@@ -268,69 +277,69 @@ function createCommunityApi({ getActor, sendJson, readJsonBody, saveCommunityUse
     return rows[0];
   }
 
+  async function listComments(actor, url, parentId, res) {
+    const threadRoot = await resolveMessage({ headers: {} }, res, parentId);
+    if (!threadRoot) return;
+    const requestedParentId = url.searchParams.get('parentId') || parentId;
+    const parent = requestedParentId === threadRoot.id
+      ? threadRoot
+      : await resolveMessage({ headers: {} }, res, requestedParentId);
+    if (!parent) return;
+    if (parent.id !== threadRoot.id && parent.reply_to_id !== threadRoot.id) {
+      sendJson(res, 400, { error: 'Replies must remain in the selected post discussion.' });
+      return;
+    }
+    const limit = Number(url.searchParams.get('limit') || MEMBER_LIMIT);
+    if (!Number.isInteger(limit) || limit < 1 || limit > MEMBER_LIMIT) {
+      sendJson(res, 400, { error: `Comment page size must be between 1 and ${MEMBER_LIMIT}.` });
+      return;
+    }
+    const before = url.searchParams.get('before');
+    const params = new URLSearchParams({
+      select: 'id,account_id,author_username,is_official,kind,category,body,payload,reply_to_id,pinned_at,removed_at,created_at,client_message_id,view_count,share_count',
+      reply_to_id: `eq.${parent.id}`,
+      removed_at: 'is.null',
+      order: 'created_at.asc,id.asc',
+      limit: String(limit + 1),
+    });
+    if (before) {
+      let cursor;
+      try { cursor = JSON.parse(Buffer.from(before, 'base64url').toString('utf8')); } catch {
+        return sendJson(res, 400, { error: 'Invalid comment history cursor.' });
+      }
+      if (typeof cursor.createdAt !== 'string' || Number.isNaN(Date.parse(cursor.createdAt))
+        || typeof cursor.id !== 'string' || !/^[0-9a-f-]{36}$/i.test(cursor.id)) {
+        return sendJson(res, 400, { error: 'Invalid comment history cursor.' });
+      }
+      params.set('or', `(created_at.gt.${cursor.createdAt},and(created_at.eq.${cursor.createdAt},id.gt.${cursor.id}))`);
+    }
+    const rows = parseRows(await getRows('fxsnap_community_messages', params.toString()));
+    const visibleRows = [];
+    for (const row of rows) {
+      const blocked = parseRows(await getRows(
+        'fxsnap_community_blocks',
+        `or=(and(blocker_account_id.eq.${encodeURIComponent(actor.accountId)},blocked_account_id.eq.${encodeURIComponent(row.account_id)}),and(blocker_account_id.eq.${encodeURIComponent(row.account_id)},blocked_account_id.eq.${encodeURIComponent(actor.accountId)}))&select=blocker_account_id&limit=1`,
+      ));
+      if (!blocked.length) visibleRows.push(row);
+    }
+    const hasMore = visibleRows.length > limit;
+    const page = visibleRows.slice(0, limit);
+    const serialized = await serializeMessages(page, actor);
+    const last = page.at(-1);
+    return sendJson(res, 200, {
+      comments: serialized,
+      hasMore,
+      nextCursor: hasMore && last
+        ? Buffer.from(JSON.stringify({ createdAt: last.created_at, id: last.id })).toString('base64url')
+        : null,
+    });
+  }
+
   async function listMessages(actor, url, res) {
     const rawLimit = Number(url.searchParams.get('limit') || MEMBER_LIMIT);
     if (!Number.isInteger(rawLimit) || rawLimit < 1 || rawLimit > MEMBER_LIMIT) {
       sendJson(res, 400, { error: `Message page size must be between 1 and ${MEMBER_LIMIT}.` });
       return;
-    }
-
-    async function listComments(actor, url, parentId, res) {
-      const threadRoot = await resolveMessage({ headers: {} }, res, parentId);
-      if (!threadRoot) return;
-      const requestedParentId = url.searchParams.get('parentId') || parentId;
-      const parent = requestedParentId === threadRoot.id
-        ? threadRoot
-        : await resolveMessage({ headers: {} }, res, requestedParentId);
-      if (!parent) return;
-      if (parent.id !== threadRoot.id && parent.reply_to_id !== threadRoot.id) {
-        sendJson(res, 400, { error: 'Replies must remain in the selected post discussion.' });
-        return;
-      }
-      const limit = Number(url.searchParams.get('limit') || MEMBER_LIMIT);
-      if (!Number.isInteger(limit) || limit < 1 || limit > MEMBER_LIMIT) {
-        sendJson(res, 400, { error: `Comment page size must be between 1 and ${MEMBER_LIMIT}.` });
-        return;
-      }
-      const before = url.searchParams.get('before');
-      const params = new URLSearchParams({
-        select: 'id,account_id,author_username,is_official,kind,category,body,payload,reply_to_id,pinned_at,removed_at,created_at,client_message_id',
-        reply_to_id: `eq.${parent.id}`,
-        removed_at: 'is.null',
-        order: 'created_at.asc,id.asc',
-        limit: String(limit + 1),
-      });
-      if (before) {
-        let cursor;
-        try { cursor = JSON.parse(Buffer.from(before, 'base64url').toString('utf8')); } catch {
-          return sendJson(res, 400, { error: 'Invalid comment history cursor.' });
-        }
-        if (typeof cursor.createdAt !== 'string' || Number.isNaN(Date.parse(cursor.createdAt))
-          || typeof cursor.id !== 'string' || !/^[0-9a-f-]{36}$/i.test(cursor.id)) {
-          return sendJson(res, 400, { error: 'Invalid comment history cursor.' });
-        }
-        params.set('or', `(created_at.gt.${cursor.createdAt},and(created_at.eq.${cursor.createdAt},id.gt.${cursor.id}))`);
-      }
-      const rows = parseRows(await getRows('fxsnap_community_messages', params.toString()));
-      const visibleRows = [];
-      for (const row of rows) {
-        const blocked = parseRows(await getRows(
-          'fxsnap_community_blocks',
-          `or=(and(blocker_account_id.eq.${encodeURIComponent(actor.accountId)},blocked_account_id.eq.${encodeURIComponent(row.account_id)}),and(blocker_account_id.eq.${encodeURIComponent(row.account_id)},blocked_account_id.eq.${encodeURIComponent(actor.accountId)}))&select=blocker_account_id&limit=1`,
-        ));
-        if (!blocked.length) visibleRows.push(row);
-      }
-      const hasMore = visibleRows.length > limit;
-      const page = visibleRows.slice(0, limit);
-      const serialized = await serializeMessages(page, actor);
-      const last = page.at(-1);
-      return sendJson(res, 200, {
-        comments: serialized,
-        hasMore,
-        nextCursor: hasMore && last
-          ? Buffer.from(JSON.stringify({ createdAt: last.created_at, id: last.id })).toString('base64url')
-          : null,
-      });
     }
     const cursor = url.searchParams.get('before');
     let before = null;
@@ -376,7 +385,7 @@ function createCommunityApi({ getActor, sendJson, readJsonBody, saveCommunityUse
     ));
     const blockedByIds = blockedBy.map((row) => `"${String(row.blocker_account_id).replace(/"/g, '')}"`);
     const params = new URLSearchParams({
-      select: 'id,account_id,author_username,is_official,kind,category,body,payload,reply_to_id,pinned_at,removed_at,created_at,client_message_id',
+      select: 'id,account_id,author_username,is_official,kind,category,body,payload,reply_to_id,pinned_at,removed_at,created_at,client_message_id,view_count,share_count',
       removed_at: 'is.null',
       reply_to_id: 'is.null',
       order: 'created_at.desc,id.desc',
@@ -450,6 +459,7 @@ function createCommunityApi({ getActor, sendJson, readJsonBody, saveCommunityUse
         entry: z.string().max(100).nullable().optional(),
         stopLoss: z.string().max(100).nullable().optional(),
         takeProfits: z.array(z.string().max(100)).max(5).default([]),
+        riskReward: z.union([z.number().finite(), z.string().max(24)]).nullable().optional(),
         marketBias: z.string().max(40).nullable().optional(),
         reasoning: z.array(z.string().max(500)).max(8).default([]),
         imageUrl: z.string().url().max(2048).nullable().optional(),
@@ -708,7 +718,7 @@ function createCommunityApi({ getActor, sendJson, readJsonBody, saveCommunityUse
           ...parseRows(blockedBy).map((row) => row.blocker_account_id),
         ])];
         const params = new URLSearchParams({
-          select: 'id,account_id,author_username,is_official,kind,category,body,payload,reply_to_id,pinned_at,removed_at,created_at,client_message_id',
+          select: 'id,account_id,author_username,is_official,kind,category,body,payload,reply_to_id,pinned_at,removed_at,created_at,client_message_id,view_count,share_count',
           body: `ilike.*${query}*`,
           removed_at: 'is.null',
           reply_to_id: 'is.null',
@@ -798,6 +808,63 @@ function createCommunityApi({ getActor, sendJson, readJsonBody, saveCommunityUse
           kind: 'text',
           replyToId,
         }, res);
+      }
+
+      if (pathname === '/api/community/views' && req.method === 'POST') {
+        const input = z.object({
+          messageIds: z.array(z.string().uuid()).min(1).max(30),
+        }).safeParse(await readJsonBody(req));
+        if (!input.success) return sendJson(res, 400, { error: 'Choose up to 30 valid posts to record.' });
+        await rateLimit(actor.accountId, 'views', 60, 60);
+        const idExpression = encodeURIComponent([...new Set(input.data.messageIds)].map((id) => `"${id}"`).join(','));
+        const [visibleRows, blockedByActor, blockedActor] = await Promise.all([
+          getRows(
+            'fxsnap_community_messages',
+            `id=in.(${idExpression})&reply_to_id=is.null&removed_at=is.null&select=id,account_id`,
+          ),
+          getRows(
+            'fxsnap_community_blocks',
+            `blocker_account_id=eq.${encodeURIComponent(actor.accountId)}&select=blocked_account_id`,
+          ),
+          getRows(
+            'fxsnap_community_blocks',
+            `blocked_account_id=eq.${encodeURIComponent(actor.accountId)}&select=blocker_account_id`,
+          ),
+        ]);
+        const excludedAccounts = new Set([
+          ...parseRows(blockedByActor).map((row) => row.blocked_account_id),
+          ...parseRows(blockedActor).map((row) => row.blocker_account_id),
+        ]);
+        const eligibleIds = parseRows(visibleRows)
+          .filter((row) => row.account_id !== actor.accountId && !excludedAccounts.has(row.account_id))
+          .map((row) => row.id);
+        if (!eligibleIds.length) return sendJson(res, 200, { views: [] });
+        const counts = parseRows(await database('rpc/fxsnap_community_record_views', {
+          method: 'POST',
+          body: JSON.stringify({ p_message_ids: eligibleIds, p_account_id: actor.accountId }),
+        }));
+        return sendJson(res, 200, {
+          views: counts.map((row) => ({ messageId: row.message_id, viewCount: Number(row.view_count) || 0 })),
+        });
+      }
+
+      const shareMatch = pathname.match(/^\/api\/community\/messages\/([0-9a-f-]+)\/shares$/i);
+      if (shareMatch && req.method === 'POST') {
+        await rateLimit(actor.accountId, 'shares', 20, 60);
+        const message = await resolveMessage(req, res, shareMatch[1]);
+        if (!message) return true;
+        if (message.reply_to_id) return sendJson(res, 400, { error: 'Only Community posts can be shared.' });
+        const blocked = parseRows(await getRows(
+          'fxsnap_community_blocks',
+          `or=(and(blocker_account_id.eq.${encodeURIComponent(actor.accountId)},blocked_account_id.eq.${encodeURIComponent(message.account_id)}),and(blocker_account_id.eq.${encodeURIComponent(message.account_id)},blocked_account_id.eq.${encodeURIComponent(actor.accountId)}))&select=blocker_account_id&limit=1`,
+        ));
+        if (blocked.length) return sendJson(res, 404, { error: 'Community post not found.' });
+        const counts = parseRows(await database('rpc/fxsnap_community_record_share', {
+          method: 'POST',
+          body: JSON.stringify({ p_message_id: message.id, p_account_id: actor.accountId }),
+        }));
+        if (!counts.length) return sendJson(res, 404, { error: 'Community post not found.' });
+        return sendJson(res, 200, { shareCount: Number(counts[0].share_count) || 0 });
       }
 
       const messageMatch = pathname.match(/^\/api\/community\/messages\/([0-9a-f-]+)$/i);
@@ -940,8 +1007,12 @@ function createCommunityApi({ getActor, sendJson, readJsonBody, saveCommunityUse
 
       const reactionMatch = pathname.match(/^\/api\/community\/messages\/([0-9a-f-]+)\/reactions$/i);
       if (reactionMatch && req.method === 'POST') {
-        const input = z.object({ reaction: z.string().refine((value) => MESSAGE_REACTIONS.includes(value)) }).safeParse(await readJsonBody(req));
+        const input = z.object({
+          reaction: z.string().refine((value) => value === 'like' || MESSAGE_REACTIONS.includes(value)),
+        }).safeParse(await readJsonBody(req));
         if (!input.success) return sendJson(res, 400, { error: 'Choose one of the available reactions.' });
+        const requestedReaction = input.data.reaction === 'like' ? 'love' : input.data.reaction;
+        await rateLimit(actor.accountId, 'reactions', 60, 60);
         const message = await resolveMessage(req, res, reactionMatch[1]);
         if (!message) return true;
         const blocked = parseRows(await getRows(
@@ -949,22 +1020,21 @@ function createCommunityApi({ getActor, sendJson, readJsonBody, saveCommunityUse
           `blocker_account_id=eq.${encodeURIComponent(message.account_id)}&blocked_account_id=eq.${encodeURIComponent(actor.accountId)}&select=blocker_account_id&limit=1`,
         ));
         if (blocked.length) return sendJson(res, 403, { error: 'This member does not accept interactions from your account.' });
-        const query = `message_id=eq.${encodeURIComponent(message.id)}&account_id=eq.${encodeURIComponent(actor.accountId)}&reaction=eq.${encodeURIComponent(input.data.reaction)}`;
-        const current = parseRows(await getRows('fxsnap_community_reactions', `${query}&select=message_id&limit=1`));
-        if (current.length) {
-          await deleteRows('fxsnap_community_reactions', query);
-          return sendJson(res, 200, { reacted: false });
-        }
-        try {
-          await insertRows('fxsnap_community_reactions', {
-            message_id: message.id,
-            account_id: actor.accountId,
-            reaction: input.data.reaction,
-          }, 'return=minimal');
-        } catch (error) {
-          if (error.status !== 409) throw error;
-        }
-        return sendJson(res, 200, { reacted: true });
+        const selection = parseRows(await database('rpc/fxsnap_community_set_reaction', {
+          method: 'POST',
+          body: JSON.stringify({
+            p_message_id: message.id,
+            p_account_id: actor.accountId,
+            p_reaction: requestedReaction,
+          }),
+        }))[0];
+        const reactions = groupReactions(await queryReactions([message.id]), actor.accountId);
+        const selectedReaction = selection?.selected_reaction || null;
+        return sendJson(res, 200, {
+          reacted: selectedReaction !== null,
+          selectedReaction,
+          reactions,
+        });
       }
 
       if (pathname === '/api/community/reports' && req.method === 'POST') {

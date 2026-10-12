@@ -24,6 +24,10 @@ FXSnap uses an app-scoped identifier to maintain anonymous API sessions and asso
 
 If you opt in, FXSnap stores your Expo push token, device platform, notification preferences, and app activity events such as app opens and completed chart analyses. This information is used to send the notification categories you select, with no more than one campaign per device in a seven-day period. You can disable notifications or individual categories in Settings. Disabling notifications removes the device's registered push token from the FXSnap service.
 
+## Community engagement
+
+The Community displays aggregated post view, reaction, comment, and share counts. A post view is recorded for a signed-in Community account after the post is at least 60% visible for one second; the post author is not counted. View deduplication records associate an account with a post for a 24-hour window, and successful text-share events are deduplicated for 30 seconds. These private deduplication records are not shown to other members and are deleted when the account or post is deleted. Viewer identities are never included in public post data. Image-share sheets do not increment the share count because the platform does not reliably report whether the user completed or cancelled sharing.
+
 ## Data deletion and contact
 
 To request deletion of data held by a deployed FXSnap service, contact the app operator through the support address published in the store listing. Local data can be removed by deleting the app data or using the in-app deletion control when available.

@@ -45,8 +45,14 @@ import { getInstrument } from '@/services/instruments';
 import { shareAnalysisCardOnWeb } from '@/services/shareAnalysisCard';
 import { formatAnalysisDirection, resolveAnalysisDirection } from '@/services/analysisDirection';
 import { formatTradeReadiness, getMissingTradeLevelsExplanation } from '@/services/analysisResult';
+import { formatInstrumentPriceText } from '@/services/priceFormatting';
 
 type ResultTab = 'analysis' | 'insights';
+
+function pairCurrencies(pair: string) {
+  const currencies = pair.toUpperCase().match(/[A-Z]{3}/g) ?? [];
+  return [currencies[0] ?? pair.slice(0, 3).toUpperCase(), currencies[1] ?? pair.slice(-3).toUpperCase()];
+}
 
 function currencyFlag(currency: string) {
   const countryByCurrency: Record<string, string> = {
@@ -58,24 +64,6 @@ function currencyFlag(currency: string) {
   return country
     ? String.fromCodePoint(...[...country].map((letter) => 127397 + letter.charCodeAt(0)))
     : currency.slice(0, 2);
-}
-
-function pairCurrencies(pair: string) {
-  const currencies = pair.toUpperCase().match(/[A-Z]{3}/g) ?? [];
-  return [currencies[0] ?? pair.slice(0, 3).toUpperCase(), currencies[1] ?? pair.slice(-3).toUpperCase()];
-}
-
-function formatLevelPrice(value: string | number | undefined, pair: string) {
-  if (value == null || value === '') return '—';
-  const text = String(value).trim();
-  if (['none', 'not_clear', 'unknown'].includes(text.toLowerCase())) return '—';
-  if (!/^-?\d+(?:\.\d+)?$/.test(text)) return text;
-  const [base, quote] = pairCurrencies(pair);
-  const instrument = getInstrument(pair.replace(/[^A-Z0-9]/gi, ''));
-  const decimals = instrument
-    ? instrument.kind === 'forex' ? instrument.decimals + 1 : instrument.decimals
-    : quote === 'JPY' || base === 'JPY' ? 3 : 5;
-  return Number(text).toFixed(decimals);
 }
 
 function firstAvailableLevel(...values: (string | number | undefined)[]) {
@@ -269,10 +257,10 @@ export default function AnalysisResultScreen() {
     ...(currentAnalysis?.tp ? [currentAnalysis.tp] : []),
   ].filter((level, index, levels) => firstAvailableLevel(level) != null && levels.indexOf(level) === index).slice(0, 2);
   const usableTargetLevels = targetLevels;
-  const entryLevel = formatLevelPrice(firstAvailableLevel(currentAnalysis?.entry, currentAnalysis?.tradeSetup?.entryZone), pair);
-  const stopLevel = formatLevelPrice(firstAvailableLevel(currentAnalysis?.sl, currentAnalysis?.tradeSetup?.stopLoss), pair);
-  const tp1Level = formatLevelPrice(usableTargetLevels[0], pair);
-  const tp2Level = formatLevelPrice(usableTargetLevels[1], pair);
+  const entryLevel = formatInstrumentPriceText(firstAvailableLevel(currentAnalysis?.entry, currentAnalysis?.tradeSetup?.entryZone), pair);
+  const stopLevel = formatInstrumentPriceText(firstAvailableLevel(currentAnalysis?.sl, currentAnalysis?.tradeSetup?.stopLoss), pair);
+  const tp1Level = formatInstrumentPriceText(usableTargetLevels[0], pair);
+  const tp2Level = formatInstrumentPriceText(usableTargetLevels[1], pair);
   const unavailableLevelLabel = isNoTrade ? 'Not established' : 'Not provided';
   const entryLevelText = entryLevel === '—' ? unavailableLevelLabel : entryLevel;
   const stopLevelText = stopLevel === '—' ? unavailableLevelLabel : stopLevel;
@@ -319,7 +307,7 @@ export default function AnalysisResultScreen() {
       currentAnalysis?.tradeSetup?.riskReward,
     );
   const marketEntryText = currentPrice != null
-    ? formatLevelPrice(currentPrice, pair)
+    ? formatInstrumentPriceText(currentPrice, pair)
     : 'Unreadable from screenshot';
   const chartPaths = buildSmoothChartPaths(currentAnalysis?.priceSeries);
   const confidenceLabel = confidence >= 70 ? 'High' : confidence >= 40 ? 'Medium' : 'Low';
@@ -331,14 +319,14 @@ export default function AnalysisResultScreen() {
     currentAnalysis.analysis?.notes || currentAnalysis.multiTimeframe?.summary || '',
   ].filter(Boolean).slice(0, 5) : [];
   const supportLevels = currentAnalysis?.supportResistance?.support?.length
-    ? currentAnalysis.supportResistance.support.join(', ')
+    ? formatInstrumentPriceText(currentAnalysis.supportResistance.support.join(', '), pair)
     : currentAnalysis?.zones?.support && currentAnalysis.zones.support !== 'not_clear'
-      ? currentAnalysis.zones.support
+      ? formatInstrumentPriceText(currentAnalysis.zones.support, pair)
       : 'Not identified';
   const resistanceLevels = currentAnalysis?.supportResistance?.resistance?.length
-    ? currentAnalysis.supportResistance.resistance.join(', ')
+    ? formatInstrumentPriceText(currentAnalysis.supportResistance.resistance.join(', '), pair)
     : currentAnalysis?.zones?.resistance && currentAnalysis.zones.resistance !== 'not_clear'
-      ? currentAnalysis.zones.resistance
+      ? formatInstrumentPriceText(currentAnalysis.zones.resistance, pair)
       : 'Not identified';
 
   useEffect(() => {
@@ -471,15 +459,15 @@ export default function AnalysisResultScreen() {
       };
 
       if (hasTradeSetup && currentAnalysis.tradeSetup) {
-        lines.push(`Entry:       ${currentAnalysis.tradeSetup.entryZone}`);
-        lines.push(`Stop Loss:   ${currentAnalysis.tradeSetup.stopLoss}`);
+        lines.push(`Entry:       ${entryLevel}`);
+        lines.push(`Stop Loss:   ${stopLevel}`);
         lines.push(`Take Profit 1: ${tp1Level}`);
         if (hasFullAnalysisAccess && usableTargetLevels.length > 1) lines.push(`Take Profit 2: ${tp2Level}`);
         if (hasFullAnalysisAccess) lines.push(`Risk/Reward: ${formatRR(currentAnalysis.tradeSetup.riskReward)}`);
       } else {
-        lines.push(`Entry:       ${currentAnalysis.entry ?? '—'}`);
-        lines.push(`Stop Loss:   ${currentAnalysis.sl ?? '—'}`);
-        lines.push(`Take Profit: ${currentAnalysis.tp ?? '—'}`);
+        lines.push(`Entry:       ${entryLevel}`);
+        lines.push(`Stop Loss:   ${stopLevel}`);
+        lines.push(`Take Profit: ${tp1Level}`);
         lines.push(`Lot Size:    ${currentAnalysis.lotSize ? currentAnalysis.lotSize.toFixed(2) : 'n/a'}`);
         lines.push(`SL Distance: ${currentAnalysis.slPips ? `${currentAnalysis.slPips} pips` : '—'}`);
       }
@@ -762,7 +750,38 @@ export default function AnalysisResultScreen() {
         ) : (
           <>
             <View style={[styles.levelsCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}><Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>SUPPORT & RESISTANCE</Text><TradeLevelRow label="Support" value={supportLevels} color="#39E58C" /><View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} /><TradeLevelRow label="Resistance" value={resistanceLevels} color="#FF7777" /></View>
-            <View style={[styles.levelsCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}><Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>TREND & PATTERN</Text><TradeLevelRow label="Trend" value={currentAnalysis.analysis?.trend || currentAnalysis.marketBias || 'Not identified'} /><View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} /><TradeLevelRow label="Structure" value={currentAnalysis.analysis?.structure || 'Not identified'} />{currentAnalysis.multiTimeframe ? <><View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} /><TradeLevelRow label="Timeframe alignment" value={currentAnalysis.multiTimeframe.alignment} color={currentAnalysis.multiTimeframe.alignment === 'aligned' ? '#39E58C' : '#FFC857'} /></> : null}</View>
+            <View style={[styles.levelsCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+              <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>TREND & PATTERN</Text>
+              <View style={styles.patternDetail}>
+                <Text style={[styles.patternLabel, { color: colors.textSecondary }]}>Trend</Text>
+                <Text style={[styles.patternTrend, {
+                  color: ['bullish'].includes(currentAnalysis.analysis?.trend || currentAnalysis.marketBias || '')
+                    ? colors.buy
+                    : ['bearish'].includes(currentAnalysis.analysis?.trend || currentAnalysis.marketBias || '')
+                      ? colors.sell
+                      : colors.text,
+                }]}>
+                  {(currentAnalysis.analysis?.trend || currentAnalysis.marketBias || 'Not identified').replace(/_/g, ' ')}
+                </Text>
+              </View>
+              <View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
+              <View style={styles.patternDetail}>
+                <Text style={[styles.patternLabel, { color: colors.textSecondary }]}>Structure</Text>
+                <Text style={[styles.patternStructure, { color: colors.text }]}>
+                  {currentAnalysis.analysis?.structure || 'Not identified'}
+                </Text>
+              </View>
+              {currentAnalysis.multiTimeframe ? (
+                <>
+                  <View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
+                  <TradeLevelRow
+                    label="Timeframe alignment"
+                    value={currentAnalysis.multiTimeframe.alignment}
+                    color={currentAnalysis.multiTimeframe.alignment === 'aligned' ? '#39E58C' : '#FFC857'}
+                  />
+                </>
+              ) : null}
+            </View>
             <View style={[styles.levelsCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
               <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>RISK NOTES</Text>
               {[...(currentAnalysis.whyNotNow ?? []), ...(currentAnalysis.dataLimitations ?? []), ...(currentAnalysis.rrIssues ?? [])].length
@@ -955,6 +974,10 @@ const styles = StyleSheet.create({
   levelTableLabel: { flex: 1, color: '#A6A6A6', fontSize: 12, fontFamily: 'Inter_500Medium' },
   levelTableValueWrap: { position: 'relative', maxWidth: '58%', minWidth: 50, minHeight: 22, alignItems: 'flex-end', justifyContent: 'center', overflow: 'hidden' },
   levelTableValue: { fontSize: 12, fontFamily: 'Inter_700Bold', textAlign: 'right' },
+  patternDetail: { gap: 6 },
+  patternLabel: { fontSize: 11, fontFamily: 'Inter_600SemiBold', letterSpacing: 0.3, textTransform: 'uppercase' },
+  patternTrend: { fontSize: 15, lineHeight: 22, fontFamily: 'Inter_700Bold', textTransform: 'capitalize' },
+  patternStructure: { fontSize: 14, lineHeight: 21, fontFamily: 'Inter_500Medium' },
   lockedValue: { color: '#8F8F8F' },
   tableDivider: { height: 1, backgroundColor: '#292929' },
   aiHeading: { minHeight: 34, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },

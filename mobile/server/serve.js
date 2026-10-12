@@ -352,16 +352,6 @@ const TradeAnalysisSchema = z.object({
   }).optional(),
   market_data_timestamp: z.string().optional().nullable(),
   market_data_source: z.string().trim().optional().nullable(),
-}).superRefine((value, ctx) => {
-  if (value.status === 'no_trade' && value.trade_setup && value.trade_setup.type !== 'none') {
-    const hasTradeGeometry = hasMeaningfulLevel(value.trade_setup.entry_zone)
-      || hasMeaningfulLevel(value.trade_setup.stop_loss)
-      || hasMeaningfulLevel(value.trade_setup.take_profit)
-      || Number.isFinite(Number(value.trade_setup.risk_reward));
-    if (!hasTradeGeometry && value.trade_setup.type !== 'none') {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'A no-trade response cannot contain an incomplete trade setup.' });
-    }
-  }
 });
 const CandidateLevelFollowupSchema = z.object({
   status: z.enum(['candidate', 'no_candidate']),
@@ -370,13 +360,63 @@ const CandidateLevelFollowupSchema = z.object({
   stop_loss: z.string().trim().min(1).max(200).optional(),
   take_profit_levels: z.array(z.string().trim().min(1).max(200)).max(2).optional(),
   setup_status: z.enum(['valid', 'missed', 'invalidated', 'unclear']).optional(),
-  reason: z.string().trim().min(1).max(300),
-}).superRefine((value, ctx) => {
-  if (value.status === 'candidate'
-    && (!value.direction || !value.entry_zone || !value.stop_loss || !value.take_profit_levels?.length)) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'A candidate requires a direction, entry, stop, and at least one target.' });
-  }
+  reason: z.string().trim().max(300).optional(),
 });
+function normalizeCandidateLevelFollowup(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
+
+  const setup = getAnalysisTradeSetup(raw, {});
+  const entry = firstNormalizedLevel(
+    setup.entry_zone, setup.entryZone, setup.entry, setup.entry_price, setup.entryPrice,
+    raw.entry_zone, raw.entryZone, raw.entry, raw.entry_price, raw.entryPrice,
+  );
+  const stop = firstNormalizedLevel(
+    setup.stop_loss, setup.stopLoss, setup.stop_loss_price, setup.stopLossPrice, setup.sl, setup.stop,
+    raw.stop_loss, raw.stopLoss, raw.stop_loss_price, raw.stopLossPrice, raw.sl, raw.stop,
+  );
+  const targets = normalizeTargetLevels(
+    setup.take_profit_levels ?? setup.takeProfitLevels ?? setup.targets ?? setup.take_profits
+      ?? raw.take_profit_levels ?? raw.takeProfitLevels ?? raw.targets ?? raw.take_profits
+      ?? setup.take_profit ?? setup.takeProfit ?? setup.tp ?? setup.target
+      ?? raw.take_profit ?? raw.takeProfit ?? raw.tp ?? raw.target,
+  );
+  const hasCandidateLevels = Boolean(entry || stop || targets.length);
+  const status = canonicalizeEnumOr(raw.status, {
+    candidate: 'candidate',
+    partial: 'candidate',
+    no_candidate: 'no_candidate',
+    'no candidate': 'no_candidate',
+  }, ['candidate', 'no_candidate'], hasCandidateLevels ? 'candidate' : undefined);
+  const direction = canonicalizeEnumOr(
+    setup.direction ?? setup.side ?? setup.type ?? raw.direction ?? raw.side ?? raw.type,
+    { buy: 'buy', long: 'buy', bullish: 'buy', sell: 'sell', short: 'sell', bearish: 'sell' },
+    ['buy', 'sell'],
+    undefined,
+  );
+  const setupStatus = canonicalizeEnumOr(
+    setup.setup_status ?? setup.setupStatus ?? raw.setup_status ?? raw.setupStatus,
+    {
+      valid: 'valid',
+      missed: 'missed',
+      invalidated: 'invalidated',
+      unclear: 'unclear',
+      unknown: 'unclear',
+      unverified: 'unclear',
+    },
+    ['valid', 'missed', 'invalidated', 'unclear'],
+    undefined,
+  );
+
+  return {
+    status,
+    direction,
+    entry_zone: entry || undefined,
+    stop_loss: stop || undefined,
+    take_profit_levels: targets,
+    setup_status: setupStatus,
+    reason: boundedString(raw.reason ?? raw.explanation ?? raw.rationale, '', 300) || undefined,
+  };
+}
 const MultiTimeframeInputSchema = z.object({
   pair: z.string().trim().min(1).max(20),
   premiumAccess: z.boolean().optional(),
@@ -731,7 +771,7 @@ function preserveUnverifiedCandidateLevels(result, issues) {
   const setup = result?.trade_setup || {};
   const rule = chartInstrumentRule(chart.pair || result?.detectedPair);
   const metadataOnlyIssues = issues.length > 0 && issues.every((issue) => (
-    /current price cannot be reliably read|rightmost candle could not be distinguished|timestamp is unreadable|timestamp is not a reliable|timestamp is stale or in the future/i.test(issue)
+    /current price cannot be reliably read|rightmost candle could not be distinguished|timestamp is unreadable|timestamp is not a reliable|timestamp is stale or in the future|instrument or its tick-size rules could not be verified/i.test(issue)
   ));
   if (!metadataOnlyIssues
     || chart.is_chart !== true
@@ -739,7 +779,6 @@ function preserveUnverifiedCandidateLevels(result, issues) {
     || chart.price_scale_visible !== true
     || chart.candles_visible !== true
     || chart.has_enough_candles !== true
-    || !rule
     || !['buy', 'sell'].includes(setup.type)
     || setup.setup_status !== 'valid') return null;
 
@@ -750,7 +789,7 @@ function preserveUnverifiedCandidateLevels(result, issues) {
   if (!entry || !stop || !target) return null;
 
   const prices = [entry.min, entry.max, stop.min, stop.max, target.min, target.max];
-  if (prices.some((price) => decimalPlaces(price) > rule.pricePrecision || !isTickAligned(price, rule))) return null;
+  if (rule && prices.some((price) => decimalPlaces(price) > rule.pricePrecision || !isTickAligned(price, rule))) return null;
 
   const calculated = computeRRFromLevels({
     entry: setup.entry_zone,
@@ -760,7 +799,11 @@ function preserveUnverifiedCandidateLevels(result, issues) {
   });
   if (!calculated || calculated.rr == null || calculated.rr < 1.5 || calculated.issues?.length) return null;
 
-  const reason = `Candidate levels are shown for chart context only. ${issues.join(' ')} The screenshot does not verify a fresh, actionable setup.`;
+  const instrumentLimitation = rule
+    ? []
+    : ['The visible instrument or its supported tick-size rule could not be verified, so price precision was not checked.'];
+  const candidateLimitations = [...issues, ...instrumentLimitation];
+  const reason = `Candidate levels are shown for chart context only. ${candidateLimitations.join(' ')} The screenshot does not verify a fresh, actionable setup.`;
   return {
     ...result,
     status: 'no_trade',
@@ -784,7 +827,7 @@ function preserveUnverifiedCandidateLevels(result, issues) {
     },
     reasons: mergeUniqueStrings([...(result.reasons || []), reason]),
     whyNotNow: mergeUniqueStrings([...(result.whyNotNow || []), reason]),
-    dataLimitations: mergeUniqueStrings([...(result.dataLimitations || []), ...issues]),
+    dataLimitations: mergeUniqueStrings([...(result.dataLimitations || []), ...candidateLimitations]),
   };
 }
 
@@ -1140,20 +1183,15 @@ function hasRequiredAnalysisPayload(raw) {
   if (!status) return false;
   if (status === 'invalid_image') return true;
 
-  const chart = parseJsonField(raw.chart);
-  const analysis = parseJsonField(raw.analysis);
-  const trend = canonicalizeEnumOr(analysis?.trend, {
-    bullish: 'bullish',
-    bearish: 'bearish',
-    neutral: 'neutral',
-  }, ['bullish', 'bearish', 'neutral'], null);
-  const confidence = Number(raw.confidence);
-
-  return Boolean(
-    chart && typeof chart.is_chart === 'boolean'
-      && analysis && trend
-      && Number.isFinite(confidence) && confidence >= 0 && confidence <= 100
-  );
+  return [
+    raw.chart,
+    raw.analysis,
+    raw.trade_setup,
+    raw.tradeSetup,
+    raw.direction,
+    raw.reasoning,
+    raw.reasons,
+  ].some((value) => value != null);
 }
 
 function normalizeAnalysis(raw) {
@@ -2955,7 +2993,7 @@ function buildCandidateLevelFollowupMessages(imageBase64, mimeType, pair, result
   return [
     {
       role: 'system',
-      content: `You are doing exactly one focused second-pass review of the same uploaded chart because the first pass found a clear direction but missed one or more core trade levels. Re-examine the latest visible candles, chart scale, and nearby support/resistance, without assuming the app's instrument hint is correct. Keep the established direction. Return each candidate price only when it can be defensibly anchored to visible chart evidence; do not invent exact prices, calculate from an assumed pip size, or extrapolate unseen prices. Fill missing levels and retain supported first-pass levels. Missing or unreadable current-price markers, candle timestamps, or candle state do not prevent returning chart-supported candidate levels: set setup_status="unclear" when freshness or current-price validity cannot be verified. Use "missed" or "invalidated" when visible chart evidence shows that explicitly. Set status="no_candidate" only if the chart does not support the missing level(s), the scale cannot anchor exact prices, or the candidate geometry is contradictory. These are candidate levels, not a validated or actionable trade. Do not describe them as a fresh opportunity unless freshness is independently verified. Return only JSON: {"status":"candidate|no_candidate","direction":"buy|sell","entry_zone":"visible price or range","stop_loss":"visible price","take_profit_levels":["TP1","TP2 optional"],"setup_status":"valid|missed|invalidated|unclear","reason":"brief chart evidence for each level and any verification limitation"}. For no_candidate, return status and reason.`,
+      content: `You are doing exactly one focused second-pass review of the same uploaded chart because the first pass found a clear direction but missed one or more core trade levels. Re-examine the latest visible candles, chart scale, and nearby support/resistance, without assuming the app's instrument hint is correct. Keep the established direction. Return each candidate price independently only when it can be defensibly anchored to visible chart evidence; do not invent exact prices, calculate from an assumed pip size, or extrapolate unseen prices. Fill missing levels and retain supported first-pass levels. Partial results are useful: return any supported entry, stop, or target even when another level or a complete risk/reward calculation is unavailable; omit only unsupported fields. Missing or unreadable current-price markers, candle timestamps, or candle state do not prevent returning chart-supported candidate levels: set setup_status="unclear" when freshness or current-price validity cannot be verified. Use "missed" or "invalidated" when visible chart evidence shows that explicitly. Set status="no_candidate" only if no additional level can be supported, the scale cannot anchor exact prices, or candidate geometry is contradictory. These are candidate levels, not a validated or actionable trade. Do not describe them as a fresh opportunity unless freshness is independently verified. Return only JSON: {"status":"candidate|no_candidate","direction":"buy|sell","entry_zone":"visible price or range, if supported","stop_loss":"visible price, if supported","take_profit_levels":["TP1","TP2 optional, if supported"],"setup_status":"valid|missed|invalidated|unclear","reason":"brief chart evidence for each level and any verification limitation"}. For no_candidate, return status and reason.`,
     },
     {
       role: 'user',
@@ -3065,7 +3103,9 @@ async function retryPriceConsistencyOnce(result, pairHint, retryMessages, isMult
       reasons: mergeUniqueStrings([...(result.reasons || []), reason]),
       whyNotNow: mergeUniqueStrings([...(result.whyNotNow || []), reason]),
       dataLimitations: mergeUniqueStrings([...(result.dataLimitations || []), ...issues]),
-      candidateValidationStatus: cannotVerifyFreshness ? 'unverified' : 'rejected',
+      candidateValidationStatus: cannotVerifyFreshness || issues.some((issue) => /market-structure validity .* unclear/i.test(issue))
+        ? 'unverified'
+        : 'rejected',
     };
   }
   const firstIssues = getPriceConsistencyIssues(result, pairHint);
@@ -3134,22 +3174,22 @@ async function retryPriceConsistencyOnce(result, pairHint, retryMessages, isMult
 }
 
 function applyCandidateLevelFollowup(result, rawFollowup) {
-  const parsed = CandidateLevelFollowupSchema.safeParse(rawFollowup);
+  const parsed = CandidateLevelFollowupSchema.safeParse(normalizeCandidateLevelFollowup(rawFollowup));
   if (!parsed.success || parsed.data.status === 'no_candidate') {
     const reason = parsed.success
       ? parsed.data.reason
-      : 'The follow-up could not establish a complete, valid set of candidate levels.';
+      : 'The follow-up response did not match the candidate-level format; the original analysis is preserved.';
     return {
       ...result,
       levelFollowupStatus: 'no_candidate',
       levelFollowupReason: reason,
-      dataLimitations: mergeUniqueStrings([...(result.dataLimitations || []), reason]),
+      dataLimitations: mergeUniqueStrings([...(result.dataLimitations || []), reason || 'The chart review could not establish additional candidate levels.']),
     };
   }
 
   const candidate = parsed.data;
   const expectedDirection = result.marketBias === 'bullish' ? 'buy' : 'sell';
-  if (candidate.direction !== expectedDirection) {
+  if (candidate.direction && candidate.direction !== expectedDirection) {
     const reason = 'The follow-up direction conflicted with the established market read; its levels were not used.';
     return {
       ...result,
@@ -3160,21 +3200,38 @@ function applyCandidateLevelFollowup(result, rawFollowup) {
   }
 
   const original = result.trade_setup || DEFAULT_TRADE_SETUP;
-  const entry = parsePriceOrRange(original.entry_zone) ? original.entry_zone : candidate.entry_zone;
-  const stop = parsePriceOrRange(original.stop_loss) ? original.stop_loss : candidate.stop_loss;
+  const direction = candidate.direction || expectedDirection;
+  const originalEntry = parsePriceOrRange(original.entry_zone) ? original.entry_zone : null;
+  const candidateEntry = parsePriceOrRange(candidate.entry_zone) ? candidate.entry_zone : null;
+  const entry = originalEntry || candidateEntry;
+  let stop = parsePriceOrRange(original.stop_loss) ? original.stop_loss : null;
+  if (!stop && candidate.stop_loss && parsePriceOrRange(candidate.stop_loss)) {
+    const entryRange = entry && parsePriceOrRange(entry);
+    const stopRange = parsePriceOrRange(candidate.stop_loss);
+    const stopIsOnCorrectSide = !entryRange || (direction === 'buy'
+      ? stopRange.max < entryRange.min
+      : stopRange.min > entryRange.max);
+    if (stopIsOnCorrectSide) stop = candidate.stop_loss;
+  }
   const originalTargets = parseTakeProfitLevels(original.take_profit_levels, original.take_profit)
     .filter((level) => parsePriceOrRange(level));
   const candidateTargets = (candidate.take_profit_levels || []).filter((level) => parsePriceOrRange(level));
-  const targets = originalTargets.length ? originalTargets : candidateTargets;
-  const calculated = computeRRFromLevels({
-    entry,
-    sl: stop,
-    tp: targets[0],
-    direction: candidate.direction,
-  });
-
-  if (calculated.rr == null || !Number.isFinite(calculated.rr) || calculated.rr <= 0) {
-    const reason = 'The follow-up levels did not complete valid entry, stop-loss, and target geometry; no unsupported levels were added.';
+  const entryRange = entry && parsePriceOrRange(entry);
+  const targetIsOnCorrectSide = (level) => {
+    if (!entryRange) return false;
+    const targetRange = parsePriceOrRange(level);
+    return direction === 'buy'
+      ? targetRange.min > entryRange.max
+      : targetRange.max < entryRange.min;
+  };
+  const targets = [...originalTargets, ...candidateTargets]
+    .filter((level, index, levels) => levels.indexOf(level) === index && targetIsOnCorrectSide(level))
+    .slice(0, 2);
+  const candidateContributedLevels = (!originalEntry && candidateEntry != null)
+    || (!parsePriceOrRange(original.stop_loss) && stop != null)
+    || (!originalTargets.length && candidateTargets.some((level) => targets.includes(level)));
+  if (!candidateContributedLevels) {
+    const reason = 'The chart review did not establish any additional price levels that could be checked against the existing analysis.';
     return {
       ...result,
       levelFollowupStatus: 'no_candidate',
@@ -3183,37 +3240,51 @@ function applyCandidateLevelFollowup(result, rawFollowup) {
     };
   }
 
-  const secondTargetValue = originalTargets[1] || candidateTargets[1];
-  const secondTarget = secondTargetValue && parsePriceOrRange(secondTargetValue);
-  const firstTarget = parsePriceOrRange(targets[0]);
-  const secondTargetIsOrdered = Boolean(secondTarget && firstTarget && (
-    candidate.direction === 'buy'
-      ? secondTarget.min > firstTarget.max
-      : secondTarget.max < firstTarget.min
-  ));
-  const acceptedTargets = secondTargetIsOrdered ? targets.slice(0, 1).concat(secondTargetValue) : targets.slice(0, 1);
-  const reason = candidate.reason;
-  const isVisuallyValid = candidate.setup_status === 'valid';
-  const freshnessIsUnverified = candidate.setup_status === 'unclear';
+  const firstTargetRange = targets[0] && parsePriceOrRange(targets[0]);
+  const acceptedTargets = targets.filter((level, index) => {
+    if (index === 0 || !firstTargetRange) return true;
+    const targetRange = parsePriceOrRange(level);
+    return direction === 'buy'
+      ? targetRange.min > firstTargetRange.max
+      : targetRange.max < firstTargetRange.min;
+  }).slice(0, 2);
+  const calculated = entry && stop && acceptedTargets[0]
+    ? computeRRFromLevels({ entry, sl: stop, tp: acceptedTargets[0], direction })
+    : { rr: null };
+  const hasCalculatedRR = Number.isFinite(calculated.rr) && calculated.rr > 0;
+  const setupStatus = candidate.setup_status || original.setup_status || 'unknown';
+  const reason = candidate.reason || 'The chart review supplied additional candidate levels; any missing levels could not be established from the visible evidence.';
+  const isVisuallyValid = setupStatus === 'valid' && hasCalculatedRR;
+  const freshnessIsUnverified = setupStatus === 'unclear';
+  const missingLevels = [
+    !entry ? 'entry' : null,
+    !stop ? 'stop loss' : null,
+    !acceptedTargets.length ? 'take-profit target' : null,
+  ].filter(Boolean);
+  const incompleteReason = missingLevels.length
+    ? ` The chart did not establish a ${missingLevels.join(', ')}; no price was inferred.`
+    : '';
+  const candidateReason = `${reason}${incompleteReason}`;
 
   return {
     ...result,
     status: 'no_trade',
     trade_setup: {
       ...original,
-      type: candidate.direction,
-      entry_zone: entry,
-      stop_loss: stop,
-      take_profit: targets[0],
+      type: direction,
+      entry_zone: entry || 'none',
+      stop_loss: stop || 'none',
+      take_profit: acceptedTargets[0] || 'none',
       take_profit_levels: acceptedTargets,
-      risk_reward: calculated.rr,
-      setup_status: candidate.setup_status,
+      risk_reward: hasCalculatedRR ? calculated.rr : null,
+      setup_status: setupStatus,
     },
     levelFollowupStatus: 'completed',
-    levelFollowupReason: reason,
+    levelFollowupReason: candidateReason,
     dataLimitations: mergeUniqueStrings([
       ...(result.dataLimitations || []),
       'Candidate levels came from one conditional chart review. They remain non-actionable until current price and setup validity are verified.',
+      ...(missingLevels.length ? [`The follow-up left ${missingLevels.join(', ')} unestablished; risk/reward is only calculated when all three levels are supported.`] : []),
       ...(freshnessIsUnverified ? ['Current price, candle state, or screenshot freshness could not be verified; the candidate is shown for context only.'] : []),
     ]),
     decision: 'NO_TRADE',
@@ -3223,7 +3294,7 @@ function applyCandidateLevelFollowup(result, rawFollowup) {
     entryReadiness: 0,
     setupConfidence: 0,
     tradeTrigger: 'Candidate levels are for analysis only; this result is not a validated or actionable trade setup.',
-    reasoning: mergeUniqueStrings([...(result.reasoning || []), reason]).slice(0, 5),
+    reasoning: mergeUniqueStrings([...(result.reasoning || []), candidateReason]).slice(0, 5),
     reasons: mergeUniqueStrings([
       ...(Array.isArray(result.reasons) ? result.reasons : []),
       'A conditional chart review identified candidate levels. The setup remains non-actionable until independently confirmed.',

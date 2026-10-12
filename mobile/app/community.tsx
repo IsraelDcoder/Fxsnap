@@ -12,6 +12,7 @@ import {
   Text,
   TextInput,
   View,
+  type ViewToken,
 } from 'react-native';
 import { AnimatedTouchableOpacity as TouchableOpacity } from '@/components/AnimatedTouchableOpacity';
 import { Feather } from '@expo/vector-icons';
@@ -41,6 +42,7 @@ import {
   joinCommunity,
   publishCommunityComment,
   publishCommunityMessage,
+  recordCommunityViews,
   reportCommunityMessage,
   shareCommunityPost,
   subscribeToCommunityChanges,
@@ -54,7 +56,9 @@ import {
   type CommunityFeed,
   type CommunityMessage,
   type CommunityProfile,
+  type CommunityReaction,
 } from '@/services/community';
+import { COMMUNITY_VIEWABILITY_CONFIG, getNewVisiblePostIds } from '@/services/communityEngagement';
 import CommunityPostCard from '@/components/CommunityPostCard';
 import CommunityPreviewNotice from '@/components/CommunityPreviewNotice';
 
@@ -68,7 +72,7 @@ type CommunityNotification = {
   read_at: string | null;
   created_at: string;
 };
-type CommunityPostActionName = 'edit' | 'delete' | 'copy' | 'share' | 'follow' | 'report' | 'block' | 'pin' | 'unpin' | 'remove';
+type CommunityPostActionName = 'edit' | 'delete' | 'copy' | 'share' | 'share_link' | 'follow' | 'report' | 'block' | 'pin' | 'unpin' | 'remove';
 type CommunityPostAction = {
   name: CommunityPostActionName;
   label: string;
@@ -103,6 +107,7 @@ function buildAnalysisSnapshot(analysis: AnalysisResult): CommunityAnalysisSnaps
     entry: setup?.entryZone || analysis.entry || null,
     stopLoss: setup?.stopLoss || analysis.sl || null,
     takeProfits: targets,
+    riskReward: setup?.riskReward ?? null,
     marketBias: analysis.marketBias || analysis.analysis?.trend || null,
     reasoning: (analysis.reasoning || []).slice(0, 8),
   };
@@ -134,6 +139,7 @@ export default function CommunityScreen() {
   const [feed, setFeed] = useState<CommunityFeed>('global');
   const [category, setCategory] = useState<CommunityCategory | null>(null);
   const [posts, setPosts] = useState<CommunityMessage[]>([]);
+  const [reactionBusyIds, setReactionBusyIds] = useState<Set<string>>(() => new Set());
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [followingEmpty, setFollowingEmpty] = useState(false);
@@ -176,12 +182,17 @@ export default function CommunityScreen() {
   const [blocksVisible, setBlocksVisible] = useState(false);
   const [blocks, setBlocks] = useState<Array<{ accountId: string; username: string }>>([]);
   const [postActionsPost, setPostActionsPost] = useState<CommunityMessage | null>(null);
+  const postActionsViewRef = useRef<View | null>(null);
   const [followedNames, setFollowedNames] = useState<string[]>([]);
   const flatListRef = useRef<FlashListRef<CommunityMessage>>(null);
+  const recordedViewIds = useRef(new Map<string, number>());
+  const pendingReactionIds = useRef(new Set<string>());
+  const currentAccountIdRef = useRef<string | null>(null);
   const processedPostId = useRef<string | null>(null);
   const processedAnalysisId = useRef<string | null>(null);
   const publishId = useRef<string | null>(null);
   const commentId = useRef<string | null>(null);
+  currentAccountIdRef.current = profile?.accountId || null;
 
   const loadFeed = useCallback(async (reset = true) => {
     if (stage !== 'feed' && !profile) return;
@@ -322,6 +333,7 @@ export default function CommunityScreen() {
       return {
         ...buildAnalysisSnapshot(selected),
         takeProfits: (selected.takeProfitLevels || (selected.tradeSetup?.takeProfit ? [selected.tradeSetup.takeProfit] : [])).slice(0, 1),
+        riskReward: null,
       };
     }
     return buildAnalysisSnapshot(selected);
@@ -604,20 +616,27 @@ export default function CommunityScreen() {
     }
   };
 
-  const handleLike = async (post: CommunityMessage) => {
-    const currentLike = post.reactions.find((reaction) => reaction.reaction === 'like')?.reacted;
+  const handleReaction = async (post: CommunityMessage, reaction: CommunityReaction) => {
+    if (pendingReactionIds.current.has(post.id)) return;
+    pendingReactionIds.current.add(post.id);
+    setReactionBusyIds((current) => new Set(current).add(post.id));
     try {
-      await toggleCommunityReaction(post.id, 'like');
-      setPosts((previous) => previous.map((item) => {
-        if (item.id !== post.id) return item;
-        const reactions = item.reactions.filter((reaction) => reaction.reaction !== 'like');
-        const oldCount = item.reactions.find((reaction) => reaction.reaction === 'like')?.count || 0;
-        const nextCount = Math.max(0, oldCount + (currentLike ? -1 : 1));
-        if (nextCount) reactions.push({ reaction: 'like', count: nextCount, reacted: !currentLike });
-        return { ...item, reactions };
-      }));
+      const result = await toggleCommunityReaction(post.id, reaction);
+      setPosts((previous) => previous.map((item) => item.id === post.id
+        ? { ...item, reactions: result.reactions }
+        : item));
+      setCommentPost((current) => current?.id === post.id
+        ? { ...current, reactions: result.reactions }
+        : current);
     } catch (error) {
       Alert.alert('Could not update reaction', apiErrorMessage(error));
+    } finally {
+      pendingReactionIds.current.delete(post.id);
+      setReactionBusyIds((current) => {
+        const updated = new Set(current);
+        updated.delete(post.id);
+        return updated;
+      });
     }
   };
 
@@ -662,6 +681,8 @@ export default function CommunityScreen() {
   };
 
   const runPostAction = (action: CommunityPostActionName, post: CommunityMessage) => {
+    const cardView = postActionsViewRef.current;
+    postActionsViewRef.current = null;
     setPostActionsPost(null);
     if (action === 'edit') {
       editPost(post);
@@ -701,7 +722,9 @@ export default function CommunityScreen() {
         .then(() => Alert.alert('Copied', 'Post text copied to clipboard.'))
         .catch((error) => Alert.alert('Could not copy post', apiErrorMessage(error)));
     } else if (action === 'share') {
-      void sharePost(post);
+      void sharePost(post, cardView);
+    } else if (action === 'share_link') {
+      void sharePost(post, null);
     } else if (action === 'follow') {
       void handleFollow(post);
     } else if (action === 'report') {
@@ -726,7 +749,8 @@ export default function CommunityScreen() {
     }
   };
 
-  const showPostActions = (post: CommunityMessage) => {
+  const showPostActions = (post: CommunityMessage, cardView: View | null = null) => {
+    postActionsViewRef.current = cardView;
     setPostActionsPost(post);
   };
 
@@ -749,13 +773,40 @@ export default function CommunityScreen() {
     }
   };
 
-  const sharePost = async (post: CommunityMessage) => {
+  const sharePost = async (post: CommunityMessage, cardView: View | null) => {
     try {
-      await shareCommunityPost(post);
+      const shareCount = await shareCommunityPost(post, cardView);
+      if (shareCount !== null) {
+        setPosts((previous) => previous.map((item) => item.id === post.id ? { ...item, shareCount } : item));
+        setCommentPost((current) => current?.id === post.id ? { ...current, shareCount } : current);
+      }
     } catch (error) {
       Alert.alert('Could not share post', apiErrorMessage(error));
     }
   };
+
+  const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: ViewToken[] }) => {
+    const accountId = currentAccountIdRef.current;
+    if (!accountId) return;
+    const visiblePosts = viewableItems
+      .filter((token) => token.isViewable && token.item)
+      .map((token) => token.item as CommunityMessage);
+    const newIds = getNewVisiblePostIds(visiblePosts, accountId, recordedViewIds.current);
+    if (!newIds.length) return;
+    for (const id of newIds) recordedViewIds.current.set(`${accountId}:${id}`, Date.now());
+    void recordCommunityViews(newIds).then(({ views }) => {
+      const countById = new Map(views.map((view) => [view.messageId, view.viewCount]));
+      setPosts((previous) => previous.map((post) => countById.has(post.id)
+        ? { ...post, viewCount: countById.get(post.id) ?? post.viewCount }
+        : post));
+      setCommentPost((current) => current && countById.has(current.id)
+        ? { ...current, viewCount: countById.get(current.id) ?? current.viewCount }
+        : current);
+    }).catch((error: unknown) => {
+      for (const id of newIds) recordedViewIds.current.delete(`${accountId}:${id}`);
+      console.warn('Community post impressions could not be recorded.', error instanceof Error ? error.message : error);
+    });
+  }).current;
 
   const openNotifications = () => {
     router.push('/community-notifications');
@@ -785,11 +836,12 @@ export default function CommunityScreen() {
       <CommunityPostCard
         post={item}
         compact
+        reactionBusy={reactionBusyIds.has(item.id)}
         ownAccount={item.authorUsername === profile?.username}
-        onLike={() => void handleLike(item)}
+        onReact={(reaction) => void handleReaction(item, reaction)}
         onComment={() => void openComments(item)}
-        onShare={() => void sharePost(item)}
-        onMore={() => showPostActions(item)}
+        onShare={(cardView) => void sharePost(item, cardView)}
+        onMore={(cardView) => showPostActions(item, cardView)}
         onFollow={() => void handleFollow(item)}
         onAuthorPress={() => router.push({ pathname: '/community-member', params: { username: item.authorUsername } })}
       />
@@ -806,6 +858,9 @@ export default function CommunityScreen() {
         ? [{ name: 'edit' as const, label: 'Edit post', description: 'Update your post content.', icon: 'edit-2' as const }]
         : []),
       { name: 'share', label: 'Share post', description: 'Share this discussion using your device.', icon: 'share-2' },
+      ...(!postActionsPost.replyTo
+        ? [{ name: 'share_link' as const, label: 'Share post link', description: 'Share the post link and count it when the device confirms sharing.', icon: 'link' as const }]
+        : []),
       { name: 'copy', label: 'Copy post text', description: 'Copy the text and author to your clipboard.', icon: 'copy' },
       ...(!ownPost && !postActionsPost.isOfficial
         ? [{
@@ -993,6 +1048,8 @@ export default function CommunityScreen() {
         renderItem={renderPost}
         numColumns={2}
         masonry
+        viewabilityConfig={COMMUNITY_VIEWABILITY_CONFIG}
+        onViewableItemsChanged={onViewableItemsChanged}
         optimizeItemArrangement={false}
         drawDistance={600}
         extraData={profile?.username}
@@ -1210,7 +1267,7 @@ export default function CommunityScreen() {
             <View style={styles.headerIcon} />
           </View>
           <ScrollView contentContainerStyle={styles.commentsContent} keyboardShouldPersistTaps="handled">
-            {commentPost ? <CommunityPostCard post={commentPost} ownAccount={commentPost.authorUsername === profile?.username} onLike={() => void handleLike(commentPost)} onComment={() => {}} onShare={() => void sharePost(commentPost)} onMore={() => showPostActions(commentPost)} onFollow={() => void handleFollow(commentPost)} /> : null}
+            {commentPost ? <CommunityPostCard post={commentPost} ownAccount={commentPost.authorUsername === profile?.username} reactionBusy={reactionBusyIds.has(commentPost.id)} onReact={(reaction) => void handleReaction(commentPost, reaction)} onComment={() => {}} onShare={(cardView) => void sharePost(commentPost, cardView)} onMore={(cardView) => showPostActions(commentPost, cardView)} onFollow={() => void handleFollow(commentPost)} /> : null}
             <Text style={[styles.commentsHeading, { color: colors.text }]}>Trader discussion</Text>
             {commentsLoading ? <ActivityIndicator color={colors.buy} /> : comments.length ? comments.map((comment) => (
               <CommentCard key={comment.id} comment={comment} colors={colors} onReply={() => void startReply(comment)} onMore={() => showPostActions(comment)} onAuthorPress={() => router.push({ pathname: '/community-member', params: { username: comment.authorUsername } })} />

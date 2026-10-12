@@ -1,7 +1,8 @@
-import { Platform } from 'react-native';
-import { Share } from 'react-native';
+import { Platform, Share, type View } from 'react-native';
 import * as Linking from 'expo-linking';
 import * as ImagePicker from 'expo-image-picker';
+import * as Sharing from 'expo-sharing';
+import { captureRef } from 'react-native-view-shot';
 import { API_BASE_URL } from '@/services/apiAuth';
 import { getFxsnapAccountApiHeaders } from '@/services/account';
 import { getSupabaseClient } from '@/services/supabase';
@@ -21,7 +22,14 @@ export const COMMUNITY_CATEGORIES = [
 
 export type CommunityCategory = typeof COMMUNITY_CATEGORIES[number]['id'];
 export type CommunityFeed = 'global' | 'following';
-export type CommunityReaction = 'like' | 'helpful' | 'insightful' | 'interesting';
+export type CommunityReaction = 'love' | 'fire' | 'funny' | 'clap' | 'wow';
+export const COMMUNITY_REACTIONS: Array<{ id: CommunityReaction; emoji: string; label: string }> = [
+  { id: 'love', emoji: '❤️', label: 'Love' },
+  { id: 'fire', emoji: '🔥', label: 'Fire' },
+  { id: 'funny', emoji: '😂', label: 'Funny' },
+  { id: 'clap', emoji: '👏', label: 'Clap' },
+  { id: 'wow', emoji: '😮', label: 'Wow' },
+];
 export type CommunitySearchKind = 'posts' | 'people' | 'topics';
 
 export interface CommunityProfile {
@@ -57,8 +65,10 @@ export interface CommunityMessage {
   pinnedAt: string | null;
   createdAt: string;
   commentCount: number;
+  viewCount: number;
+  shareCount: number;
   removed: boolean;
-  reactions: Array<{ reaction: CommunityReaction; count: number; reacted: boolean }>;
+  reactions: Array<{ reaction: CommunityReaction | 'like'; count: number; reacted: boolean }>;
 }
 
 export interface CommunityPage {
@@ -113,6 +123,7 @@ export interface CommunityAnalysisSnapshot {
   entry: string | null;
   stopLoss: string | null;
   takeProfits: string[];
+  riskReward?: number | string | null;
   marketBias: string | null;
   reasoning: string[];
   imageUrl?: string | null;
@@ -277,9 +288,27 @@ export async function publishCommunityComment(
 }
 
 export async function toggleCommunityReaction(messageId: string, reaction: CommunityReaction) {
-  return request<{ reacted: boolean }>(
+  return request<{
+    reacted: boolean;
+    selectedReaction: CommunityReaction | null;
+    reactions: CommunityMessage['reactions'];
+  }>(
     `/api/community/messages/${encodeURIComponent(messageId)}/reactions`,
     json({ reaction }),
+  );
+}
+
+export async function recordCommunityViews(messageIds: string[]) {
+  return request<{ views: Array<{ messageId: string; viewCount: number }> }>(
+    '/api/community/views',
+    json({ messageIds }),
+  );
+}
+
+export async function recordCommunityShare(messageId: string) {
+  return request<{ shareCount: number }>(
+    `/api/community/messages/${encodeURIComponent(messageId)}/shares`,
+    json({}),
   );
 }
 
@@ -420,11 +449,29 @@ export async function moderateCommunity(input: {
   return request<{ accepted: boolean }>('/api/admin/community/moderation', json(input));
 }
 
-export async function shareCommunityPost(message: CommunityMessage) {
-  const text = `@${message.authorUsername} in FXSnap Community\n\n${message.body}\n\n${message.kind === 'analysis' ? 'FXSnap AI analysis — shared as originally generated; not financial advice.' : 'Trading discussion for education, not a guaranteed outcome.'}`;
+export async function shareCommunityPost(message: CommunityMessage, cardView: View | null) {
   if (Platform.OS === 'web') throw new Error('Post sharing is available in the FXSnap mobile app.');
-  const url = Linking.createURL(`/community?postId=${encodeURIComponent(message.id)}`);
-  await Share.share({ message: `${text}\n\n${url}`, url });
+  if (!cardView) {
+    const text = `@${message.authorUsername} in FXSnap Community\n\n${message.body}\n\n${message.kind === 'analysis' ? 'FXSnap AI analysis — shared as originally generated; not financial advice.' : 'Trading discussion for education, not a guaranteed outcome.'}`;
+    const url = Linking.createURL(`/community?postId=${encodeURIComponent(message.id)}`);
+    const result = await Share.share({ message: `${text}\n\n${url}`, url });
+    if (result.action !== Share.sharedAction) return null;
+    try {
+      const recorded = await recordCommunityShare(message.id);
+      return recorded.shareCount;
+    } catch (error) {
+      console.warn('The post was shared, but its Community share count could not be updated.', error instanceof Error ? error.message : error);
+      return null;
+    }
+  }
+  if (!await Sharing.isAvailableAsync()) throw new Error('Image sharing is not available on this device.');
+  const imageUri = await captureRef(cardView, { format: 'png', quality: 1, result: 'tmpfile' });
+  await Sharing.shareAsync(imageUri, {
+    dialogTitle: `Share @${message.authorUsername}'s Community post`,
+    mimeType: 'image/png',
+    UTI: 'public.png',
+  });
+  return null;
 }
 
 export function subscribeToCommunityChanges(onChange: (eventType: string | null) => void) {

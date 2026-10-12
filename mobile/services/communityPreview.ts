@@ -36,6 +36,8 @@ function makeMessage(input: Partial<CommunityMessage> & Pick<CommunityMessage, '
     pinnedAt: null,
     createdAt: now(),
     commentCount: 0,
+    viewCount: 0,
+    shareCount: 0,
     removed: false,
     reactions: [],
     ...input,
@@ -61,7 +63,7 @@ const messages: CommunityMessage[] = [
     category: 'learning',
     createdAt: new Date(Date.now() - 42 * 60_000).toISOString(),
     commentCount: 1,
-    reactions: [{ reaction: 'like', count: 3, reacted: false }],
+    reactions: [{ reaction: 'love', count: 3, reacted: false }],
   }),
   makeMessage({
     id: PREVIEW_OTHER_ID,
@@ -69,7 +71,7 @@ const messages: CommunityMessage[] = [
     body: 'New here. Which risk-management concepts helped you most when you were learning?',
     category: 'questions',
     createdAt: new Date(Date.now() - 3 * 3_600_000).toISOString(),
-    reactions: [{ reaction: 'helpful', count: 1, reacted: false }],
+    reactions: [{ reaction: 'clap', count: 1, reacted: false }],
   }),
   makeMessage({
     id: PREVIEW_COMMENT_ID,
@@ -88,6 +90,7 @@ const messages: CommunityMessage[] = [
 ];
 
 const following = new Set<string>();
+const viewDedup = new Map<string, number>();
 const blocked = new Set<string>();
 const reports: Array<{ id: string; messageId: string; reason: string }> = [];
 const notifications: CommunityNotification[] = [{
@@ -117,7 +120,12 @@ function commentCount(postId: string) {
 }
 
 function withCounts(message: CommunityMessage): CommunityMessage {
-  return { ...message, commentCount: commentCount(message.id) };
+  return {
+    ...message,
+    commentCount: commentCount(message.id),
+    viewCount: message.viewCount || 0,
+    shareCount: message.shareCount || 0,
+  };
 }
 
 function response(status: number, body: unknown): Response {
@@ -182,6 +190,24 @@ export async function handleCommunityPreviewRequest(path: string, init?: Request
     });
     messages.unshift(post);
     return response(201, { message: withCounts(post), duplicate: false });
+  }
+  if (pathname === '/api/community/views' && method === 'POST') {
+    const messageIds = Array.isArray(body.messageIds) ? body.messageIds.filter((value): value is string => typeof value === 'string') : [];
+    const views = [];
+    for (const messageId of [...new Set(messageIds)].slice(0, 30)) {
+      const post = messages.find((item) => item.id === messageId && !item.replyTo && !item.removed);
+      if (!post) continue;
+      if (post.authorAccountId !== PREVIEW_ACCOUNT_ID) {
+        const key = `${messageId}:${PREVIEW_ACCOUNT_ID}`;
+        const lastViewed = viewDedup.get(key) || 0;
+        if (Date.now() - lastViewed >= 24 * 60 * 60 * 1000) {
+          post.viewCount += 1;
+          viewDedup.set(key, Date.now());
+        }
+      }
+      views.push({ messageId, viewCount: post.viewCount });
+    }
+    return response(200, { views });
   }
   if (pathname === '/api/community/search' && method === 'GET') {
     const query = (url.searchParams.get('q') || '').trim().toLowerCase();
@@ -289,18 +315,37 @@ export async function handleCommunityPreviewRequest(path: string, init?: Request
   if (reactionMatch && method === 'POST') {
     const target = messages.find((item) => item.id === decodeURIComponent(reactionMatch[1]));
     if (!target) return response(404, { error: 'Post not found.' });
-    const reaction = String(body.reaction || 'like') as CommunityMessage['reactions'][number]['reaction'];
-    const current = target.reactions.find((item) => item.reaction === reaction);
-    if (current?.reacted) {
+    const reaction = String(body.reaction || 'love') as CommunityMessage['reactions'][number]['reaction'];
+    const current = target.reactions.find((item) => item.reacted);
+    if (current?.reaction === reaction) {
       current.count = Math.max(0, current.count - 1);
       current.reacted = false;
-    } else if (current) {
-      current.count += 1;
-      current.reacted = true;
     } else {
-      target.reactions.push({ reaction, count: 1, reacted: true });
+      if (current) {
+        current.count = Math.max(0, current.count - 1);
+        current.reacted = false;
+      }
+      const next = target.reactions.find((item) => item.reaction === reaction);
+      if (next) {
+        next.count += 1;
+        next.reacted = true;
+      } else {
+        target.reactions.push({ reaction, count: 1, reacted: true });
+      }
     }
-    return response(200, { reacted: target.reactions.find((item) => item.reaction === reaction)?.reacted === true });
+    const selectedReaction = target.reactions.find((item) => item.reacted)?.reaction || null;
+    return response(200, {
+      reacted: selectedReaction !== null,
+      selectedReaction,
+      reactions: target.reactions.filter((item) => item.count > 0),
+    });
+  }
+  const shareMatch = pathname.match(/^\/api\/community\/messages\/([^/]+)\/shares$/);
+  if (shareMatch && method === 'POST') {
+    const post = messages.find((item) => item.id === decodeURIComponent(shareMatch[1]) && !item.replyTo && !item.removed);
+    if (!post) return response(404, { error: 'Post not found.' });
+    post.shareCount += 1;
+    return response(200, { shareCount: post.shareCount });
   }
   if (pathname === '/api/community/follows' && method === 'GET') {
     return response(200, { following: [...following].map((username) => ({ accountId: `preview-${username}`, username, createdAt: now() })) });

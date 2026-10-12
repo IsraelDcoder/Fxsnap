@@ -296,6 +296,60 @@ test('failed reanalysis preserves structurally valid chart levels as unverified 
   }
 });
 
+test('Gold and USDJPY levels remain visible as unverified candidates when the chart omits its instrument label', async () => {
+  const cases = [
+    { pair: 'XAUUSD', direction: 'buy', price: '2350.00', entry: '2350.00', stop: '2348.00', target: '2354.00' },
+    { pair: 'XAUUSD', direction: 'sell', price: '2350.00', entry: '2350.00', stop: '2352.00', target: '2346.00' },
+    { pair: 'USDJPY', direction: 'buy', price: '150.000', entry: '150.000', stop: '149.900', target: '150.200' },
+    { pair: 'USDJPY', direction: 'sell', price: '150.000', entry: '150.000', stop: '150.100', target: '149.800' },
+  ];
+  const previousFetch = global.fetch;
+  const previousApiKey = process.env.OPENROUTER_API_KEY;
+  process.env.OPENROUTER_API_KEY = 'test-key';
+  global.fetch = async () => ({
+    ok: true,
+    status: 200,
+    text: async () => JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: 'not valid analysis' } }] }),
+  });
+  try {
+    for (const item of cases) {
+      const candidate = {
+        ...consistentPriceSetup,
+        chart: {
+          ...consistentPriceSetup.chart,
+          pair: '',
+          latest_visible_price: item.price,
+          latest_candle_timestamp: null,
+        },
+        trade_setup: {
+          ...consistentPriceSetup.trade_setup,
+          type: item.direction,
+          entry_zone: item.entry,
+          stop_loss: item.stop,
+          take_profit: item.target,
+          take_profit_levels: [item.target],
+        },
+      };
+      delete candidate.detectedPair;
+
+      const result = await retryPriceConsistencyOnce(candidate, item.pair, () => []);
+
+      assert.equal(result.status, 'no_trade', item.pair + ' ' + item.direction);
+      assert.equal(result.candidateValidationStatus, 'unverified', item.pair + ' ' + item.direction);
+      assert.equal(result.trade_setup.type, item.direction, item.pair + ' ' + item.direction);
+      assert.equal(result.trade_setup.entry_zone, item.entry, item.pair + ' ' + item.direction);
+      assert.equal(result.trade_setup.stop_loss, item.stop, item.pair + ' ' + item.direction);
+      assert.equal(result.trade_setup.take_profit, item.target, item.pair + ' ' + item.direction);
+      assert.equal(result.tradeDecision, 'NONE', item.pair + ' ' + item.direction);
+      assert.match(result.dataLimitations.join(' '), /timestamp is unreadable/i);
+    }
+  } finally {
+    global.fetch = previousFetch;
+    if (previousApiKey == null) delete process.env.OPENROUTER_API_KEY;
+    else process.env.OPENROUTER_API_KEY = previousApiKey;
+  }
+});
+
 test('failed reanalysis still removes a candidate after visible price invalidates it', async () => {
   const invalidated = {
     ...consistentPriceSetup,
@@ -369,6 +423,56 @@ test('valid follow-up levels fill missing fields but remain a non-actionable no-
   assert.equal(result.tradeStatus, 'waiting_for_confirmation');
   assert.equal(result.entryReadiness, 0);
   assert.equal(result.levelFollowupStatus, 'completed');
+});
+
+test('partial follow-up preserves supported stop loss without requiring a target or RR', () => {
+  const initial = {
+    ...directionalChartWithoutLevels,
+    trade_setup: {
+      ...directionalChartWithoutLevels.trade_setup,
+      entry_zone: '1.1000',
+    },
+  };
+  const result = applyCandidateLevelFollowup(initial, {
+    status: 'partial',
+    side: 'BUY',
+    sl: '1.0900',
+    setup_status: 'UNKNOWN',
+  });
+
+  assert.equal(result.status, 'no_trade');
+  assert.equal(result.trade_setup.type, 'buy');
+  assert.equal(result.trade_setup.entry_zone, '1.1000');
+  assert.equal(result.trade_setup.stop_loss, '1.0900');
+  assert.equal(result.trade_setup.take_profit, 'none');
+  assert.deepEqual(result.trade_setup.take_profit_levels, []);
+  assert.equal(result.trade_setup.risk_reward, null);
+  assert.equal(result.tradeDecision, 'NONE');
+  assert.equal(result.levelFollowupStatus, 'completed');
+  assert.match(result.levelFollowupReason, /take-profit target/i);
+});
+
+test('follow-up calculates RR when it supplies TP1 for existing entry and stop levels', () => {
+  const initial = {
+    ...directionalChartWithoutLevels,
+    trade_setup: {
+      ...directionalChartWithoutLevels.trade_setup,
+      entry_zone: '1.1000',
+      stop_loss: '1.0900',
+    },
+  };
+  const result = applyCandidateLevelFollowup(initial, {
+    status: 'partial',
+    target: '1.1200',
+    setup_status: 'valid',
+  });
+
+  assert.equal(result.trade_setup.entry_zone, '1.1000');
+  assert.equal(result.trade_setup.stop_loss, '1.0900');
+  assert.equal(result.trade_setup.take_profit, '1.1200');
+  assert.equal(result.trade_setup.risk_reward, 2);
+  assert.equal(result.status, 'no_trade');
+  assert.equal(result.tradeDecision, 'WAIT');
 });
 
 test('unclear current-price freshness does not hide chart-supported follow-up levels', () => {
@@ -446,15 +550,19 @@ test('follow-up cannot overwrite supported first-pass levels or add contradictor
     setup_status: 'valid',
     reason: 'Invalid stop placement.',
   });
-  assert.equal(wrongGeometry.trade_setup.entry_zone, 'none');
+  assert.equal(wrongGeometry.trade_setup.entry_zone, '1.1000');
   assert.equal(wrongGeometry.trade_setup.stop_loss, 'none');
-  assert.equal(wrongGeometry.levelFollowupStatus, 'no_candidate');
+  assert.equal(wrongGeometry.trade_setup.take_profit, '1.1200');
+  assert.equal(wrongGeometry.trade_setup.risk_reward, null);
+  assert.equal(wrongGeometry.status, 'no_trade');
+  assert.equal(wrongGeometry.levelFollowupStatus, 'completed');
+  assert.match(wrongGeometry.dataLimitations.join(' '), /stop loss unestablished/i);
 });
 
-test('no-candidate or malformed follow-up preserves the original analysis without inventing prices', () => {
+test('no-candidate or unusable follow-up preserves the original analysis without inventing prices', () => {
   for (const followup of [
     { status: 'no_candidate', reason: 'The price scale is unreadable.' },
-    { status: 'candidate', direction: 'buy', entry_zone: '1.1000', reason: 'Incomplete.' },
+    { status: 'candidate', direction: 'buy', entry_zone: 'not a readable price', reason: 'The scale is unreadable.' },
   ]) {
     const result = applyCandidateLevelFollowup(directionalChartWithoutLevels, followup);
     assert.equal(result.status, 'no_trade');
@@ -853,11 +961,33 @@ test('provider responses require the minimum analysis contract before normalizat
   };
 
   assert.equal(hasRequiredAnalysisPayload(validNoTrade), true);
-  assert.equal(hasRequiredAnalysisPayload({ ...validNoTrade, chart: undefined }), false);
-  assert.equal(hasRequiredAnalysisPayload({ ...validNoTrade, analysis: { trend: 'uncertain' } }), false);
-  assert.equal(hasRequiredAnalysisPayload({ ...validNoTrade, confidence: 'unknown' }), false);
+  assert.equal(hasRequiredAnalysisPayload({ ...validNoTrade, chart: undefined }), true);
+  assert.equal(hasRequiredAnalysisPayload({ ...validNoTrade, analysis: { trend: 'uncertain' } }), true);
+  assert.equal(hasRequiredAnalysisPayload({ ...validNoTrade, confidence: 'unknown' }), true);
   assert.equal(hasRequiredAnalysisPayload({ status: 'invalid_image' }), true);
+  assert.equal(hasRequiredAnalysisPayload({ status: 'no_trade' }), false);
   assert.equal(hasRequiredAnalysisPayload({}), false);
+});
+
+test('partial directional responses pass normalization without becoming actionable trades', () => {
+  const canonical = canonicalizeRawAnalysis({
+    status: 'no_trade',
+    direction: 'BUY',
+    analysis: { trend: 'bullish', notes: 'The visible structure is bullish.' },
+    trade_setup: { entry_zone: '2350.00' },
+  });
+  const parsed = TradeAnalysisSchema.safeParse(canonical);
+
+  assert.equal(parsed.success, true);
+  const result = applyMentorStrategy(normalizeAnalysis(parsed.data));
+  assert.equal(result.status, 'no_trade');
+  assert.equal(result.marketBias, 'bullish');
+  assert.equal(result.trade_setup.type, 'buy');
+  assert.equal(result.trade_setup.entry_zone, '2350.00');
+  assert.equal(result.trade_setup.stop_loss, 'none');
+  assert.equal(result.trade_setup.take_profit, 'none');
+  assert.equal(result.trade_setup.risk_reward, null);
+  assert.equal(result.tradeDecision, 'NONE');
 });
 
 test('authenticated chart upload returns normalized candidate levels through the API', async () => {

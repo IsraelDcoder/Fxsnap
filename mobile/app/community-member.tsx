@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, FlatList, Image, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
@@ -15,6 +15,7 @@ import {
   unfollowCommunityMember,
   type CommunityMember,
   type CommunityMessage,
+  type CommunityReaction,
 } from '@/services/community';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -31,6 +32,8 @@ export default function CommunityMemberScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
+  const [reactionBusyIds, setReactionBusyIds] = useState<Set<string>>(() => new Set());
+  const pendingReactionIds = useRef(new Set<string>());
 
   const loadMember = useCallback(async () => {
     if (!username) {
@@ -74,41 +77,39 @@ export default function CommunityMemberScreen() {
     }
   };
 
-  const toggleLike = async (post: CommunityMessage) => {
-    const wasLiked = post.reactions.find((item) => item.reaction === 'like')?.reacted === true;
-    const baseCount = post.reactions.find((item) => item.reaction === 'like')?.count || 0;
-    setMember((current) => current ? {
-      ...current,
-      posts: current.posts.map((item) => item.id !== post.id ? item : {
-        ...item,
-        reactions: [
-          ...item.reactions.filter((reaction) => reaction.reaction !== 'like'),
-          {
-            reaction: 'like',
-            reacted: !wasLiked,
-            count: Math.max(0, (item.reactions.find((reaction) => reaction.reaction === 'like')?.count || 0) + (wasLiked ? -1 : 1)),
-          },
-        ],
-      }),
-    } : current);
+  const toggleReaction = async (post: CommunityMessage, reaction: CommunityReaction) => {
+    if (pendingReactionIds.current.has(post.id)) return;
+    pendingReactionIds.current.add(post.id);
+    setReactionBusyIds((current) => new Set(current).add(post.id));
     try {
-      const result = await toggleCommunityReaction(post.id, 'like');
+      const result = await toggleCommunityReaction(post.id, reaction);
       setMember((current) => current ? {
         ...current,
-        posts: current.posts.map((item) => {
-          if (item.id !== post.id) return item;
-          return {
-            ...item,
-            reactions: [
-              ...item.reactions.filter((reaction) => reaction.reaction !== 'like'),
-              { reaction: 'like', reacted: result.reacted, count: Math.max(0, baseCount + Number(result.reacted) - Number(wasLiked)) },
-            ],
-          };
-        }),
+        posts: current.posts.map((item) => item.id === post.id ? { ...item, reactions: result.reactions } : item),
       } : current);
     } catch (failure) {
       Alert.alert('Could not update reaction', messageFor(failure));
-      await loadMember();
+    } finally {
+      pendingReactionIds.current.delete(post.id);
+      setReactionBusyIds((current) => {
+        const updated = new Set(current);
+        updated.delete(post.id);
+        return updated;
+      });
+    }
+  };
+
+  const sharePost = async (post: CommunityMessage, cardView: View | null) => {
+    try {
+      const shareCount = await shareCommunityPost(post, cardView);
+      if (shareCount !== null) {
+        setMember((current) => current ? {
+          ...current,
+          posts: current.posts.map((item) => item.id === post.id ? { ...item, shareCount } : item),
+        } : current);
+      }
+    } catch (failure) {
+      Alert.alert('Could not share post', messageFor(failure));
     }
   };
 
@@ -150,58 +151,76 @@ export default function CommunityMemberScreen() {
             <>
               {error ? <Text style={[styles.refreshError, { color: colors.sell }]}>{error}</Text> : null}
               <View style={[styles.profileCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
-              <View style={styles.profileTop}>
-                {member.pictureUrl ? (
-                  <Image source={{ uri: member.pictureUrl }} style={styles.avatar} accessibilityLabel={`@${member.username}'s profile photo`} />
-                ) : (
-                  <View style={[styles.avatarFallback, { backgroundColor: `${colors.buy}20` }]}>
-                    <Text style={[styles.avatarLetter, { color: colors.buy }]}>{member.username.slice(0, 1).toUpperCase()}</Text>
+                <View style={styles.profileTop}>
+                  {member.pictureUrl ? (
+                    <Image
+                      source={{ uri: member.pictureUrl }}
+                      style={styles.avatar}
+                      accessibilityLabel={`@${member.username}'s profile photo`}
+                    />
+                  ) : (
+                    <View style={[styles.avatarFallback, { backgroundColor: `${colors.buy}20` }]}>
+                      <Text style={[styles.avatarLetter, { color: colors.buy }]}>
+                        {member.username.slice(0, 1).toUpperCase()}
+                      </Text>
+                    </View>
+                  )}
+                  {!member.isCurrentUser ? (
+                    <TouchableOpacity
+                      onPress={() => void toggleFollow()}
+                      style={[
+                        styles.followButton,
+                        {
+                          backgroundColor: member.isFollowing ? colors.surface : colors.buy,
+                          borderColor: colors.cardBorder,
+                        },
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.followText,
+                          { color: member.isFollowing ? colors.text : colors.primaryForeground },
+                        ]}
+                      >
+                        {member.isFollowing ? 'Following' : 'Follow'}
+                      </Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <View style={[styles.selfBadge, { backgroundColor: colors.surface }]}>
+                      <Text style={[styles.selfText, { color: colors.textSecondary }]}>Your profile</Text>
+                    </View>
+                  )}
+                </View>
+                <Text style={[styles.username, { color: colors.text }]}>@{member.username}</Text>
+                <Text style={[styles.joined, { color: colors.textMuted }]}>
+                  Joined {new Date(member.joinedAt).toLocaleDateString()}
+                </Text>
+                <View style={[styles.stats, { borderTopColor: colors.cardBorder }]}>
+                  <View style={styles.stat}>
+                    <Text style={[styles.statValue, { color: colors.text }]}>{member.posts.length}</Text>
+                    <Text style={[styles.statLabel, { color: colors.textMuted }]}>Recent posts</Text>
                   </View>
-                )}
-                {!member.isCurrentUser ? (
-                  <TouchableOpacity
-                    onPress={() => void toggleFollow()}
-                    style={[styles.followButton, { backgroundColor: member.isFollowing ? colors.surface : colors.buy, borderColor: colors.cardBorder }]}
-                  >
-                    <Text style={[styles.followText, { color: member.isFollowing ? colors.text : colors.primaryForeground }]}>
-                      {member.isFollowing ? 'Following' : 'Follow'}
-                    </Text>
-                  </TouchableOpacity>
-                ) : (
-                  <View style={[styles.selfBadge, { backgroundColor: colors.surface }]}>
-                    <Text style={[styles.selfText, { color: colors.textSecondary }]}>Your profile</Text>
+                  <View style={styles.stat}>
+                    <Text style={[styles.statValue, { color: colors.text }]}>{member.followerCount}</Text>
+                    <Text style={[styles.statLabel, { color: colors.textMuted }]}>Followers</Text>
                   </View>
-                )}
+                  <View style={styles.stat}>
+                    <Text style={[styles.statValue, { color: colors.text }]}>{member.followingCount}</Text>
+                    <Text style={[styles.statLabel, { color: colors.textMuted }]}>Following</Text>
+                  </View>
+                </View>
+                <Text style={[styles.postsHeading, { color: colors.text }]}>Posts</Text>
               </View>
-              <Text style={[styles.username, { color: colors.text }]}>@{member.username}</Text>
-              <Text style={[styles.joined, { color: colors.textMuted }]}>
-                Joined {new Date(member.joinedAt).toLocaleDateString()}
-              </Text>
-              <View style={[styles.stats, { borderTopColor: colors.cardBorder }]}>
-                <View style={styles.stat}>
-                  <Text style={[styles.statValue, { color: colors.text }]}>{member.posts.length}</Text>
-                  <Text style={[styles.statLabel, { color: colors.textMuted }]}>Recent posts</Text>
-                </View>
-                <View style={styles.stat}>
-                  <Text style={[styles.statValue, { color: colors.text }]}>{member.followerCount}</Text>
-                  <Text style={[styles.statLabel, { color: colors.textMuted }]}>Followers</Text>
-                </View>
-                <View style={styles.stat}>
-                  <Text style={[styles.statValue, { color: colors.text }]}>{member.followingCount}</Text>
-                  <Text style={[styles.statLabel, { color: colors.textMuted }]}>Following</Text>
-                </View>
-              </View>
-              <Text style={[styles.postsHeading, { color: colors.text }]}>Posts</Text>
-            </View>
             </>
           }
           renderItem={({ item }) => (
             <CommunityPostCard
               post={item}
               ownAccount={member.isCurrentUser}
-              onLike={() => void toggleLike(item)}
+              reactionBusy={reactionBusyIds.has(item.id)}
+              onReact={(reaction) => void toggleReaction(item, reaction)}
               onComment={() => router.push({ pathname: '/community', params: { postId: item.id } })}
-              onShare={() => { void shareCommunityPost(item).catch((failure) => Alert.alert('Could not share post', messageFor(failure))); }}
+              onShare={(cardView) => { void sharePost(item, cardView); }}
               onMore={() => router.push({ pathname: '/community', params: { postId: item.id } })}
               onFollow={() => void toggleFollow()}
             />

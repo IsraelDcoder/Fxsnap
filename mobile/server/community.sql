@@ -33,11 +33,16 @@ create table if not exists public.fxsnap_community_messages (
   pinned_by text,
   removed_at timestamptz,
   created_at timestamptz not null default now(),
+  view_count bigint not null default 0 check (view_count >= 0),
+  share_count bigint not null default 0 check (share_count >= 0),
   constraint fxsnap_community_message_client_id_unique unique (account_id, client_message_id),
   constraint fxsnap_community_message_content check (
     length(body) <= 2000 and octet_length(body) <= 8000
   )
 );
+alter table public.fxsnap_community_messages
+  add column if not exists view_count bigint not null default 0 check (view_count >= 0),
+  add column if not exists share_count bigint not null default 0 check (share_count >= 0);
 alter table public.fxsnap_community_messages
   drop constraint if exists fxsnap_community_messages_category_check;
 alter table public.fxsnap_community_messages
@@ -71,10 +76,190 @@ grant execute on function public.fxsnap_community_comment_counts(uuid[]) to serv
 create table if not exists public.fxsnap_community_reactions (
   message_id uuid not null references public.fxsnap_community_messages(id) on delete cascade,
   account_id text not null,
-  reaction text not null check (reaction in ('like', 'helpful', 'insightful', 'interesting')),
+  reaction text not null,
   created_at timestamptz not null default now(),
   primary key (message_id, account_id, reaction)
 );
+alter table public.fxsnap_community_reactions
+  drop constraint if exists fxsnap_community_reactions_reaction_check;
+update public.fxsnap_community_reactions
+  set reaction = case reaction
+    when 'like' then 'love'
+    when 'helpful' then 'clap'
+    when 'insightful' then 'wow'
+    when 'interesting' then 'funny'
+    else reaction
+  end;
+with ranked_reactions as (
+  select ctid,
+    row_number() over (partition by message_id, account_id order by created_at, reaction) as position
+  from public.fxsnap_community_reactions
+)
+delete from public.fxsnap_community_reactions reaction
+using ranked_reactions ranked
+where reaction.ctid = ranked.ctid and ranked.position > 1;
+alter table public.fxsnap_community_reactions
+  add constraint fxsnap_community_reactions_reaction_check
+  check (reaction in ('love', 'fire', 'funny', 'clap', 'wow'));
+alter table public.fxsnap_community_reactions
+  drop constraint if exists fxsnap_community_reactions_pkey;
+alter table public.fxsnap_community_reactions
+  add constraint fxsnap_community_reactions_pkey primary key (message_id, account_id);
+create table if not exists public.fxsnap_community_view_dedup (
+  message_id uuid not null references public.fxsnap_community_messages(id) on delete cascade,
+  account_id text not null,
+  last_viewed_at timestamptz not null default now(),
+  primary key (message_id, account_id)
+);
+create table if not exists public.fxsnap_community_share_dedup (
+  message_id uuid not null references public.fxsnap_community_messages(id) on delete cascade,
+  account_id text not null,
+  last_shared_at timestamptz not null default now(),
+  primary key (message_id, account_id)
+);
+create index if not exists fxsnap_community_view_dedup_account_idx
+  on public.fxsnap_community_view_dedup (account_id);
+create index if not exists fxsnap_community_view_dedup_expiry_idx
+  on public.fxsnap_community_view_dedup (last_viewed_at);
+create index if not exists fxsnap_community_share_dedup_account_idx
+  on public.fxsnap_community_share_dedup (account_id);
+
+create or replace function public.fxsnap_community_record_views(p_message_ids uuid[], p_account_id text)
+returns table(message_id uuid, view_count bigint)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  requested_id uuid;
+  post_account_id text;
+  inserted_rows integer;
+begin
+  if coalesce(cardinality(p_message_ids), 0) > 30 then
+    raise exception 'Too many view events';
+  end if;
+
+  for requested_id in
+    select distinct requested.id from unnest(coalesce(p_message_ids, array[]::uuid[])) requested(id)
+  loop
+    select message.account_id into post_account_id
+    from public.fxsnap_community_messages message
+    where message.id = requested_id
+      and message.reply_to_id is null
+      and message.removed_at is null
+    for update;
+
+    if found and post_account_id <> p_account_id then
+      insert into public.fxsnap_community_view_dedup (message_id, account_id, last_viewed_at)
+      values (requested_id, p_account_id, now())
+      on conflict (message_id, account_id) do update
+        set last_viewed_at = excluded.last_viewed_at
+        where public.fxsnap_community_view_dedup.last_viewed_at <= now() - interval '24 hours';
+      get diagnostics inserted_rows = row_count;
+
+      if inserted_rows = 1 then
+        update public.fxsnap_community_messages
+          set view_count = view_count + 1
+          where id = requested_id;
+      end if;
+    end if;
+
+    return query
+      select message.id, message.view_count
+      from public.fxsnap_community_messages message
+      where message.id = requested_id
+        and message.reply_to_id is null
+        and message.removed_at is null;
+  end loop;
+end;
+$$;
+revoke all on function public.fxsnap_community_record_views(uuid[], text) from public, anon, authenticated;
+grant execute on function public.fxsnap_community_record_views(uuid[], text) to service_role;
+
+create or replace function public.fxsnap_community_set_reaction(
+  p_message_id uuid,
+  p_account_id text,
+  p_reaction text
+)
+returns table(selected_reaction text)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  current_reaction text;
+begin
+  if p_reaction not in ('love', 'fire', 'funny', 'clap', 'wow') then
+    raise exception 'Invalid reaction';
+  end if;
+
+  perform 1
+  from public.fxsnap_community_messages message
+  where message.id = p_message_id and message.removed_at is null
+  for update;
+  if not found then
+    raise exception 'Message not found';
+  end if;
+
+  select reaction.reaction into current_reaction
+  from public.fxsnap_community_reactions reaction
+  where reaction.message_id = p_message_id and reaction.account_id = p_account_id
+  for update;
+
+  if current_reaction = p_reaction then
+    delete from public.fxsnap_community_reactions
+      where message_id = p_message_id and account_id = p_account_id;
+    return query select null::text;
+    return;
+  end if;
+
+  delete from public.fxsnap_community_reactions
+    where message_id = p_message_id and account_id = p_account_id;
+  insert into public.fxsnap_community_reactions (message_id, account_id, reaction)
+    values (p_message_id, p_account_id, p_reaction);
+  return query select p_reaction;
+end;
+$$;
+revoke all on function public.fxsnap_community_set_reaction(uuid, text, text) from public, anon, authenticated;
+grant execute on function public.fxsnap_community_set_reaction(uuid, text, text) to service_role;
+
+create or replace function public.fxsnap_community_record_share(p_message_id uuid, p_account_id text)
+returns table(share_count bigint)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  inserted_rows integer;
+  current_count bigint;
+begin
+  perform 1
+  from public.fxsnap_community_messages message
+  where message.id = p_message_id and message.reply_to_id is null and message.removed_at is null
+  for update;
+  if not found then
+    raise exception 'Post not found';
+  end if;
+
+  insert into public.fxsnap_community_share_dedup (message_id, account_id, last_shared_at)
+  values (p_message_id, p_account_id, now())
+  on conflict (message_id, account_id) do update
+    set last_shared_at = excluded.last_shared_at
+    where public.fxsnap_community_share_dedup.last_shared_at <= now() - interval '30 seconds';
+  get diagnostics inserted_rows = row_count;
+
+  if inserted_rows = 1 then
+    update public.fxsnap_community_messages
+      set share_count = share_count + 1
+      where id = p_message_id;
+  end if;
+  select message.share_count into current_count
+    from public.fxsnap_community_messages message where message.id = p_message_id;
+  return query select current_count;
+end;
+$$;
+revoke all on function public.fxsnap_community_record_share(uuid, text) from public, anon, authenticated;
+grant execute on function public.fxsnap_community_record_share(uuid, text) to service_role;
 
 create table if not exists public.fxsnap_community_follows (
   follower_account_id text not null,
@@ -273,6 +458,8 @@ create trigger fxsnap_community_notification_event
 alter table public.fxsnap_community_profiles enable row level security;
 alter table public.fxsnap_community_messages enable row level security;
 alter table public.fxsnap_community_reactions enable row level security;
+alter table public.fxsnap_community_view_dedup enable row level security;
+alter table public.fxsnap_community_share_dedup enable row level security;
 alter table public.fxsnap_community_follows enable row level security;
 alter table public.fxsnap_community_blocks enable row level security;
 alter table public.fxsnap_community_reports enable row level security;
@@ -285,6 +472,8 @@ alter table public.fxsnap_community_moderation_actions enable row level security
 revoke all on public.fxsnap_community_profiles,
   public.fxsnap_community_messages,
   public.fxsnap_community_reactions,
+  public.fxsnap_community_view_dedup,
+  public.fxsnap_community_share_dedup,
   public.fxsnap_community_follows,
   public.fxsnap_community_blocks,
   public.fxsnap_community_reports,
@@ -296,6 +485,8 @@ revoke all on public.fxsnap_community_profiles,
 grant all on public.fxsnap_community_profiles,
   public.fxsnap_community_messages,
   public.fxsnap_community_reactions,
+  public.fxsnap_community_view_dedup,
+  public.fxsnap_community_share_dedup,
   public.fxsnap_community_follows,
   public.fxsnap_community_blocks,
   public.fxsnap_community_reports,
@@ -359,6 +550,8 @@ begin
     set actor_account_id = anonymized_id
     where actor_account_id = p_account_id;
   delete from public.fxsnap_community_reactions where account_id = p_account_id;
+  delete from public.fxsnap_community_view_dedup where account_id = p_account_id;
+  delete from public.fxsnap_community_share_dedup where account_id = p_account_id;
   delete from public.fxsnap_community_follows
     where follower_account_id = p_account_id or followed_account_id = p_account_id;
   delete from public.fxsnap_community_blocks
