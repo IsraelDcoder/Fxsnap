@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { normalizeChartTradeSetup, normalizeLatestVisiblePrice, type ChartAnalysisResult } from '../services/chartDetection';
-import { buildAnalysisResult, formatDevelopingNote, formatRiskReward, formatTradeReadiness, getMarketDevelopmentPlan, getMissingTradeLevelsExplanation, getTradeReadinessLabel, hasCompleteTradeLevels, isUnavailableAnalysisValue } from '../services/analysisResult';
+import { buildAnalysisResult, formatDevelopingNote, formatRiskReward, formatTradeReadiness, getMarketDevelopmentPlan, getMissingTradeLevelsExplanation, getTradeReadinessLabel, hasValidatedTradeSetup, isUnavailableAnalysisValue } from '../services/analysisResult';
 
 function chartResult(overrides: Partial<ChartAnalysisResult> = {}): ChartAnalysisResult {
   return {
@@ -298,7 +298,7 @@ test('explains missing no-trade levels as a hold while the market develops', () 
   );
   assert.equal(getMissingTradeLevelsExplanation({
     ...result,
-    tradeSetup: { ...result.tradeSetup!, entryZone: '1.1000', stopLoss: '1.0950' },
+    tradeSetup: { ...result.tradeSetup!, entryZone: '1.1000', stopLoss: '1.0950', riskReward: 2 },
     takeProfitLevels: ['1.1100'],
   }), null);
 });
@@ -320,13 +320,19 @@ test('neutral chart results always include a clear market-development plan', () 
     }, true),
     'Hold for now — the market is still developing. Wait for a clear break, rejection, or directional confirmation. Chart context: Price is consolidating around 4170.976. Wait for a confirmed break of the range.',
   );
-  assert.match(getMarketDevelopmentPlan({ status: 'no_trade', marketBias: 'bearish' }), /Wait for a confirmed bearish entry or retest/);
+  assert.match(getMarketDevelopmentPlan({
+    status: 'no_trade',
+    marketBias: 'bearish',
+    tradeStatus: 'no_setup',
+    tradeTrigger: 'No actionable setup is available at this time.',
+  }), /Wait for a confirmed bearish entry or retest/);
   assert.doesNotMatch(getMarketDevelopmentPlan({ status: 'no_trade', marketBias: 'neutral' }), /no trade/i);
 });
 
 test('developing analysis notes replace blocked-trade language with confirmation guidance', () => {
   const note = formatDevelopingNote('No trade: the stop was not established and RR is not calculable.');
   assert.equal(note, 'hold for now: the stop was awaiting confirmation and RR is calculated when levels are confirmed.');
+  assert.equal(formatDevelopingNote('Setup not identified.'), 'setup is still developing.');
 });
 
 test('recognizes model-generated unavailable phrases instead of displaying them as prices', () => {
@@ -351,15 +357,35 @@ test('incomplete successful responses are presented as developing, not as establ
     },
   }), 'EUR/USD');
 
-  assert.equal(hasCompleteTradeLevels(partial), false);
+  assert.equal(hasValidatedTradeSetup(partial), false);
   assert.match(getMissingTradeLevelsExplanation(partial) ?? '', /Hold for now — the market is still developing/);
   assert.match(getMarketDevelopmentPlan(partial), /Hold for now — the market is still developing/);
+});
+
+test('waiting setups remain on hold and explain the confirmation trigger', () => {
+  const waiting = buildAnalysisResult(chartResult({
+    status: 'success',
+    tradeStatus: 'waiting_for_confirmation',
+    tradeTrigger: 'Wait for a bullish break and retest before entering.',
+  }), 'EUR/USD');
+
+  assert.equal(hasValidatedTradeSetup(waiting), true);
+  assert.match(getMarketDevelopmentPlan(waiting), /Hold for now — the market is still developing/);
+  assert.match(getMarketDevelopmentPlan(waiting), /Wait for a bullish break and retest before entering/);
+  assert.equal(getTradeReadinessLabel(
+    waiting.tradeStatus,
+    '1.1000',
+    '1.0950',
+    '1.1100',
+    'BUY',
+    2,
+  ), 'Waiting for confirmation');
 });
 
 test('trade readiness describes a hold while levels are incomplete', () => {
   assert.equal(
     getTradeReadinessLabel('no_setup', '158.23000', '158.15500', '158.29000', 'BUY', 0.8),
-    'BUY candidate setup · RR 0.8 below 1.5 minimum',
+    'Hold — market still developing',
   );
   assert.equal(
     getTradeReadinessLabel(undefined, '1.10000', 'Not established', 'Not established'),
@@ -369,17 +395,19 @@ test('trade readiness describes a hold while levels are incomplete', () => {
     getTradeReadinessLabel(undefined, 'Not established', 'Not established', 'Not established'),
     'Hold — market still developing',
   );
-  assert.equal(getTradeReadinessLabel('actionable', '1.10', '1.09', '1.12'), 'Ready');
-  assert.equal(getTradeReadinessLabel('waiting_for_confirmation', '1.10', '1.09', '1.12'), 'Waiting for confirmation');
+  assert.equal(getTradeReadinessLabel('actionable', '1.10', '1.09', '1.12', 'BUY', 2), 'Ready');
+  assert.equal(getTradeReadinessLabel('actionable', '1.10', '1.09', '1.12'), 'Hold — market still developing');
+  assert.equal(getTradeReadinessLabel('waiting_for_confirmation', '1.10', '1.09', '1.12', 'BUY', 2), 'Waiting for confirmation');
+  assert.equal(getTradeReadinessLabel('waiting_for_confirmation', '1.10', '1.09', '1.12'), 'Hold — market still developing');
 });
 
 test('readiness status stays visible without showing a zero-percent score', () => {
   assert.equal(
     formatTradeReadiness(0, 'no_setup', '158.23000', '158.15500', '158.29000', 'BUY', 0.8),
-    'BUY candidate setup · RR 0.8 below 1.5 minimum',
+    'Hold — market still developing',
   );
   assert.equal(
-    formatTradeReadiness(64, 'waiting_for_confirmation', '1.10', '1.09', '1.12'),
+    formatTradeReadiness(64, 'waiting_for_confirmation', '1.10', '1.09', '1.12', 'BUY', 2),
     '64% · Waiting for confirmation',
   );
 });

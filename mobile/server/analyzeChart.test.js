@@ -1318,6 +1318,35 @@ test('incomplete model success is returned as an explainable no-trade analysis',
   assert.match(result.analysis.notes, /setup prices were omitted/i);
 });
 
+test('text placeholders cannot pass as executable buy or sell levels', () => {
+  const canonical = canonicalizeRawAnalysis({
+    status: 'success',
+    chart: { is_chart: true, chart_quality: 'good', price_scale_visible: true, candles_visible: true, has_enough_candles: true },
+    analysis: {
+      trend: 'neutral',
+      structure: 'Price is consolidating around the visible current price.',
+      notes: 'Wait for confirmation before entry.',
+    },
+    zones: { support: 'not established', resistance: 'not established' },
+    trade_setup: {
+      type: 'sell',
+      entry_zone: 'Not established',
+      stop_loss: 'Not established',
+      take_profit: 'Not established',
+      risk_reward: 2.4,
+    },
+    confidence: 76,
+  });
+  const parsed = TradeAnalysisSchema.safeParse(canonical);
+  assert.equal(parsed.success, true);
+
+  const result = applyMentorStrategy(normalizeAnalysis(parsed.data));
+  assert.equal(result.status, 'no_trade');
+  assert.equal(result.trade_setup.type, 'none');
+  assert.equal(result.tradeStatus, 'no_setup');
+  assert.equal(result.tradeDecision, 'NONE');
+});
+
 test('numeric levels without AI-provided RR are preserved with RR calculated from those levels', () => {
   const canonical = canonicalizeRawAnalysis({
     status: 'success',

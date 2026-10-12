@@ -258,13 +258,20 @@ function firstNormalizedLevel(...values) {
 
 function hasActionableTradeSetup(tradeSetup) {
   if (!tradeSetup || tradeSetup.type === 'none') return false;
+  const entry = parsePriceOrRange(tradeSetup.entry_zone);
+  const stop = parsePriceOrRange(tradeSetup.stop_loss);
+  const target = parsePriceOrRange(tradeSetup.take_profit);
   const rrValue = Number(tradeSetup.risk_reward);
-  return (
-    hasMeaningfulLevel(tradeSetup.entry_zone) &&
-    hasMeaningfulLevel(tradeSetup.stop_loss) &&
-    hasMeaningfulLevel(tradeSetup.take_profit) &&
-    Number.isFinite(rrValue) && rrValue > 0
-  );
+  if (!entry || !stop || !target || !Number.isFinite(rrValue) || rrValue < 1.5) return false;
+  const calculated = computeRRFromLevels({
+    entry: tradeSetup.entry_zone,
+    sl: tradeSetup.stop_loss,
+    tp: tradeSetup.take_profit,
+    direction: tradeSetup.type,
+  });
+  return calculated?.rr != null
+    && calculated.rr >= 1.5
+    && Math.abs(calculated.rr - rrValue) <= Math.max(0.1, calculated.rr * 0.05);
 }
 
 const TradeAnalysisSchema = z.object({

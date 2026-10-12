@@ -44,7 +44,7 @@ import { canViewFullAnalysis } from '@/services/featureAccess';
 import { getInstrument } from '@/services/instruments';
 import { shareAnalysisCardOnWeb } from '@/services/shareAnalysisCard';
 import { formatAnalysisDirection, resolveAnalysisDirection } from '@/services/analysisDirection';
-import { formatDevelopingNote, formatRiskReward, formatTradeReadiness, getMarketDevelopmentPlan, getMissingTradeLevelsExplanation, hasCompleteTradeLevels, isUnavailableAnalysisValue } from '@/services/analysisResult';
+import { formatDevelopingNote, formatRiskReward, formatTradeReadiness, getMarketDevelopmentPlan, getMissingTradeLevelsExplanation, hasValidatedTradeSetup, isUnavailableAnalysisValue } from '@/services/analysisResult';
 import { formatInstrumentPriceText } from '@/services/priceFormatting';
 
 type ResultTab = 'analysis' | 'insights';
@@ -201,7 +201,9 @@ export default function AnalysisResultScreen() {
 
   useEffect(() => {
     setAnalysisExpanded(
-      currentAnalysis?.status === 'no_trade'
+      (currentAnalysis?.status === 'no_trade'
+        || (currentAnalysis?.status === 'success'
+          && (!hasValidatedTradeSetup(currentAnalysis) || currentAnalysis.tradeStatus !== 'actionable')))
       && canViewFullAnalysis(isSubscribed, currentAnalysis.freeAnalysisUsed === true),
     );
   }, [currentAnalysis?.id, currentAnalysis?.status, currentAnalysis?.freeAnalysisUsed, isSubscribed]);
@@ -222,16 +224,18 @@ export default function AnalysisResultScreen() {
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
   const botPad = Platform.OS === 'web' ? 34 : insets.bottom;
 
-  const isNoTrade = currentAnalysis?.status === 'no_trade';
   const isInvalid = currentAnalysis?.status === 'invalid_image';
   const isAnalysisUnavailable = isInvalid || currentAnalysis?.status === 'ai_unavailable' || currentAnalysis?.status === 'ai_invalid_response';
   const canShowMarketRead = currentAnalysis?.status === 'success'
     || currentAnalysis?.status === 'no_trade'
     || currentAnalysis?.status == null;
+  const isValidatedActionable = currentAnalysis?.status === 'success'
+    && currentAnalysis.tradeStatus === 'actionable'
+    && hasValidatedTradeSetup(currentAnalysis);
   const isDevelopingResult = currentAnalysis != null
     && !isAnalysisUnavailable
     && canShowMarketRead
-    && (isNoTrade || !hasCompleteTradeLevels(currentAnalysis));
+    && !isValidatedActionable;
   const marketRead = currentAnalysis?.marketBias ?? currentAnalysis?.analysis?.trend;
   const displayDirection = resolveAnalysisDirection(
     currentAnalysis?.tradeSetup?.type,
@@ -247,7 +251,7 @@ export default function AnalysisResultScreen() {
         : isAnalysisUnavailable ? 'NOT ASSESSED' : 'NEUTRAL BIAS';
   const directionLabel = formatAnalysisDirection(
     displayDirection,
-    currentAnalysis?.status === 'success' && currentAnalysis.tradeStatus === 'actionable',
+    isValidatedActionable,
     marketReadLabel,
   );
   const hasFullAnalysisAccess = canViewFullAnalysis(isSubscribed, currentAnalysis?.freeAnalysisUsed === true);
@@ -436,7 +440,7 @@ export default function AnalysisResultScreen() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
     const lines: string[] = [];
-    if (isNoTrade || !hasTradeSetup) {
+    if (isDevelopingResult || !hasTradeSetup) {
       lines.push('FXSnap — Market Read');
       lines.push('');
       lines.push(`Pair: ${currentAnalysis.pair}`);
@@ -739,6 +743,14 @@ export default function AnalysisResultScreen() {
               <TradeLevelRow label="Take Profit 2" value={usableTargetLevels.length > 1 ? (hasFullAnalysisAccess ? tp2Level : '••••••') : (isDevelopingResult ? 'Optional after TP1 confirms' : 'Not provided')} color={colors.buy} locked={!hasFullAnalysisAccess && usableTargetLevels.length > 1} onPress={() => openLockedContent('tp2')} /><View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
                 <TradeLevelRow label="Risk : Reward" value={hasFullAnalysisAccess ? riskRewardText : '••••'} color={colors.buy} locked={!hasFullAnalysisAccess} onPress={() => openLockedContent('risk-reward')} />
             </View>
+            {isValidatedActionable ? (
+              <View style={[styles.levelsCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+                <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>ENTRY PLAN</Text>
+                <Text style={[styles.reasoningText, { color: colors.textSecondary }]}>
+                  {formatDevelopingNote(currentAnalysis.tradeTrigger || 'Enter only while price remains within the validated entry zone. Keep the stop loss and take-profit levels in place.')}
+                </Text>
+              </View>
+            ) : null}
             {missingLevelsExplanation ? (
               <View style={[styles.missingLevelsNotice, { backgroundColor: `${colors.gold}18`, borderColor: `${colors.gold}70` }]}>
                 <Feather name="info" size={16} color="#FFC857" />
@@ -751,7 +763,7 @@ export default function AnalysisResultScreen() {
                 setAnalysisExpanded((expanded) => !expanded);
                 trackEvent('analysis_expanded', { expanded: !analysisExpanded });
               }}>
-                <View><Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>AI ANALYSIS</Text><Text style={[styles.bodyMuted, { color: colors.textSecondary }]}>{hasFullAnalysisAccess ? (isNoTrade ? 'Reasoning behind this market read' : analysisExpanded ? 'Reasoning behind this setup' : 'Read more about this setup') : 'Premium insight · Tap to unlock'}</Text></View>
+                <View><Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>AI ANALYSIS</Text><Text style={[styles.bodyMuted, { color: colors.textSecondary }]}>{hasFullAnalysisAccess ? (isDevelopingResult ? 'Reasoning behind this market read' : analysisExpanded ? 'Reasoning behind this setup' : 'Read more about this setup') : 'Premium insight · Tap to unlock'}</Text></View>
                 <Feather name={hasFullAnalysisAccess && analysisExpanded ? 'chevron-up' : 'chevron-down'} size={18} color={colors.textSecondary} />
               </TouchableOpacity>
               {hasFullAnalysisAccess && analysisExpanded ? (

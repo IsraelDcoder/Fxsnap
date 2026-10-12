@@ -10,47 +10,76 @@ export function isUnavailableAnalysisValue(value: unknown): boolean {
     || /^(?:(?:entry|stop(?:\s+loss)?|take\s+profit(?:\s+\d+)?|risk\s*:\s*reward|rr|price\s+levels?)\s*)?(?:(?:is|are)\s+)?(?:not|unavailable|unknown|pending|awaiting|cannot\s+be|can't\s+be|could\s+not\s+be)\s+(?:yet\s+)?(?:established|provided|identified|readable|calculable|calculated|available|confirmed|determined)(?:\b.*)?$/i.test(String(value).trim());
 }
 
-export function hasCompleteTradeLevels(analysis: Pick<AnalysisResult, 'tradeSetup' | 'takeProfitLevels'>): boolean {
-  const hasTarget = (analysis.takeProfitLevels ?? []).some((value) => !isUnavailableAnalysisValue(value))
-    || !isUnavailableAnalysisValue(analysis.tradeSetup?.takeProfit);
-  return hasTarget
-    && !isUnavailableAnalysisValue(analysis.tradeSetup?.entryZone)
-    && !isUnavailableAnalysisValue(analysis.tradeSetup?.stopLoss);
+function isValidPrice(value: unknown): boolean {
+  if (typeof value === 'number') return Number.isFinite(value) && value > 0;
+  if (typeof value !== 'string' || isUnavailableAnalysisValue(value)) return false;
+  const price = String.raw`(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?`;
+  const match = value.trim().match(new RegExp(`^(${price})(?:\\s*(?:-|–|—|to)\\s*(${price}))?$`, 'i'));
+  if (!match) return false;
+  return [match[1], match[2]].filter(Boolean).every((part) => Number(part.replace(/,/g, '')) > 0);
+}
+
+function getRiskRewardRatio(value: unknown): number | null {
+  if (typeof value === 'number') return Number.isFinite(value) && value > 0 ? value : null;
+  if (typeof value !== 'string' || isUnavailableAnalysisValue(value)) return null;
+  const ratio = value.trim().match(/^(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)$/);
+  if (ratio) {
+    const risk = Number(ratio[1]);
+    const reward = Number(ratio[2]);
+    return risk > 0 && reward > 0 ? reward / risk : null;
+  }
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : null;
+}
+
+export function hasValidatedTradeSetup(analysis: Pick<AnalysisResult, 'tradeSetup' | 'takeProfitLevels'>): boolean {
+  const target = (analysis.takeProfitLevels ?? []).find(isValidPrice) ?? analysis.tradeSetup?.takeProfit;
+  const riskReward = getRiskRewardRatio(analysis.tradeSetup?.riskReward);
+  return isValidPrice(analysis.tradeSetup?.entryZone)
+    && isValidPrice(analysis.tradeSetup?.stopLoss)
+    && isValidPrice(target)
+    && riskReward != null
+    && riskReward >= 1.5;
 }
 
 export function getMissingTradeLevelsExplanation(analysis: Pick<AnalysisResult, 'status' | 'tradeSetup' | 'takeProfitLevels'>): string | null {
   if (analysis.status !== 'no_trade' && analysis.status !== 'success') return null;
-  if (hasCompleteTradeLevels(analysis)) return null;
+  if (hasValidatedTradeSetup(analysis)) return null;
   return 'Hold for now — the market is still developing. Wait for direction and price levels to confirm before considering an entry. Risk/reward will be calculated when the chart supports entry, stop, and target prices.';
 }
 
 export function getMarketDevelopmentPlan(
-  analysis: Pick<AnalysisResult, 'status' | 'marketBias' | 'analysis' | 'tradeSetup' | 'takeProfitLevels'>,
+  analysis: Pick<AnalysisResult, 'status' | 'marketBias' | 'analysis' | 'tradeSetup' | 'takeProfitLevels' | 'tradeStatus' | 'tradeTrigger'>,
   includeFullContext = false,
 ): string {
-  if (analysis.status !== 'no_trade' && (analysis.status !== 'success' || hasCompleteTradeLevels(analysis))) {
+  const isWaitingForConfirmation = analysis.tradeStatus?.startsWith('waiting') ?? false;
+  const isHold = analysis.status === 'no_trade'
+    || (analysis.status === 'success' && (!hasValidatedTradeSetup(analysis) || analysis.tradeStatus !== 'actionable'));
+  if (!isHold && !isWaitingForConfirmation) {
     return 'Review the chart evidence and confirm the setup against current market conditions before acting.';
   }
 
   const bias = analysis.marketBias ?? analysis.analysis?.trend ?? 'neutral';
-  const waitCondition = bias === 'bullish'
+  const confirmationTrigger = analysis.tradeStatus?.startsWith('waiting') ? analysis.tradeTrigger?.trim() : undefined;
+  const waitCondition = confirmationTrigger || (bias === 'bullish'
     ? 'Wait for a confirmed bullish entry or retest.'
     : bias === 'bearish'
       ? 'Wait for a confirmed bearish entry or retest.'
-      : 'Wait for a clear break, rejection, or directional confirmation.';
+      : 'Wait for a clear break, rejection, or directional confirmation.');
   const structure = analysis.analysis?.structure?.trim();
   const context = includeFullContext ? analysis.analysis?.notes?.trim() : undefined;
   const details = [structure, context]
     .filter((value): value is string => Boolean(value))
     .map(formatDevelopingNote)
     .filter((value, index, values) => values.indexOf(value) === index);
-  return `Hold for now — the market is still developing. ${waitCondition}${details.length ? ` Chart context: ${details.join(' ')}` : ''}`;
+  return `Hold for now — the market is still developing. ${formatDevelopingNote(waitCondition)}${details.length ? ` Chart context: ${details.join(' ')}` : ''}`;
 }
 
 export function formatDevelopingNote(note: string): string {
   return note
     .replace(/\bno[_ -]trade\b/gi, 'hold for now')
     .replace(/\bno[_ -]setup\b/gi, 'setup is still developing')
+    .replace(/\bsetup (?:is )?not identified\b/gi, 'setup is still developing')
     .replace(/\bnot a validated trade setup\b/gi, 'a setup still awaiting confirmation')
     .replace(/\b(?:risk\s*\/\s*reward|rr)\s+(?:cannot|can't|could not)\s+be calculated(?:\s+without complete levels)?/gi, 'Risk/reward will be calculated when the price levels are confirmed')
     .replace(/\bcould not be established\b/gi, 'awaiting chart confirmation')
@@ -73,17 +102,14 @@ export function getTradeReadinessLabel(
   direction?: string,
   riskReward?: number | string,
 ): string {
-  if (tradeStatus === 'actionable') return 'Ready';
-  if (tradeStatus?.startsWith('waiting')) return 'Waiting for confirmation';
-
-  const isIdentified = (value: string) => !isUnavailableAnalysisValue(value);
-  if (isIdentified(entry) && isIdentified(stopLoss) && isIdentified(takeProfit)) {
+  const isIdentified = (value: string) => isValidPrice(value);
+  const riskRewardRatio = getRiskRewardRatio(riskReward);
+  if (isIdentified(entry) && isIdentified(stopLoss) && isIdentified(takeProfit)
+    && riskRewardRatio != null && riskRewardRatio >= 1.5) {
+    if (tradeStatus === 'actionable') return 'Ready';
+    if (tradeStatus?.startsWith('waiting')) return 'Waiting for confirmation';
     const side = direction === 'BUY' || direction === 'SELL' ? `${direction} ` : '';
-    const ratio = Number(riskReward);
-    const reason = Number.isFinite(ratio) && ratio > 0 && ratio < 1.5
-      ? `RR ${Number(ratio.toFixed(2))} below 1.5 minimum`
-      : 'awaiting validation';
-    return `${side}candidate setup · ${reason}`;
+    return `${side}candidate setup · awaiting validation`;
   }
   return 'Hold — market still developing';
 }
