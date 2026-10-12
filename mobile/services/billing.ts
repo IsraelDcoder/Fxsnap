@@ -49,6 +49,14 @@ export interface PlanOffering {
   available: boolean;
 }
 
+export interface SubscriptionDetails {
+  status: 'active' | 'expired' | 'free';
+  productIdentifier: string | null;
+  expirationDate: string | null;
+  willRenew: boolean | null;
+  managementUrl: string | null;
+}
+
 export function billingIsConfigured() {
   const key = configuredKey();
   return Boolean(key && !key.startsWith('replace_') && !key.startsWith('REPLACE_'));
@@ -68,6 +76,26 @@ export async function getPremiumStatus(): Promise<boolean> {
   if (!(await configureBilling())) return false;
   const customerInfo = await Purchases.getCustomerInfo();
   return hasPremium(customerInfo);
+}
+
+export async function getSubscriptionDetails(): Promise<SubscriptionDetails | null> {
+  if (!(await configureBilling())) return null;
+  const customerInfo = await Purchases.getCustomerInfo();
+  const matchesPremiumEntitlement = (identifier: string) =>
+    PREMIUM_ENTITLEMENT_IDS.some((candidate) => candidate.toLowerCase() === identifier.toLowerCase());
+  const activeEntitlement = Object.entries(customerInfo.entitlements.active)
+    .find(([identifier]) => matchesPremiumEntitlement(identifier))?.[1];
+  const previousEntitlement = Object.entries(customerInfo.entitlements.all)
+    .find(([identifier]) => matchesPremiumEntitlement(identifier))?.[1];
+  const entitlement = activeEntitlement ?? previousEntitlement;
+
+  return {
+    status: activeEntitlement ? 'active' : entitlement ? 'expired' : 'free',
+    productIdentifier: entitlement?.productIdentifier ?? null,
+    expirationDate: entitlement?.expirationDate ?? null,
+    willRenew: activeEntitlement?.willRenew ?? null,
+    managementUrl: customerInfo.managementURL,
+  };
 }
 
 function formatSubscriptionPeriod(product: any, plan: BillingPlan) {

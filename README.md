@@ -195,6 +195,17 @@ It still needs:
 - Compliance polish
 - Final product validation before public launch
 
+## Community beta setup
+
+Community is disabled until its database schema and a server-side internal allowlist are configured. Before enabling an internal beta:
+
+1. Apply [`mobile/server/community.sql`](./mobile/server/community.sql) to the intended Supabase project.
+2. Confirm the server uses its existing `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` configuration. Never expose the service-role key in the mobile app or an `EXPO_PUBLIC_*` variable.
+3. Set `FXSNAP_COMMUNITY_ENABLED=true`, `FXSNAP_COMMUNITY_BETA_SUPABASE_USER_IDS` to the invited Supabase user IDs, and `FXSNAP_COMMUNITY_ADMIN_SUPABASE_USER_IDS` to the separately approved administrator IDs.
+4. Test signup, feed permissions, reports, private support access, account deletion, and media upload with internal accounts before inviting a larger group.
+
+The current Community backend uses the existing Supabase project for durable data, realtime feed events, and chart-image storage. Review project storage, database, and realtime usage against the Supabase plan before expanding the beta. Chart images are public community content; private support messages and report details remain server-restricted. Support replies generate in-app notifications; push notifications are not part of this initial rollout.
+
 ---
 
 ## Why this app matters

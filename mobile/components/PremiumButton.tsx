@@ -4,10 +4,10 @@ import {
   StyleSheet,
   Text,
   TextStyle,
-  TouchableOpacity,
   View,
   ViewStyle,
 } from 'react-native';
+import { AnimatedTouchableOpacity as TouchableOpacity } from '@/components/AnimatedTouchableOpacity';
 import Animated, {
   useAnimatedStyle,
   useSharedValue,

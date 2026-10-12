@@ -7,10 +7,11 @@ import {
   StyleSheet,
   type StyleProp,
   Text,
-  TouchableOpacity,
   View,
   type ViewStyle,
 } from 'react-native';
+import { AnimatedTouchableOpacity as TouchableOpacity } from '@/components/AnimatedTouchableOpacity';
+import { AmbientBackdrop } from '@/components/AmbientBackdrop';
 import Animated, {
   FadeIn,
   FadeInDown,
@@ -130,6 +131,7 @@ function buildSmoothChartPaths(series: number[] = []) {
 
 // ─── Floating toast ───────────────────────────────────────────────────────────
 function Toast({ visible, message }: { visible: boolean; message: string }) {
+  const colors = useColors();
   const translateY = useSharedValue(80);
   const opacity = useSharedValue(0);
 
@@ -151,9 +153,9 @@ function Toast({ visible, message }: { visible: boolean; message: string }) {
   }));
 
   return (
-    <Animated.View style={[styles.toast, style]}>
-      <Feather name="check-circle" size={16} color="#00E676" />
-      <Text style={styles.toastText}>{message}</Text>
+    <Animated.View style={[styles.toast, { backgroundColor: colors.card, borderColor: colors.cardBorder }, style]}>
+      <Feather name="check-circle" size={16} color={colors.buy} />
+      <Text style={[styles.toastText, { color: colors.text }]}>{message}</Text>
     </Animated.View>
   );
 }
@@ -171,9 +173,10 @@ function TradeLevelRow({
   locked?: boolean;
   onPress?: () => void;
 }) {
+  const colors = useColors();
   return (
     <View style={styles.levelTableRow}>
-      <Text style={styles.levelTableLabel}>{label}</Text>
+      <Text style={[styles.levelTableLabel, { color: colors.textSecondary }]}>{label}</Text>
       <TouchableOpacity
         style={styles.levelTableValueWrap}
         onPress={onPress}
@@ -537,7 +540,8 @@ export default function AnalysisResultScreen() {
 
   if (!currentAnalysis) {
     return (
-      <View style={[styles.container, { paddingTop: topPad, backgroundColor: '#000000' }]}>
+      <View style={[styles.container, { paddingTop: topPad, backgroundColor: colors.background }]}>
+        <AmbientBackdrop />
         {isLoading ? (
           <View style={styles.loadingState}>
             <ActivityIndicator color="#39E58C" />
@@ -547,9 +551,9 @@ export default function AnalysisResultScreen() {
           </View>
         ) : (
           <View style={styles.emptyState}>
-            <Text style={styles.emptyText}>No analysis available.</Text>
-            <TouchableOpacity style={styles.retryButton} onPress={() => router.replace('/analysis')}>
-              <Text style={styles.retryButtonText}>Retry analysis</Text>
+            <Text style={[styles.emptyText, { color: colors.text }]}>No analysis available.</Text>
+            <TouchableOpacity style={[styles.retryButton, { backgroundColor: colors.primary }]} onPress={() => router.replace('/analysis')}>
+              <Text style={[styles.retryButtonText, { color: colors.primaryForeground }]}>Retry analysis</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.newBtn} onPress={() => router.replace('/home')}>
               <Text style={styles.newBtnText}>Go Home</Text>
@@ -562,12 +566,13 @@ export default function AnalysisResultScreen() {
 
   if (isAnalysisUnavailable) {
     return (
-      <View style={[styles.container, { paddingTop: topPad, backgroundColor: '#000000' }]}>
+      <View style={[styles.container, { paddingTop: topPad, backgroundColor: colors.background }]}>
+        <AmbientBackdrop />
         <Animated.View entering={FadeIn.duration(300)} style={styles.header}>
-          <TouchableOpacity style={styles.backBtn} onPress={() => router.replace('/home')} accessibilityRole="button" accessibilityLabel="Back">
-            <Feather name="arrow-left" size={22} color="#FFFFFF" />
+          <TouchableOpacity style={[styles.backBtn, { backgroundColor: colors.card, borderColor: colors.cardBorder }]} onPress={() => router.replace('/home')} accessibilityRole="button" accessibilityLabel="Back">
+            <Feather name="arrow-left" size={22} color={colors.text} />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Analysis Result</Text>
+          <Text style={[styles.headerTitle, { color: colors.text }]}>Analysis Result</Text>
           <View style={styles.backBtn} />
         </Animated.View>
         <ScrollView
@@ -601,18 +606,19 @@ export default function AnalysisResultScreen() {
   }
 
   return (
-    <View style={[styles.container, { paddingTop: topPad, backgroundColor: '#000000' }]}>
+    <View style={[styles.container, { paddingTop: topPad, backgroundColor: colors.background }]}>
+      <AmbientBackdrop />
       <Animated.View entering={FadeIn.duration(300)} style={styles.header}>
-        <TouchableOpacity style={styles.backBtn} onPress={() => router.replace('/home')} accessibilityRole="button" accessibilityLabel="Back">
-          <Feather name="arrow-left" size={22} color="#FFFFFF" />
+        <TouchableOpacity style={[styles.backBtn, { backgroundColor: colors.card, borderColor: colors.cardBorder }]} onPress={() => router.replace('/home')} accessibilityRole="button" accessibilityLabel="Back">
+          <Feather name="arrow-left" size={22} color={colors.text} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Analysis Result</Text>
+        <Text style={[styles.headerTitle, { color: colors.text }]}>Analysis Result</Text>
         <Animated.View style={iconAnimStyle}>
           <TouchableOpacity
-            style={[styles.saveIconBtn, alreadySaved && styles.saveIconBtnActive]}
+            style={[styles.saveIconBtn, { backgroundColor: colors.card, borderColor: colors.cardBorder }, alreadySaved && styles.saveIconBtnActive]}
             onPress={handleSave}
           >
-            <Feather name="bookmark" size={20} color={alreadySaved ? '#FFD60A' : '#FFFFFF'} />
+            <Feather name="bookmark" size={20} color={alreadySaved ? colors.gold : colors.text} />
           </TouchableOpacity>
         </Animated.View>
       </Animated.View>
@@ -622,20 +628,20 @@ export default function AnalysisResultScreen() {
         contentContainerStyle={[styles.scrollContent, { paddingBottom: botPad + 32 }]}
         showsVerticalScrollIndicator={false}
       >
-        <Animated.View entering={FadeInDown.delay(60).duration(400)} style={styles.assetHeader}>
+        <Animated.View entering={FadeInDown.delay(60).duration(400)} style={[styles.assetHeader, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
           <View style={styles.assetIdentity}>
             <View style={styles.flagStack}>
               <Text style={[styles.currencyFlag, styles.baseFlag]}>{currencyFlag(baseCurrency)}</Text>
               <Text style={[styles.currencyFlag, styles.quoteFlag]}>{currencyFlag(quoteCurrency)}</Text>
             </View>
             <View style={styles.assetNameWrap}>
-              <Text style={styles.assetPair}>{currentAnalysis.pair}</Text>
-              <Text style={styles.assetTimeframe}>{currentAnalysis.timeframe || '—'}</Text>
+              <Text style={[styles.assetPair, { color: colors.text }]}>{currentAnalysis.pair}</Text>
+              <Text style={[styles.assetTimeframe, { backgroundColor: colors.surface, color: colors.textSecondary }]}>{currentAnalysis.timeframe || '—'}</Text>
             </View>
           </View>
           <View style={styles.entrySummary}>
-            <Text style={styles.entryCaption}>{currentPrice != null ? 'CURRENT' : 'ENTRY'}</Text>
-            <Text numberOfLines={1} adjustsFontSizeToFit style={styles.entryPrice}>{currentPrice != null ? formatLevelPrice(currentPrice, pair) : entryLevelText}</Text>
+            <Text style={[styles.entryCaption, { color: colors.textSecondary }]}>{currentPrice != null ? 'CURRENT' : 'ENTRY'}</Text>
+            <Text numberOfLines={1} adjustsFontSizeToFit style={[styles.entryPrice, { color: colors.text }]}>{currentPrice != null ? formatLevelPrice(currentPrice, pair) : entryLevelText}</Text>
             <View style={[styles.directionPill, { backgroundColor: `${priceChangeColor}20` }]}>
               <Feather name={priceChangePercent == null ? (isSell || marketRead === 'bearish' ? 'trending-down' : 'trending-up') : priceChangePercent >= 0 ? 'trending-up' : 'trending-down'} size={13} color={priceChangeColor} />
               <Text style={[styles.directionPillText, { color: priceChangeColor }]}>{priceChangePercent == null ? directionLabel : `${priceChangePercent > 0 ? '+' : ''}${priceChangePercent.toFixed(2)}%`}</Text>
@@ -644,12 +650,12 @@ export default function AnalysisResultScreen() {
         </Animated.View>
 
         {(isInvalid || currentAnalysis.status === 'ai_unavailable' || currentAnalysis.status === 'ai_invalid_response') ? (
-          <View style={styles.resultError}>
+          <View style={[styles.resultError, { backgroundColor: `${colors.sell}12`, borderColor: `${colors.sell}45` }]}>
             <Feather name="alert-triangle" size={18} color="#FF7777" />
-            <Text style={styles.resultErrorText}>{currentAnalysis.analysis?.notes || currentAnalysis.message || 'Analysis could not be completed.'}</Text>
-            <TouchableOpacity style={styles.retryButton} onPress={() => router.replace('/analysis')}>
-              <Feather name="refresh-cw" size={15} color="#111111" />
-              <Text style={styles.retryButtonText}>Retry</Text>
+            <Text style={[styles.resultErrorText, { color: colors.text }]}>{currentAnalysis.analysis?.notes || currentAnalysis.message || 'Analysis could not be completed.'}</Text>
+            <TouchableOpacity style={[styles.retryButton, { backgroundColor: colors.primary }]} onPress={() => router.replace('/analysis')}>
+              <Feather name="refresh-cw" size={15} color={colors.primaryForeground} />
+              <Text style={[styles.retryButtonText, { color: colors.primaryForeground }]}>Retry</Text>
             </TouchableOpacity>
           </View>
         ) : null}
@@ -709,67 +715,77 @@ export default function AnalysisResultScreen() {
           </TouchableOpacity>
         </Animated.View>
 
-        <View style={styles.segmentedControl}>
-          <TouchableOpacity style={[styles.segment, activeTab === 'analysis' && styles.segmentSelected]} onPress={() => selectTab('analysis')}><Text style={[styles.segmentText, activeTab === 'analysis' && styles.segmentTextSelected]}>Our Analysis</Text></TouchableOpacity>
-          <TouchableOpacity style={[styles.segment, activeTab === 'insights' && styles.segmentSelected]} onPress={() => selectTab('insights')}><Text style={[styles.segmentText, activeTab === 'insights' && styles.segmentTextSelected]}>Insights</Text></TouchableOpacity>
+        <View style={[styles.segmentedControl, { backgroundColor: colors.surface, borderColor: colors.cardBorder }]}>
+          <TouchableOpacity style={[styles.segment, activeTab === 'analysis' && { backgroundColor: colors.card }]} onPress={() => selectTab('analysis')}><Text style={[styles.segmentText, { color: activeTab === 'analysis' ? colors.text : colors.textSecondary }]}>Our Analysis</Text></TouchableOpacity>
+          <TouchableOpacity style={[styles.segment, activeTab === 'insights' && { backgroundColor: colors.card }]} onPress={() => selectTab('insights')}><Text style={[styles.segmentText, { color: activeTab === 'insights' ? colors.text : colors.textSecondary }]}>Insights</Text></TouchableOpacity>
         </View>
 
         {activeTab === 'analysis' ? (
           <>
-            <Animated.View entering={FadeInUp.duration(350)} style={styles.verdictCard}>
-              <View style={styles.verdictTop}><Text style={styles.sectionTitle}>MARKET READ</Text><View style={[styles.verdictBadge, { backgroundColor: `${directionColor}20` }]}><View style={[styles.verdictDot, { backgroundColor: directionColor }]} /><Text style={[styles.verdictText, { color: directionColor }]}>{directionLabel}</Text></View></View>
-              <View style={styles.confidenceLine}><Text style={styles.bodyMuted}>Entry (chart snapshot)</Text><Text style={styles.confidenceText}>{marketEntryText}</Text></View>
-              <View style={styles.confidenceLine}><Text style={styles.bodyMuted}>Trade readiness</Text><Text style={styles.confidenceText}>{readinessText}</Text></View>
-              <View style={styles.confidenceLine}><Text style={styles.bodyMuted}>Evidence score</Text><Text style={styles.confidenceText}>{confidenceLabel} · {confidence}%</Text></View>
-              <View style={styles.confidenceTrack}><View style={[styles.confidenceProgress, { width: `${Math.max(0, Math.min(confidence, 100))}%`, backgroundColor: directionColor }]} /></View>
+            <Animated.View entering={FadeInUp.duration(350)} style={[styles.verdictCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+              <View style={styles.verdictTop}><Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>MARKET READ</Text><View style={[styles.verdictBadge, { backgroundColor: `${directionColor}20` }]}><View style={[styles.verdictDot, { backgroundColor: directionColor }]} /><Text style={[styles.verdictText, { color: directionColor }]}>{directionLabel}</Text></View></View>
+              <View style={styles.confidenceLine}><Text style={[styles.bodyMuted, { color: colors.textSecondary }]}>Entry (chart snapshot)</Text><Text style={[styles.confidenceText, { color: colors.text }]}>{marketEntryText}</Text></View>
+              <View style={styles.confidenceLine}><Text style={[styles.bodyMuted, { color: colors.textSecondary }]}>Trade readiness</Text><Text style={[styles.confidenceText, { color: colors.text }]}>{readinessText}</Text></View>
+              <View style={styles.confidenceLine}><Text style={[styles.bodyMuted, { color: colors.textSecondary }]}>Evidence score</Text><Text style={[styles.confidenceText, { color: colors.text }]}>{confidenceLabel} · {confidence}%</Text></View>
+              <View style={[styles.confidenceTrack, { backgroundColor: colors.surface }]}><View style={[styles.confidenceProgress, { width: `${Math.max(0, Math.min(confidence, 100))}%`, backgroundColor: directionColor }]} /></View>
             </Animated.View>
-            <View style={styles.levelsCard}>
-              <Text style={styles.sectionTitle}>TRADE LEVELS</Text>
-              <TradeLevelRow label="Entry" value={entryLevelText} /><View style={styles.tableDivider} />
-              <TradeLevelRow label="Stop Loss" value={stopLevelText} color="#FF6262" /><View style={styles.tableDivider} />
-              <TradeLevelRow label="Take Profit 1" value={tp1LevelText} color="#39E58C" /><View style={styles.tableDivider} />
-              <TradeLevelRow label="Take Profit 2" value={usableTargetLevels.length > 1 ? (hasFullAnalysisAccess ? tp2Level : '••••••') : 'Not provided'} color="#39E58C" locked={!hasFullAnalysisAccess && usableTargetLevels.length > 1} onPress={() => openLockedContent('tp2')} /><View style={styles.tableDivider} />
-                <TradeLevelRow label="Risk : Reward" value={hasFullAnalysisAccess ? riskRewardText : '••••'} color="#39E58C" locked={!hasFullAnalysisAccess} onPress={() => openLockedContent('risk-reward')} />
+            <View style={[styles.levelsCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+              <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>TRADE LEVELS</Text>
+              <TradeLevelRow label="Entry" value={entryLevelText} /><View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
+              <TradeLevelRow label="Stop Loss" value={stopLevelText} color={colors.sell} /><View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
+              <TradeLevelRow label="Take Profit 1" value={tp1LevelText} color={colors.buy} /><View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
+              <TradeLevelRow label="Take Profit 2" value={usableTargetLevels.length > 1 ? (hasFullAnalysisAccess ? tp2Level : '••••••') : 'Not provided'} color={colors.buy} locked={!hasFullAnalysisAccess && usableTargetLevels.length > 1} onPress={() => openLockedContent('tp2')} /><View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
+                <TradeLevelRow label="Risk : Reward" value={hasFullAnalysisAccess ? riskRewardText : '••••'} color={colors.buy} locked={!hasFullAnalysisAccess} onPress={() => openLockedContent('risk-reward')} />
             </View>
             {missingLevelsExplanation ? (
-              <View style={styles.missingLevelsNotice}>
+              <View style={[styles.missingLevelsNotice, { backgroundColor: `${colors.gold}18`, borderColor: `${colors.gold}70` }]}>
                 <Feather name="info" size={16} color="#FFC857" />
-                <Text style={styles.missingLevelsText}>{missingLevelsExplanation}</Text>
+                <Text style={[styles.missingLevelsText, { color: colors.textSecondary }]}>{missingLevelsExplanation}</Text>
               </View>
             ) : null}
-            <View style={styles.levelsCard}>
+            <View style={[styles.levelsCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
               <TouchableOpacity style={styles.aiHeading} onPress={() => {
                 if (!hasFullAnalysisAccess) { openLockedContent('ai-analysis'); return; }
                 setAnalysisExpanded((expanded) => !expanded);
                 trackEvent('analysis_expanded', { expanded: !analysisExpanded });
               }}>
-                <View><Text style={styles.sectionTitle}>AI ANALYSIS</Text><Text style={styles.bodyMuted}>{hasFullAnalysisAccess ? (isNoTrade ? 'Reasoning behind this market read' : analysisExpanded ? 'Reasoning behind this setup' : 'Read more about this setup') : 'Premium insight · Tap to unlock'}</Text></View>
-                <Feather name={hasFullAnalysisAccess && analysisExpanded ? 'chevron-up' : 'chevron-down'} size={18} color="#BDBDBD" />
+                <View><Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>AI ANALYSIS</Text><Text style={[styles.bodyMuted, { color: colors.textSecondary }]}>{hasFullAnalysisAccess ? (isNoTrade ? 'Reasoning behind this market read' : analysisExpanded ? 'Reasoning behind this setup' : 'Read more about this setup') : 'Premium insight · Tap to unlock'}</Text></View>
+                <Feather name={hasFullAnalysisAccess && analysisExpanded ? 'chevron-up' : 'chevron-down'} size={18} color={colors.textSecondary} />
               </TouchableOpacity>
               {hasFullAnalysisAccess && analysisExpanded ? (
-                <View style={styles.reasoningList}>{(reasoning.length ? reasoning : ['No additional reasoning was provided for this setup.']).map((reason, index) => <View key={`${index}-${reason}`} style={styles.reasoningRow}><View style={styles.reasoningBullet} /><Text style={styles.reasoningText}>{reason}</Text></View>)}</View>
+                <View style={styles.reasoningList}>{(reasoning.length ? reasoning : ['No additional reasoning was provided for this setup.']).map((reason, index) => <View key={`${index}-${reason}`} style={styles.reasoningRow}><View style={[styles.reasoningBullet, { backgroundColor: colors.buy }]} /><Text style={[styles.reasoningText, { color: colors.textSecondary }]}>{reason}</Text></View>)}</View>
               ) : !hasFullAnalysisAccess ? (
-                <View style={styles.lockedReasoning}><View pointerEvents="none" style={styles.lockedReasoningPreview}>{(reasoning.length ? reasoning.slice(0, 3) : ['Trend and structure analysis', 'Key levels and confluence']).map((reason, index) => <Text key={`${index}-${reason}`} numberOfLines={1} style={styles.reasoningText}>{`• ${reason}`}</Text>)}<BlurView intensity={36} tint="dark" style={StyleSheet.absoluteFill} /></View><TouchableOpacity style={styles.unlockButton} onPress={() => openLockedContent('ai-analysis')}><Feather name="lock" size={14} color="#111111" /><Text style={styles.unlockButtonText}>Unlock full analysis</Text></TouchableOpacity></View>
+                <View style={styles.lockedReasoning}><View pointerEvents="none" style={styles.lockedReasoningPreview}>{(reasoning.length ? reasoning.slice(0, 3) : ['Trend and structure analysis', 'Key levels and confluence']).map((reason, index) => <Text key={`${index}-${reason}`} numberOfLines={1} style={[styles.reasoningText, { color: colors.textSecondary }]}>{`• ${reason}`}</Text>)}<BlurView intensity={36} tint={colors.text === '#FFFFFF' ? 'dark' : 'light'} style={StyleSheet.absoluteFill} /></View><TouchableOpacity style={[styles.unlockButton, { backgroundColor: colors.primary }]} onPress={() => openLockedContent('ai-analysis')}><Feather name="lock" size={14} color={colors.primaryForeground} /><Text style={[styles.unlockButtonText, { color: colors.primaryForeground }]}>Unlock full analysis</Text></TouchableOpacity></View>
               ) : null}
             </View>
           </>
         ) : (
           <>
-            <View style={styles.levelsCard}><Text style={styles.sectionTitle}>SUPPORT & RESISTANCE</Text><TradeLevelRow label="Support" value={supportLevels} color="#39E58C" /><View style={styles.tableDivider} /><TradeLevelRow label="Resistance" value={resistanceLevels} color="#FF7777" /></View>
-            <View style={styles.levelsCard}><Text style={styles.sectionTitle}>TREND & PATTERN</Text><TradeLevelRow label="Trend" value={currentAnalysis.analysis?.trend || currentAnalysis.marketBias || 'Not identified'} /><View style={styles.tableDivider} /><TradeLevelRow label="Structure" value={currentAnalysis.analysis?.structure || 'Not identified'} />{currentAnalysis.multiTimeframe ? <><View style={styles.tableDivider} /><TradeLevelRow label="Timeframe alignment" value={currentAnalysis.multiTimeframe.alignment} color={currentAnalysis.multiTimeframe.alignment === 'aligned' ? '#39E58C' : '#FFC857'} /></> : null}</View>
-            <View style={styles.levelsCard}>
-              <Text style={styles.sectionTitle}>RISK NOTES</Text>
+            <View style={[styles.levelsCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}><Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>SUPPORT & RESISTANCE</Text><TradeLevelRow label="Support" value={supportLevels} color="#39E58C" /><View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} /><TradeLevelRow label="Resistance" value={resistanceLevels} color="#FF7777" /></View>
+            <View style={[styles.levelsCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}><Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>TREND & PATTERN</Text><TradeLevelRow label="Trend" value={currentAnalysis.analysis?.trend || currentAnalysis.marketBias || 'Not identified'} /><View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} /><TradeLevelRow label="Structure" value={currentAnalysis.analysis?.structure || 'Not identified'} />{currentAnalysis.multiTimeframe ? <><View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} /><TradeLevelRow label="Timeframe alignment" value={currentAnalysis.multiTimeframe.alignment} color={currentAnalysis.multiTimeframe.alignment === 'aligned' ? '#39E58C' : '#FFC857'} /></> : null}</View>
+            <View style={[styles.levelsCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+              <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>RISK NOTES</Text>
               {[...(currentAnalysis.whyNotNow ?? []), ...(currentAnalysis.dataLimitations ?? []), ...(currentAnalysis.rrIssues ?? [])].length
-                ? [...(currentAnalysis.whyNotNow ?? []), ...(currentAnalysis.dataLimitations ?? []), ...(currentAnalysis.rrIssues ?? [])].map((note, index) => <View key={`${index}-${note}`} style={styles.reasoningRow}><Feather name="alert-circle" size={14} color="#FFC857" /><Text style={styles.reasoningText}>{note}</Text></View>)
-                : <Text style={styles.reasoningText}>No additional risk notes provided.</Text>}
+                ? [...(currentAnalysis.whyNotNow ?? []), ...(currentAnalysis.dataLimitations ?? []), ...(currentAnalysis.rrIssues ?? [])].map((note, index) => <View key={`${index}-${note}`} style={styles.reasoningRow}><Feather name="alert-circle" size={14} color="#FFC857" /><Text style={[styles.reasoningText, { color: colors.textSecondary }]}>{note}</Text></View>)
+                : <Text style={[styles.reasoningText, { color: colors.textSecondary }]}>No additional risk notes provided.</Text>}
             </View>
           </>
         )}
-        <Text style={styles.resultDisclaimer}>AI analysis, not financial advice. Always use appropriate risk management.</Text>
+        <Text style={[styles.resultDisclaimer, { color: colors.textMuted }]}>AI analysis, not financial advice. Always use appropriate risk management.</Text>
         <View style={styles.resultActions}>
-          <TouchableOpacity style={styles.actionButton} onPress={() => void handleShare()} disabled={shareDisabled}>{shareDisabled ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Feather name="share-2" size={16} color="#FFFFFF" />}<Text style={styles.actionButtonText}>Share</Text></TouchableOpacity>
-          <TouchableOpacity style={[styles.actionButton, alreadySaved && styles.actionButtonDisabled]} onPress={handleSave} disabled={alreadySaved}><Feather name="bookmark" size={16} color="#FFFFFF" /><Text style={styles.actionButtonText}>{alreadySaved ? 'Saved' : 'Save to History'}</Text></TouchableOpacity>
-          <TouchableOpacity style={styles.actionButton} onPress={() => void handleCopy()}><Feather name="copy" size={16} color="#FFFFFF" /><Text style={styles.actionButtonText}>Copy levels</Text></TouchableOpacity>
+          <TouchableOpacity style={[styles.actionButton, { backgroundColor: colors.card, borderColor: colors.cardBorder }]} onPress={() => void handleShare()} disabled={shareDisabled}>{shareDisabled ? <ActivityIndicator size="small" color={colors.text} /> : <Feather name="share-2" size={16} color={colors.text} />}<Text style={[styles.actionButtonText, { color: colors.text }]}>Share</Text></TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.actionButton, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}
+            onPress={() => {
+              if (currentAnalysis) router.push({ pathname: '/community', params: { shareAnalysisId: currentAnalysis.id } });
+            }}
+            disabled={!currentAnalysis}
+          >
+            <Feather name="users" size={16} color={colors.text} />
+            <Text style={[styles.actionButtonText, { color: colors.text }]}>Share to Community</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.actionButton, { backgroundColor: colors.card, borderColor: colors.cardBorder }, alreadySaved && styles.actionButtonDisabled]} onPress={handleSave} disabled={alreadySaved}><Feather name="bookmark" size={16} color={colors.text} /><Text style={[styles.actionButtonText, { color: colors.text }]}>{alreadySaved ? 'Saved' : 'Save to History'}</Text></TouchableOpacity>
+          <TouchableOpacity style={[styles.actionButton, { backgroundColor: colors.card, borderColor: colors.cardBorder }]} onPress={() => void handleCopy()}><Feather name="copy" size={16} color={colors.text} /><Text style={[styles.actionButtonText, { color: colors.text }]}>Copy levels</Text></TouchableOpacity>
         </View>
         {shareError ? <View style={styles.shareErrorBox}><Text style={styles.shareErrorTitle}>Couldn't create the share card.</Text><TouchableOpacity style={styles.shareRetryBtn} onPress={() => void handleShare()}><Text style={styles.shareRetryText}>Try again</Text></TouchableOpacity></View> : null}
       </ScrollView>

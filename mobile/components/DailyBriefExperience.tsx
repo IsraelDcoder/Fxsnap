@@ -8,10 +8,11 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TouchableOpacity,
   View,
   useWindowDimensions,
 } from 'react-native';
+import { AnimatedTouchableOpacity as TouchableOpacity } from '@/components/AnimatedTouchableOpacity';
+import { AmbientBackdrop } from '@/components/AmbientBackdrop';
 import Svg, { Circle, Line, Path, Rect, Text as SvgText } from 'react-native-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
@@ -220,6 +221,7 @@ export default function DailyBriefExperience() {
 
   return (
     <View style={[styles.screen, { backgroundColor: colors.background, paddingTop: insets.top + 6 }]}>
+      <AmbientBackdrop />
       <View style={styles.topBar}>
         <TouchableOpacity onPress={returnHome} style={[styles.topIcon, { backgroundColor: colors.card, borderColor: colors.cardBorder }]} accessibilityLabel="Back to home">
           <Feather name="arrow-left" size={19} color={colors.text} />

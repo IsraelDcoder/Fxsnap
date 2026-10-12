@@ -42,10 +42,6 @@ async function clearLegacyFreeAnalysisId() {
   if (!legacyFreeAnalysisIdCleanup) {
     legacyFreeAnalysisIdCleanup = (async () => {
       await AsyncStorage.removeItem(LEGACY_FREE_ANALYSIS_ID_KEY).catch(() => undefined);
-      try {
-        const secureStore = require('expo-secure-store') as typeof import('expo-secure-store');
-        await secureStore.deleteItemAsync(LEGACY_FREE_ANALYSIS_ID_KEY);
-      } catch {}
     })();
   }
   await legacyFreeAnalysisIdCleanup;

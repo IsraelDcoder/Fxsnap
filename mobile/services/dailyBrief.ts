@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { notifyAccountDataChanged } from './accountDataEvents';
 
 export type BriefCategory =
   | 'Trading Psychology'
@@ -164,6 +165,7 @@ export async function getDailyBriefState(date = new Date()): Promise<DailyBriefS
     const retained = Object.fromEntries(Object.entries(assignments).sort(([left], [right]) => right.localeCompare(left)).slice(0, 13));
     retained[dateKey] = assignedIds;
     await AsyncStorage.setItem(ASSIGNMENTS_KEY, JSON.stringify(retained));
+    notifyAccountDataChanged();
   }
 
   const byId = new Map(CURATED_BRIEFS.map((brief) => [brief.id, brief]));
@@ -186,6 +188,7 @@ export async function markDailyBriefRead(briefId: string, date = new Date()): Pr
   reads[state.dateKey] = addBriefRead(reads[state.dateKey] || [], briefId);
   const retainedReads = Object.fromEntries(Object.entries(reads).sort(([left], [right]) => right.localeCompare(left)).slice(0, 14));
   await AsyncStorage.setItem(READS_KEY, JSON.stringify(retainedReads));
+  notifyAccountDataChanged();
   return {
     ...state,
     readIds: retainedReads[state.dateKey],

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
+import { View, Text, StyleSheet, ActivityIndicator, Alert } from 'react-native';
+import { AnimatedTouchableOpacity as TouchableOpacity } from '@/components/AnimatedTouchableOpacity';
 import ScreenWrapper from '@/components/ScreenWrapper';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useColors } from '@/hooks/useColors';

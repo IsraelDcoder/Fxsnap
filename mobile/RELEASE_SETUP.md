@@ -36,10 +36,24 @@ Set these in the deployment secret manager, not in a committed `.env`:
 - `ALPHA_VANTAGE_API_KEY` or a licensed replacement provider key
 - `FXSNAP_AUTH_SECRET`
 - `REVENUECAT_SECRET_API_KEY`
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
 - `EXPO_PUBLIC_SENTRY_DSN` for the client build
 - `ALLOWED_ORIGIN` for the deployed web client origin
 
 Use HTTPS and set `ALLOWED_ORIGIN` to the real web origin. Rotate any key previously exposed during development.
+
+## Optional Google account sign-in through Supabase
+
+Google sign-in is optional and does not change the anonymous device identity or RevenueCat App User ID. The mobile app uses Supabase Auth's Google provider with PKCE; the backend verifies the resulting access token against Supabase Auth before linking the verified Google identity to the existing FXSnap account.
+
+1. In Supabase, enable Google under **Authentication → Sign In / Providers**. In Google Cloud Console, create a **Web application** OAuth client for Supabase's hosted OAuth flow. Copy the exact Supabase Auth callback shown on the Supabase provider page (`https://<project-ref>.supabase.co/auth/v1/callback`) into Google's **Authorized redirect URIs**. The Google OAuth client ID and secret belong in Supabase provider settings, not in the mobile app.
+2. In Supabase **Authentication → URL Configuration**, set the Site URL to `https://fxsnap.vercel.app` and add `mobile://auth/callback` to Additional Redirect URLs. The app's existing Expo scheme is `mobile`; the native browser flow returns to this URI and exchanges its PKCE code in-app. There is no website `/auth/callback` route.
+3. Set `EXPO_PUBLIC_SUPABASE_URL` and either `EXPO_PUBLIC_SUPABASE_ANON_KEY` or `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY` in the app build environment. The URL is the Supabase project URL (not the Vercel app URL). These public keys are intended for client use; never place a service-role/secret key in any `EXPO_PUBLIC_*` variable.
+4. Set server-only `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` for Supabase Auth token verification and account deletion. These same server settings are used by the existing Supabase durable storage. Also configure `FXSNAP_AUTH_SECRET` and durable storage. Do not put a service-role key or other server credential in an `EXPO_PUBLIC_*` variable.
+5. Build and test on iOS and Android with the production app identifiers. Use an Expo development build for local OAuth testing so the existing `mobile://` scheme is registered; do not add an invented Expo Go redirect to production's allowed URLs.
+
+After sign-in, FXSnap saves and restores the app backup (settings, saved analyses, strategies, briefs, and current risk activity), notification preferences, daily-brief progress, and a compressed profile photo to the authenticated account. Account data is limited to 5 MB per backup. Device identity, free-analysis allowances, RevenueCat identity and entitlements, and device push tokens are not synced or changed. Account deletion removes the cloud backup; sign-out does not.
 
 ## Sentry
 

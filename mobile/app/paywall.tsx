@@ -1,11 +1,13 @@
 import React, { useEffect, useState } from 'react';
-import { Alert, BackHandler, Modal, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View, useWindowDimensions } from 'react-native';
+import { Alert, BackHandler, Modal, Platform, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { AnimatedTouchableOpacity as TouchableOpacity } from '@/components/AnimatedTouchableOpacity';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, {
   FadeIn,
   FadeInDown,
   FadeInUp,
   SlideInDown,
+  useReducedMotion,
   ZoomIn,
 } from 'react-native-reanimated';
 import ScreenWrapper from '@/components/ScreenWrapper';
@@ -14,10 +16,14 @@ import { router, useLocalSearchParams } from 'expo-router';
 import * as Haptics from '@/services/haptics';
 import { useApp } from '@/context/AppContext';
 import { getAvailablePlans, type BillingPlan, type PlanOffering } from '@/services/billing';
+import { useColors } from '@/hooks/useColors';
 
 export default function PaywallScreen() {
   // ScreenWrapper handles safe area and scrolling
   const insets = useSafeAreaInsets();
+  const colors = useColors();
+  const reduceMotion = useReducedMotion();
+  const isDarkTheme = colors.text === '#FFFFFF';
   const { source } = useLocalSearchParams<{ source?: string }>();
   const isAnalysisLimit = source === 'analysis-limit';
   const isAnalysisResultUnlock = source === 'analysis-result-locked';
@@ -168,20 +174,20 @@ export default function PaywallScreen() {
 
   return (
     <ScreenWrapper
-      style={[styles.container, { backgroundColor: '#000000' }]}
+      style={[styles.container, { backgroundColor: colors.background }]}
       contentContainerStyle={[styles.scrollContent, isCompact && styles.compactScrollContent, { paddingBottom: botPad + 16, alignItems: 'center' }]}
     >
       <View style={[styles.header, isCompact && styles.compactHeader]}>
         {canDismiss ? (
-          <Animated.View entering={FadeIn.duration(350)}>
+          <Animated.View entering={reduceMotion ? undefined : FadeIn.duration(350)}>
             <TouchableOpacity style={[styles.closeBtn, isCompact && styles.compactCloseBtn]} onPress={handlePaywallDismiss} accessibilityRole="button" accessibilityLabel="Close paywall">
-              <Feather name="x" size={26} color="#FFFFFF" />
+              <Feather name="x" size={26} color={colors.text} />
             </TouchableOpacity>
           </Animated.View>
         ) : <View style={[styles.closePlaceholder, isCompact && styles.compactClosePlaceholder]} />}
       </View>
 
-      <Animated.View entering={FadeInDown.delay(100).duration(600)} style={[styles.hero, isCompact && styles.compactHero]}>
+      <Animated.View entering={reduceMotion ? undefined : FadeInDown.delay(100).duration(600)} style={[styles.hero, isCompact && styles.compactHero]}>
         <View style={styles.brandRow}>
           <View style={styles.brandMark}>
             {[10, 15, 21].map((height, index) => (
@@ -191,19 +197,19 @@ export default function PaywallScreen() {
               </View>
             ))}
           </View>
-          <Text style={styles.brandName}>FXSnap <Text style={styles.brandAccent}>AI</Text></Text>
+          <Text style={[styles.brandName, { color: colors.text }]}>FXSnap <Text style={styles.brandAccent}>AI</Text></Text>
         </View>
-        <Text style={[styles.title, isCompact && styles.compactTitle]}>Your free analysis{"\nis used up"}</Text>
-        <Text style={[styles.subtitle, isCompact && styles.compactSubtitle]}>Unlock unlimited AI chart insights — cancel anytime</Text>
+        <Text style={[styles.title, isCompact && styles.compactTitle, { color: colors.text }]}>Your free analysis{"\nis used up"}</Text>
+        <Text style={[styles.subtitle, isCompact && styles.compactSubtitle, { color: colors.textSecondary }]}>Unlock unlimited AI chart insights — cancel anytime</Text>
         <View style={styles.trustedRow}>
           <Feather name="users" size={20} color="#31D15B" />
-          <Text style={styles.trustedText}>Trusted by <Text style={styles.trustedCount}>3,700+</Text> traders</Text>
+          <Text style={[styles.trustedText, { color: colors.textSecondary }]}>Trusted by <Text style={styles.trustedCount}>3,700+</Text> traders</Text>
         </View>
       </Animated.View>
 
-      <View style={styles.sectionDivider} />
+      <View style={[styles.sectionDivider, { backgroundColor: colors.cardBorder }]} />
 
-      <Animated.View entering={FadeInUp.delay(200).duration(600)} style={styles.featuresList}>
+      <Animated.View entering={reduceMotion ? undefined : FadeInUp.delay(200).duration(600)} style={styles.featuresList}>
         {[
           'Unlimited screenshot analyses',
           'Clear Long/Short/Hold + entry SL & TP levels',
@@ -212,19 +218,19 @@ export default function PaywallScreen() {
         ].map((benefit) => (
           <View key={benefit} style={styles.featureRow}>
             <View style={styles.featureCheck}><Feather name="check" size={12} color="#07130B" /></View>
-            <Text style={styles.featureText}>{benefit}</Text>
+            <Text style={[styles.featureText, { color: colors.textSecondary }]}>{benefit}</Text>
           </View>
         ))}
       </Animated.View>
 
-      <Animated.View entering={FadeInUp.delay(300).duration(600)} style={[styles.planSection, isCompact && styles.compactPlanSection]}>
+      <Animated.View entering={reduceMotion ? undefined : FadeInUp.delay(300).duration(600)} style={[styles.planSection, isCompact && styles.compactPlanSection]}>
         {loadingPlans ? (
-          <View style={styles.loadingState}>
-            <Text style={styles.loadingText}>Loading subscription options…</Text>
+          <View style={[styles.loadingState, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+            <Text style={[styles.loadingText, { color: colors.textSecondary }]}>Loading subscription options…</Text>
           </View>
         ) : (
           <>
-            <Text style={styles.planSectionTitle}>Choose Your Plan</Text>
+            <Text style={[styles.planSectionTitle, { color: colors.text }]}>Choose Your Plan</Text>
             <View style={styles.plansRow}>
               {orderedPlans.map((plan) => {
             const isSelected = isSelectedPlan(plan.plan);
@@ -238,6 +244,7 @@ export default function PaywallScreen() {
                   isSelected && styles.planCardSelected,
                   !plan.available && styles.planCardUnavailable,
                   plan.plan === 'monthly' && styles.monthlyPlanCard,
+                  { backgroundColor: isSelected ? `${colors.buy}18` : colors.card, borderColor: isSelected ? colors.buy : colors.cardBorder },
                 ]}
                 onPress={() => {
                   if (!plan.available) return;
@@ -250,10 +257,10 @@ export default function PaywallScreen() {
                 {plan.plan === 'monthly' && <View style={[styles.planTag, styles.popularTag]}><Text style={styles.planTagText}>Most Popular</Text></View>}
                 {plan.plan === 'quarterly' && <View style={[styles.planTag, styles.bestValueTag]}><Text style={styles.planTagText}>Best Value - Save 22%</Text></View>}
                 <View style={[styles.planTextColumn, plan.plan === 'monthly' && styles.monthlyPlanText]}>
-                  <Text style={[styles.planName, isSelected && styles.planNameSelected]}>{plan.plan === 'quarterly' ? '3-Month' : plan.plan === 'weekly' ? 'Weekly' : 'Monthly'}</Text>
-                  <Text style={[styles.planPrice, isSelected && styles.planPriceSelected]}>{getPlanDisplayPrice(plan)}</Text>
-                  <Text style={styles.planPeriod}>{getPlanDisplayPeriod(plan)}</Text>
-                  {plan.plan === 'monthly' && <Text style={styles.dailyPrice}>Only $0.50/day</Text>}
+                  <Text style={[styles.planName, { color: colors.text }]}>{plan.plan === 'quarterly' ? '3-Month' : plan.plan === 'weekly' ? 'Weekly' : 'Monthly'}</Text>
+                  <Text style={[styles.planPrice, { color: colors.text }]}>{getPlanDisplayPrice(plan)}</Text>
+                  <Text style={[styles.planPeriod, { color: colors.textSecondary }]}>{getPlanDisplayPeriod(plan)}</Text>
+                  {plan.plan === 'monthly' && <Text style={[styles.dailyPrice, { color: colors.buy }]}>Only $0.50/day</Text>}
                 </View>
               </TouchableOpacity>
             );
@@ -263,29 +270,30 @@ export default function PaywallScreen() {
         )}
       </Animated.View>
 
-      <Animated.View entering={FadeInUp.delay(400).duration(600)} style={[styles.actions, isCompact && styles.compactActions]}>
+      <Animated.View entering={reduceMotion ? undefined : FadeInUp.delay(400).duration(600)} style={[styles.actions, isCompact && styles.compactActions]}>
         <TouchableOpacity
           style={[
             styles.subscribeBtn,
             isCompact && styles.compactSubscribeBtn,
+            { backgroundColor: colors.buy },
           ]}
           onPress={handleSubscribe}
           disabled={loading || !billingAvailable || !canPurchaseSelectedPlan}
         >
-          <Text style={[styles.subscribeBtnText, isCompact && styles.compactSubscribeText]}>
+          <Text style={[styles.subscribeBtnText, isCompact && styles.compactSubscribeText, { color: colors.primaryForeground }]}>
             {loading ? 'Processing...' : 'Unlock Unlimited Now'}
           </Text>
-          <Feather name="arrow-right" size={20} color="#FFFFFF" />
+          <Feather name="arrow-right" size={20} color={colors.primaryForeground} />
         </TouchableOpacity>
 
-        <Text style={styles.restoreText}>
-          <Text style={styles.restoreLink} onPress={() => void handleRestore()} accessibilityRole="link">Restore Purchases</Text>
+        <Text style={[styles.restoreText, { color: colors.textSecondary }]}>
+          <Text style={[styles.restoreLink, { color: colors.text }]} onPress={() => void handleRestore()} accessibilityRole="link">Restore Purchases</Text>
         </Text>
         <View style={styles.securityNote}>
           <Feather name="lock" size={13} color="#31D15B" />
-          <Text style={styles.securityNoteText}>Cancel anytime  •  Secure payment  •  No auto-renew if cancelled</Text>
+          <Text style={[styles.securityNoteText, { color: colors.textSecondary }]}>Cancel anytime  •  Secure payment  •  No auto-renew if cancelled</Text>
         </View>
-        <Text style={styles.trialNote}>You won't be charged until your free trial (if any) ends.</Text>
+        <Text style={[styles.trialNote, { color: colors.textSecondary }]}>You won't be charged until your free trial (if any) ends.</Text>
       </Animated.View>
       <Modal
         visible={exitOfferVisible}
@@ -295,35 +303,43 @@ export default function PaywallScreen() {
         onRequestClose={handleExitOfferLater}
       >
         <View style={styles.exitOfferBackdrop} accessibilityViewIsModal>
-          <Animated.View entering={FadeIn.duration(300)} style={styles.exitOfferScrim} />
-          <View style={styles.exitOfferGlow} />
-          <View style={styles.exitOfferGlowSecondary} />
+          <Animated.View
+            entering={reduceMotion ? undefined : FadeIn.duration(300)}
+            pointerEvents="none"
+            style={[
+              styles.exitOfferScrim,
+              { backgroundColor: isDarkTheme ? 'rgba(0, 0, 0, 0.68)' : 'rgba(23, 32, 26, 0.42)' },
+            ]}
+          />
+          <View style={[styles.exitOfferGlow, { backgroundColor: isDarkTheme ? 'rgba(49, 209, 91, 0.08)' : `${colors.accent}12` }]} />
+          <View style={[styles.exitOfferGlowSecondary, { backgroundColor: isDarkTheme ? 'rgba(49, 209, 91, 0.055)' : `${colors.buy}0A` }]} />
           <ScrollView
             contentContainerStyle={[
               styles.exitOfferContent,
-              { paddingTop: insets.top + 28, paddingBottom: insets.bottom + 24 },
+              { paddingTop: insets.top + 20, paddingBottom: insets.bottom + 20, zIndex: 1 },
             ]}
             showsVerticalScrollIndicator={false}
           >
+            <View style={[styles.exitOfferCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
             <Animated.View
-              entering={SlideInDown.delay(0).duration(320).springify().damping(20)}
+              entering={reduceMotion ? undefined : SlideInDown.delay(0).duration(320).springify().damping(20)}
               style={styles.exitOfferEyebrowRow}
             >
-              <View style={styles.exitOfferIcon}>
-                <Feather name="bar-chart-2" size={23} color="#31D15B" />
+              <View style={[styles.exitOfferIcon, { backgroundColor: `${colors.buy}14`, borderColor: `${colors.buy}55` }]}>
+                <Feather name="bar-chart-2" size={23} color={colors.buy} />
               </View>
-              <Text style={styles.exitOfferEyebrow}>BEFORE YOU GO...</Text>
+              <Text style={[styles.exitOfferEyebrow, { color: colors.buy }]}>BEFORE YOU GO...</Text>
             </Animated.View>
             <Animated.Text
-              entering={FadeInUp.delay(150).duration(330)}
-              style={styles.exitOfferTitle}
+              entering={reduceMotion ? undefined : FadeInUp.delay(150).duration(330)}
+              style={[styles.exitOfferTitle, { color: colors.text }]}
               accessibilityRole="header"
             >
               Your Next Chart Deserves Better Analysis.
             </Animated.Text>
             <Animated.Text
-              entering={FadeIn.delay(300).duration(320)}
-              style={styles.exitOfferDescription}
+              entering={reduceMotion ? undefined : FadeIn.delay(300).duration(320)}
+              style={[styles.exitOfferDescription, { color: colors.textSecondary }]}
             >
               You've used your free analysis. Unlock continued access to AI-powered chart insights with FXSnap.
             </Animated.Text>
@@ -335,40 +351,41 @@ export default function PaywallScreen() {
               ].map((benefit, index) => (
                 <Animated.View
                   key={benefit}
-                  entering={FadeInUp.delay(440 + index * 130).duration(300)}
+                  entering={reduceMotion ? undefined : FadeInUp.delay(440 + index * 130).duration(300)}
                   style={styles.exitOfferBenefit}
                 >
-                  <View style={styles.exitOfferBenefitIcon}>
-                    <Feather name="check" size={14} color="#31D15B" />
+                  <View style={[styles.exitOfferBenefitIcon, { backgroundColor: `${colors.buy}18` }]}>
+                    <Feather name="check" size={14} color={colors.buy} />
                   </View>
-                  <Text style={styles.exitOfferBenefitText}>{benefit}</Text>
+                  <Text style={[styles.exitOfferBenefitText, { color: colors.text }]}>{benefit}</Text>
                 </Animated.View>
               ))}
             </View>
             <Animated.View
-              entering={ZoomIn.delay(850).duration(300).springify().damping(16)}
+              entering={reduceMotion ? undefined : ZoomIn.delay(650).duration(300).springify().damping(16)}
               style={styles.exitOfferActions}
             >
               <TouchableOpacity
-                style={styles.exitOfferPrimary}
+                style={[styles.exitOfferPrimary, { backgroundColor: colors.buy }]}
                 onPress={handleExitOfferUnlock}
                 accessibilityRole="button"
                 accessibilityLabel="Unlock Unlimited Analyses"
               >
-                <Text style={styles.exitOfferPrimaryText}>Unlock Unlimited Analyses</Text>
-                <Feather name="arrow-right" size={19} color="#FFFFFF" />
+                <Text style={[styles.exitOfferPrimaryText, { color: colors.primaryForeground }]}>Unlock Unlimited Analyses</Text>
+                <Feather name="arrow-right" size={19} color={colors.primaryForeground} />
               </TouchableOpacity>
             </Animated.View>
-            <Animated.View entering={FadeIn.delay(1030).duration(280)}>
+            <Animated.View entering={reduceMotion ? undefined : FadeIn.delay(800).duration(280)}>
               <TouchableOpacity
                 style={styles.exitOfferSecondary}
                 onPress={handleExitOfferLater}
                 accessibilityRole="button"
                 accessibilityLabel="Maybe Later"
               >
-                <Text style={styles.exitOfferSecondaryText}>Maybe Later</Text>
+                <Text style={[styles.exitOfferSecondaryText, { color: colors.textSecondary }]}>Maybe Later</Text>
               </TouchableOpacity>
             </Animated.View>
+            </View>
           </ScrollView>
         </View>
       </Modal>
@@ -888,7 +905,7 @@ const styles = StyleSheet.create({
   exitOfferBackdrop: {
     flex: 1,
     overflow: 'hidden',
-    backgroundColor: '#050806',
+    backgroundColor: 'transparent',
   },
   exitOfferScrim: {
     ...StyleSheet.absoluteFillObject,
@@ -901,8 +918,22 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 28,
+    paddingHorizontal: 18,
+  },
+  exitOfferCard: {
+    width: '100%',
+    maxWidth: 460,
+    alignItems: 'center',
+    paddingHorizontal: 24,
+    paddingVertical: 26,
     gap: 20,
+    borderWidth: 1,
+    borderRadius: 24,
+    shadowColor: '#000000',
+    shadowOpacity: 0.14,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 12 },
+    elevation: 12,
   },
   exitOfferGlow: {
     position: 'absolute',

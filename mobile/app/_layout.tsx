@@ -88,7 +88,14 @@ function RootLayoutNav({ fontsReady }: { fontsReady: boolean }) {
       <Stack.Screen name="strategy" options={{ headerShown: false, animation: 'slide_from_bottom' }} />
       <Stack.Screen name="daily-brief" options={{ headerShown: false, animation: 'slide_from_right' }} />
       <Stack.Screen name="economic-calendar" options={{ headerShown: false, animation: 'slide_from_right' }} />
+      <Stack.Screen name="events" options={{ headerShown: false, animation: 'slide_from_right' }} />
       <Stack.Screen name="settings" options={{ headerShown: false, animation: 'slide_from_right' }} />
+      <Stack.Screen name="auth/callback" options={{ headerShown: false, animation: 'none' }} />
+      <Stack.Screen name="support-chat" options={{ headerShown: false, animation: 'slide_from_right' }} />
+      <Stack.Screen name="community" options={{ headerShown: false, animation: 'slide_from_right' }} />
+      <Stack.Screen name="community-support" options={{ headerShown: false, animation: 'slide_from_right' }} />
+      <Stack.Screen name="community-admin" options={{ headerShown: false, animation: 'slide_from_right' }} />
+      <Stack.Screen name="profile" options={{ headerShown: false, animation: 'slide_from_right' }} />
       <Stack.Screen name="lot-size-calculator" options={{ headerShown: false, animation: 'slide_from_right' }} />
       <Stack.Screen name="risk-management" options={{ headerShown: false, animation: 'slide_from_right' }} />
       <Stack.Screen name="saved" options={{ headerShown: false, animation: 'slide_from_right' }} />

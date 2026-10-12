@@ -1,5 +1,6 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet } from 'react-native';
+import { AnimatedTouchableOpacity as TouchableOpacity } from '@/components/AnimatedTouchableOpacity';
 import { Instrument } from '@/types/instrument';
 import { useColors } from '@/hooks/useColors';
 import { Feather } from '@expo/vector-icons';

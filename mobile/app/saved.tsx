@@ -5,9 +5,10 @@ import {
   Platform,
   StyleSheet,
   Text,
-  TouchableOpacity,
   View,
 } from 'react-native';
+import { AnimatedTouchableOpacity as TouchableOpacity } from '@/components/AnimatedTouchableOpacity';
+import { AmbientBackdrop } from '@/components/AmbientBackdrop';
 import Animated, {
   FadeIn,
   FadeInDown,
@@ -45,17 +46,17 @@ function StatsHeader({ analyses }: { analyses: AnalysisResult[] }) {
         <Text style={[styles.statNum, { color: colors.text }]}>{analyses.length}</Text>
         <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Saved</Text>
       </View>
-      <View style={styles.statDiv} />
+      <View style={[styles.statDiv, { backgroundColor: colors.cardBorder }]} />
       <View style={styles.statItem}>
         <Text style={[styles.statNum, { color: colors.buy }]}>{buys}</Text>
         <Text style={[styles.statLabel, { color: colors.textSecondary }]}>BUY</Text>
       </View>
-      <View style={styles.statDiv} />
+      <View style={[styles.statDiv, { backgroundColor: colors.cardBorder }]} />
       <View style={styles.statItem}>
         <Text style={[styles.statNum, { color: colors.sell }]}>{sells}</Text>
         <Text style={[styles.statLabel, { color: colors.textSecondary }]}>SELL</Text>
       </View>
-      <View style={styles.statDiv} />
+      <View style={[styles.statDiv, { backgroundColor: colors.cardBorder }]} />
       <View style={styles.statItem}>
         <Text style={[styles.statNum, { color: colors.text }]}>{avgConf}%</Text>
         <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Avg conf.</Text>
@@ -170,14 +171,14 @@ function AnalysisCard({
 
         {/* Right content */}
         <View style={styles.cardRight}>
-          <View style={styles.confidencePill}>
+          <View style={[styles.confidencePill, { backgroundColor: colors.surface }]}>
             <Text style={[styles.confidenceText, { color }]}>{item.confidence}%</Text>
           </View>
-          <View style={styles.lotPill}>
+          <View style={[styles.lotPill, { backgroundColor: colors.surface }]}>
             <Text style={[styles.lotText, { color: colors.textSecondary }]}>{lotLabel}</Text>
           </View>
           <TouchableOpacity
-            style={styles.deleteBtn}
+            style={[styles.deleteBtn, { backgroundColor: `${colors.sell}12`, borderColor: `${colors.sell}35` }]}
             onPress={(e) => {
               e.stopPropagation();
               onDelete();
@@ -232,6 +233,7 @@ export default function SavedScreen() {
 
   return (
     <View style={[styles.container, { paddingTop: topPad, backgroundColor: colors.background }]}>
+      <AmbientBackdrop />
       <Animated.View entering={FadeIn.duration(300)} style={styles.header}>
         <TouchableOpacity style={[styles.backBtn, { backgroundColor: colors.card, borderColor: colors.cardBorder }]} onPress={() => router.back()}>
           <Feather name="arrow-left" size={22} color={colors.text} />

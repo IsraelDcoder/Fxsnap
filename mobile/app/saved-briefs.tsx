@@ -4,9 +4,10 @@ import {
   FlatList,
   StyleSheet,
   Text,
-  TouchableOpacity,
   View,
 } from 'react-native';
+import { AnimatedTouchableOpacity as TouchableOpacity } from '@/components/AnimatedTouchableOpacity';
+import { AmbientBackdrop } from '@/components/AmbientBackdrop';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 import { router } from 'expo-router';
@@ -44,6 +45,7 @@ export default function SavedBriefsScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background, paddingTop: insets.top + 12 }]}>
+      <AmbientBackdrop />
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} activeOpacity={0.8}>
           <Feather name="arrow-left" size={22} color={colors.text} />

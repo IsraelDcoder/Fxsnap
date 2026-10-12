@@ -3,6 +3,7 @@ import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 import { API_BASE_URL, getApiHeaders, getDeviceId } from './apiAuth';
+import { notifyAccountDataChanged } from './accountDataEvents';
 import type { EventSubscription, NotificationResponse } from 'expo-notifications';
 
 export type NotificationRoute = '/daily-brief' | '/analysis' | '/saved';
@@ -49,6 +50,12 @@ export type NotificationPreferences = {
   weekly: boolean;
 };
 
+export async function hasPushNotificationPermission(): Promise<boolean> {
+  if (Platform.OS === 'web') return false;
+  const permissions = await Notifications.getPermissionsAsync();
+  return permissions.granted;
+}
+
 export async function saveNotificationPreferences(preferences: {
   enabled: boolean;
   dailyBrief: boolean;
@@ -56,6 +63,7 @@ export async function saveNotificationPreferences(preferences: {
   weekly: boolean;
 }) {
   await AsyncStorage.setItem(NOTIFICATION_SETTINGS_KEY, JSON.stringify(preferences));
+  notifyAccountDataChanged();
 }
 
 export async function requestAndRegisterPushNotifications(preferences?: NotificationPreferences, requestPermission = true) {

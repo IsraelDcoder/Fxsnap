@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
-import { Alert, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Alert, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { AnimatedTouchableOpacity as TouchableOpacity } from '@/components/AnimatedTouchableOpacity';
+import { AmbientBackdrop } from '@/components/AmbientBackdrop';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 import { router } from 'expo-router';
@@ -40,6 +42,7 @@ export default function LotSizeCalculatorScreen() {
   return (
     <KeyboardAvoidingView style={[styles.screen, { backgroundColor: colors.background }]} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <View style={{ paddingTop: (Platform.OS === 'web' ? 67 : insets.top) + 8, flex: 1 }}>
+        <AmbientBackdrop />
         <View style={styles.header}>
           <TouchableOpacity onPress={() => router.back()} style={[styles.iconButton, { backgroundColor: colors.card, borderColor: colors.cardBorder }]} accessibilityLabel="Back">
             <Feather name="arrow-left" size={21} color={colors.text} />

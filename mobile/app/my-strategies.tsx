@@ -5,9 +5,10 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TouchableOpacity,
   View,
 } from 'react-native';
+import { AnimatedTouchableOpacity as TouchableOpacity } from '@/components/AnimatedTouchableOpacity';
+import { AmbientBackdrop } from '@/components/AmbientBackdrop';
 import Animated, {
   FadeIn,
   FadeInDown,
@@ -163,6 +164,7 @@ export default function MyStrategiesScreen() {
 
   return (
     <View style={[styles.container, { paddingTop: topPad, backgroundColor: colors.background }]}>
+      <AmbientBackdrop />
       <Animated.View entering={FadeIn.duration(300)} style={styles.header}>
         <TouchableOpacity style={[styles.backBtn, { backgroundColor: colors.card, borderColor: colors.cardBorder }]} onPress={() => router.back()}>
           <Feather name="arrow-left" size={22} color={colors.text} />

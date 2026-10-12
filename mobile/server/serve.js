@@ -27,7 +27,14 @@ loadEnvFile();
 
 const { z } = require('zod');
 const persistentStore = require('./persistentStore');
-const { createAuth, verifyAuth, verifyFreeAnalysisIdentity } = require('./auth');
+const { createCommunityApi } = require('./communityApi');
+const {
+  createAccountAuth,
+  createAuth,
+  decodeAccountAuth,
+  verifyAuth,
+  verifyFreeAnalysisIdentity,
+} = require('./auth');
 const marketService = require('./marketService');
 // Optional Twelve Data provider (server-side market data proxy)
 let marketProvider = null;
@@ -91,6 +98,12 @@ const StrategyResponseSchema = z.object({
   const required = ['Entry rules', 'Stop loss', 'Take profit', 'Risk management', 'When not to trade'];
   const titles = value.sections.map((section) => section.title);
   if (new Set(titles).size !== required.length || required.some((title) => !titles.includes(title))) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'AI response must contain the five required strategy sections.' });
+});
+const SupportChatInputSchema = z.object({
+  messages: z.array(z.object({
+    role: z.enum(['user', 'assistant']),
+    content: z.string().trim().min(1).max(1500),
+  })).min(1).max(12),
 });
 const ANALYSIS_STATUS = ['success', 'no_trade', 'invalid_image', 'ai_unavailable', 'ai_invalid_response'];
 const DEFAULT_CHART = {
@@ -703,6 +716,68 @@ function holdSetupForPriceValidation(result, issues) {
     entryQuality: 0,
     setupConfidence: 0,
     tradeTrigger: reason,
+    analysis: {
+      ...(result.analysis || {}),
+      notes: mergeUniqueStrings([result.analysis?.notes || '', reason]).join(' '),
+    },
+    reasons: mergeUniqueStrings([...(result.reasons || []), reason]),
+    whyNotNow: mergeUniqueStrings([...(result.whyNotNow || []), reason]),
+    dataLimitations: mergeUniqueStrings([...(result.dataLimitations || []), ...issues]),
+  };
+}
+
+function preserveUnverifiedCandidateLevels(result, issues) {
+  const chart = result?.chart || {};
+  const setup = result?.trade_setup || {};
+  const rule = chartInstrumentRule(chart.pair || result?.detectedPair);
+  const metadataOnlyIssues = issues.length > 0 && issues.every((issue) => (
+    /current price cannot be reliably read|rightmost candle could not be distinguished|timestamp is unreadable|timestamp is not a reliable/i.test(issue)
+  ));
+  if (!metadataOnlyIssues
+    || chart.is_chart !== true
+    || !['good', 'acceptable'].includes(chart.chart_quality)
+    || chart.price_scale_visible !== true
+    || chart.candles_visible !== true
+    || chart.has_enough_candles !== true
+    || !rule
+    || !['buy', 'sell'].includes(setup.type)
+    || setup.setup_status !== 'valid') return null;
+
+  const entry = parsePriceOrRange(setup.entry_zone);
+  const stop = parsePriceOrRange(setup.stop_loss);
+  const targets = parseTakeProfitLevels(setup.take_profit_levels, setup.take_profit);
+  const target = targets.map(parsePriceOrRange).find(Boolean);
+  if (!entry || !stop || !target) return null;
+
+  const prices = [entry.min, entry.max, stop.min, stop.max, target.min, target.max];
+  if (prices.some((price) => decimalPlaces(price) > rule.pricePrecision || !isTickAligned(price, rule))) return null;
+
+  const calculated = computeRRFromLevels({
+    entry: setup.entry_zone,
+    sl: setup.stop_loss,
+    tp: target.min === target.max ? String(target.min) : `${target.min}-${target.max}`,
+    direction: setup.type,
+  });
+  if (!calculated || calculated.rr == null || calculated.rr < 1.5 || calculated.issues?.length) return null;
+
+  const reason = `Candidate levels are shown for chart context only. ${issues.join(' ')} The screenshot does not verify a fresh, actionable setup.`;
+  return {
+    ...result,
+    status: 'no_trade',
+    trade_setup: {
+      ...setup,
+      risk_reward: calculated.rr,
+      take_profit: targets[0],
+      take_profit_levels: targets.filter((level) => parsePriceOrRange(level)).slice(0, 2),
+    },
+    decision: 'NO_TRADE',
+    tradeDecision: 'NONE',
+    tradeStatus: 'no_setup',
+    setupStatus: 'NO_SETUP',
+    entryReadiness: 0,
+    setupConfidence: 0,
+    tradeTrigger: reason,
+    candidateValidationStatus: 'unverified',
     analysis: {
       ...(result.analysis || {}),
       notes: mergeUniqueStrings([result.analysis?.notes || '', reason]).join(' '),
@@ -2161,7 +2236,7 @@ function sendJson(res, status, body) {
   res.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
     'access-control-allow-origin': process.env.ALLOWED_ORIGIN || '*',
-    'access-control-allow-headers': 'content-type, authorization, x-device-id, x-notification-secret',
+    'access-control-allow-headers': 'content-type, authorization, x-device-id, x-notification-secret, x-fxsnap-account-token',
     'access-control-allow-methods': 'GET, POST, DELETE, OPTIONS',
   });
   res.end(JSON.stringify(body));
@@ -2196,6 +2271,409 @@ function readJsonBody(req) {
     });
     req.on('error', reject);
   });
+}
+
+const ACCOUNT_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const ACCOUNT_SESSION_LIMIT = 20;
+
+function accountStorageKey(userId) {
+  return `fxsnap:account:user:${userId}`;
+}
+
+function accountDataStorageKey(userId) {
+  return `fxsnap:account:data:${userId}`;
+}
+
+function accountUserIdForSubject(subject) {
+  return `usr_${crypto.createHash('sha256').update(subject).digest('hex').slice(0, 32)}`;
+}
+
+function publicAccountProfile(record) {
+  return {
+    provider: record.provider,
+    email: record.email,
+    emailVerified: record.emailVerified,
+    displayName: record.displayName,
+    pictureUrl: record.pictureUrl,
+    communityUsername: record.communityUsername,
+    status: record.status,
+    createdAt: record.createdAt,
+    lastSignInAt: record.lastSignInAt,
+  };
+}
+
+function configuredGoogleClientIds() {
+  return String(process.env.FXSNAP_GOOGLE_OAUTH_CLIENT_IDS || '')
+    .split(',')
+    .map((clientId) => clientId.trim())
+    .filter(Boolean);
+}
+
+async function verifyGoogleIdToken(idToken) {
+  const clientIds = configuredGoogleClientIds();
+  if (clientIds.length === 0) {
+    return { error: 'Google sign-in is not configured on the server.', status: 503 };
+  }
+
+  const response = await fetchWithTimeout('https://oauth2.googleapis.com/tokeninfo', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ id_token: idToken }).toString(),
+  });
+  if (!response.ok) return { error: 'Google could not verify this sign-in. Please try again.', status: 401 };
+
+  const claims = await response.json();
+  const expiresAt = Number(claims.exp) * 1000;
+  const isVerified = claims.email_verified === true || claims.email_verified === 'true';
+  const isGoogleIssuer = ['accounts.google.com', 'https://accounts.google.com'].includes(claims.iss);
+  if (!isGoogleIssuer || !clientIds.includes(claims.aud)
+    || !Number.isFinite(expiresAt) || expiresAt <= Date.now()
+    || typeof claims.sub !== 'string' || claims.sub.length < 1 || claims.sub.length > 255
+    || !isVerified || typeof claims.email !== 'string' || !claims.email.includes('@')) {
+    return { error: 'Google returned an incomplete or unverified account.', status: 401 };
+  }
+
+  const pictureUrl = typeof claims.picture === 'string'
+    && claims.picture.length <= 2048
+    && claims.picture.startsWith('https://')
+    ? claims.picture
+    : null;
+  const displayName = typeof claims.name === 'string'
+    ? claims.name.trim().slice(0, 120)
+    : '';
+
+  return {
+    claims: {
+      subject: claims.sub,
+      email: claims.email.trim().slice(0, 320),
+      displayName,
+      pictureUrl,
+    },
+  };
+}
+
+async function verifySupabaseAccessToken(accessToken) {
+  const supabaseUrl = String(process.env.SUPABASE_URL || process.env.SUPABASE_PROJECT_URL || '').replace(/\/+$/, '');
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+  if (!supabaseUrl || !serviceRoleKey) {
+    return { error: 'Supabase account verification is not configured on the server.', status: 503 };
+  }
+
+  const response = await fetchWithTimeout(`${supabaseUrl}/auth/v1/user`, {
+    headers: {
+      apikey: serviceRoleKey,
+      authorization: `Bearer ${accessToken}`,
+    },
+  });
+  if (!response.ok) return { error: 'Supabase could not verify this account session. Please sign in again.', status: 401 };
+
+  const user = await response.json();
+  const googleIdentity = Array.isArray(user.identities)
+    ? user.identities.find((identity) => identity?.provider === 'google')
+    : null;
+  const identityData = googleIdentity?.identity_data || {};
+  const subject = typeof identityData.sub === 'string'
+    ? identityData.sub
+    : typeof googleIdentity?.id === 'string' ? googleIdentity.id : '';
+  const email = typeof user.email === 'string' ? user.email.trim() : '';
+  const emailVerified = Boolean(user.email_confirmed_at)
+    || identityData.email_verified === true
+    || identityData.verified_email === true;
+  if (!googleIdentity || !subject || subject.length > 255
+    || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !emailVerified
+    || typeof user.id !== 'string' || user.id.length < 1 || user.id.length > 255) {
+    return { error: 'Supabase did not return a verified Google account.', status: 401 };
+  }
+
+  const metadata = user.user_metadata || {};
+  const picture = identityData.picture || metadata.avatar_url || metadata.picture;
+  const displayName = identityData.full_name || identityData.name || metadata.full_name || metadata.name;
+  return {
+    claims: {
+      subject,
+      supabaseUserId: user.id,
+      email: email.slice(0, 320),
+      emailVerified: true,
+      displayName: typeof displayName === 'string' ? displayName.trim().slice(0, 120) : '',
+      pictureUrl: typeof picture === 'string' && picture.length <= 2048 && picture.startsWith('https://')
+        ? picture
+        : null,
+    },
+  };
+}
+
+function accountSessionFromRequest(req, res, deviceId) {
+  const token = String(req.headers['x-fxsnap-account-token'] || '');
+  const session = decodeAccountAuth(AUTH_SECRET, token);
+  if (!session || session.deviceSub !== deviceId) {
+    sendJson(res, 401, { error: 'A valid signed-in FXSnap account session is required.' });
+    return null;
+  }
+  return session;
+}
+
+async function getCommunityActor(req, res) {
+  const deviceId = requireAuth(req, res);
+  if (!deviceId) return null;
+  const session = accountSessionFromRequest(req, res, deviceId);
+  if (!session) return null;
+  if (!persistentStore.supabaseEnabled) {
+    sendJson(res, 503, { error: 'Community requires configured Supabase durable storage.' });
+    return null;
+  }
+  const account = await persistentStore.getJson(accountStorageKey(session.sub));
+  if (!account || account.status !== 'active'
+    || !account.linkedDeviceIds?.includes(deviceId)
+    || !account.sessionIds?.includes(session.sid)) {
+    sendJson(res, 401, { error: 'Your FXSnap account session has expired. Sign in again.' });
+    return null;
+  }
+  return {
+    accountId: session.sub,
+    supabaseUserId: account.supabaseUserId || null,
+  };
+}
+
+async function saveCommunityUsername(accountId, username) {
+  const key = accountStorageKey(accountId);
+  const account = await persistentStore.getJson(key);
+  if (!account || account.status !== 'active') {
+    throw new Error('The linked FXSnap account could not be updated.');
+  }
+  await persistentStore.setJson(key, { ...account, communityUsername: username });
+}
+
+async function createAccountSession(deviceId, claims) {
+  const now = new Date().toISOString();
+  const userId = accountUserIdForSubject(claims.subject);
+  const key = accountStorageKey(userId);
+  const previous = await persistentStore.getJson(key);
+  if (previous && (previous.provider !== 'google' || previous.providerSubject !== claims.subject
+    || (previous.supabaseUserId && claims.supabaseUserId && previous.supabaseUserId !== claims.supabaseUserId))) {
+    return { error: 'This Google account cannot be linked to the existing FXSnap account.', status: 409 };
+  }
+
+  const sessionId = crypto.randomUUID();
+  const linkedDeviceIds = Array.isArray(previous?.linkedDeviceIds) ? previous.linkedDeviceIds : [];
+  const sessionIds = Array.isArray(previous?.sessionIds) ? previous.sessionIds : [];
+  const record = {
+    userId,
+    provider: 'google',
+    providerSubject: claims.subject,
+    supabaseUserId: claims.supabaseUserId || previous?.supabaseUserId || null,
+    email: claims.email,
+    emailVerified: claims.emailVerified !== false,
+    displayName: claims.displayName || previous?.displayName || '',
+    pictureUrl: claims.pictureUrl || previous?.pictureUrl || null,
+    linkedDeviceIds: Array.from(new Set([...linkedDeviceIds, deviceId])).slice(-ACCOUNT_SESSION_LIMIT),
+    communityUsername: previous?.communityUsername || '',
+    createdAt: previous?.createdAt || now,
+    lastSignInAt: now,
+    status: 'active',
+    role: 'user',
+    sessionIds: [...sessionIds.filter((id) => id !== sessionId), sessionId].slice(-ACCOUNT_SESSION_LIMIT),
+  };
+  await persistentStore.setJson(key, record);
+  const accountToken = createAccountAuth(AUTH_SECRET, userId, deviceId, sessionId, ACCOUNT_TOKEN_TTL_MS);
+  return {
+    account: publicAccountProfile(record),
+    accountToken,
+    expiresIn: ACCOUNT_TOKEN_TTL_MS / 1000,
+  };
+}
+
+async function handleGoogleAccountSignIn(req, res) {
+  const deviceId = requireAuth(req, res);
+  if (!deviceId) return;
+  if (!persistentStore.enabled) {
+    return sendJson(res, 503, { error: 'Google accounts require durable server storage. No account was created.' });
+  }
+
+  const input = z.object({ idToken: z.string().trim().min(20).max(12_000) }).safeParse(await readJsonBody(req));
+  if (!input.success) return sendJson(res, 400, { error: 'A valid Google sign-in credential is required.' });
+
+  let verification;
+  try {
+    verification = await verifyGoogleIdToken(input.data.idToken);
+  } catch (error) {
+    console.error('[Account] Google token verification failed.', {
+      error: error?.name === 'AbortError' ? 'Google verification timed out.' : 'Google verification request failed.',
+    });
+    return sendJson(res, error?.name === 'AbortError' ? 504 : 502, {
+      error: error?.name === 'AbortError'
+        ? 'Google sign-in verification timed out. Please try again.'
+        : 'Google sign-in verification is temporarily unavailable.',
+    });
+  }
+  if (verification.error) return sendJson(res, verification.status, { error: verification.error });
+  const session = await createAccountSession(deviceId, {
+    ...verification.claims,
+    emailVerified: true,
+  });
+  if (session.error) return sendJson(res, session.status, { error: session.error });
+  return sendJson(res, 200, session);
+}
+
+async function handleSupabaseAccountSignIn(req, res) {
+  const deviceId = requireAuth(req, res);
+  if (!deviceId) return;
+  if (!persistentStore.enabled) {
+    return sendJson(res, 503, { error: 'Google accounts require durable server storage. No account was created.' });
+  }
+
+  const input = z.object({ accessToken: z.string().trim().min(20).max(20_000) }).safeParse(await readJsonBody(req));
+  if (!input.success) return sendJson(res, 400, { error: 'A valid Supabase account session is required.' });
+
+  let verification;
+  try {
+    verification = await verifySupabaseAccessToken(input.data.accessToken);
+  } catch (error) {
+    console.error('[Account] Supabase account verification failed.', {
+      error: error?.name === 'AbortError' ? 'Supabase verification timed out.' : 'Supabase verification request failed.',
+    });
+    return sendJson(res, error?.name === 'AbortError' ? 504 : 502, {
+      error: error?.name === 'AbortError'
+        ? 'Supabase account verification timed out. Please try again.'
+        : 'Supabase account verification is temporarily unavailable.',
+    });
+  }
+  if (verification.error) return sendJson(res, verification.status, { error: verification.error });
+  const session = await createAccountSession(deviceId, verification.claims);
+  if (session.error) return sendJson(res, session.status, { error: session.error });
+  return sendJson(res, 200, session);
+}
+
+async function handleAccountProfile(req, res) {
+  const deviceId = requireAuth(req, res);
+  if (!deviceId) return;
+  const session = accountSessionFromRequest(req, res, deviceId);
+  if (!session) return;
+  if (!persistentStore.enabled) return sendJson(res, 503, { error: 'Account storage is unavailable.' });
+
+  const record = await persistentStore.getJson(accountStorageKey(session.sub));
+  if (!record || record.status !== 'active'
+    || !record.linkedDeviceIds?.includes(deviceId)
+    || !record.sessionIds?.includes(session.sid)) {
+    return sendJson(res, 401, { error: 'Your FXSnap account session has expired. Sign in again.' });
+  }
+  return sendJson(res, 200, { account: publicAccountProfile(record) });
+}
+
+async function handleAccountData(req, res) {
+  const deviceId = requireAuth(req, res);
+  if (!deviceId) return;
+  const session = accountSessionFromRequest(req, res, deviceId);
+  if (!session) return;
+  if (!persistentStore.enabled) return sendJson(res, 503, { error: 'Account storage is unavailable.' });
+
+  const account = await persistentStore.getJson(accountStorageKey(session.sub));
+  if (!account || account.status !== 'active'
+    || !account.linkedDeviceIds?.includes(deviceId)
+    || !account.sessionIds?.includes(session.sid)) {
+    return sendJson(res, 401, { error: 'Your FXSnap account session has expired. Sign in again.' });
+  }
+
+  const key = accountDataStorageKey(session.sub);
+  if (req.method === 'GET') {
+    const data = await persistentStore.getJson(key);
+    return sendJson(res, 200, { data });
+  }
+
+  const input = z.object({
+    data: z.record(z.string(), z.unknown()),
+  }).safeParse(await readJsonBody(req));
+  if (!input.success || input.data.data.backupVersion !== 1) {
+    return sendJson(res, 400, { error: 'A valid FXSnap data backup is required.' });
+  }
+  if (Buffer.byteLength(JSON.stringify(input.data.data), 'utf8') > 5_000_000) {
+    return sendJson(res, 413, { error: 'This FXSnap backup is too large to sync.' });
+  }
+
+  const saved = {
+    version: 1,
+    updatedAt: new Date().toISOString(),
+    data: input.data.data,
+  };
+  await persistentStore.setJson(key, saved);
+  return sendJson(res, 200, { updatedAt: saved.updatedAt });
+}
+
+async function handleAccountSignOut(req, res) {
+  const deviceId = requireAuth(req, res);
+  if (!deviceId) return;
+  const session = accountSessionFromRequest(req, res, deviceId);
+  if (!session) return;
+  if (!persistentStore.enabled) return sendJson(res, 503, { error: 'Account storage is unavailable; sign-out could not be confirmed.' });
+
+  const key = accountStorageKey(session.sub);
+  const record = await persistentStore.getJson(key);
+  if (!record || !record.sessionIds?.includes(session.sid)) {
+    return sendJson(res, 401, { error: 'Your FXSnap account session has expired. Sign in again.' });
+  }
+  record.sessionIds = record.sessionIds.filter((id) => id !== session.sid);
+  await persistentStore.setJson(key, record);
+  return sendJson(res, 200, { signedOut: true });
+}
+
+async function handleAccountDeletion(req, res) {
+  const deviceId = requireAuth(req, res);
+  if (!deviceId) return;
+  const session = accountSessionFromRequest(req, res, deviceId);
+  if (!session) return;
+  if (!persistentStore.enabled) return sendJson(res, 503, { error: 'Account storage is unavailable; account was not deleted.' });
+
+  const key = accountStorageKey(session.sub);
+  const record = await persistentStore.getJson(key);
+  if (!record || !record.linkedDeviceIds?.includes(deviceId)
+    || !record.sessionIds?.includes(session.sid)) {
+    return sendJson(res, 401, { error: 'Your FXSnap account session has expired. Sign in again.' });
+  }
+  if (record.supabaseUserId && process.env.FXSNAP_COMMUNITY_ENABLED === 'true') {
+    const supabaseUrl = String(process.env.SUPABASE_URL || process.env.SUPABASE_PROJECT_URL || '').replace(/\/+$/, '');
+    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+    if (!supabaseUrl || !serviceRoleKey) {
+      return sendJson(res, 503, { error: 'Community account cleanup is not configured; your account was not deleted.' });
+    }
+    const communityDeleteResponse = await fetchWithTimeout(
+      `${supabaseUrl}/rest/v1/rpc/fxsnap_community_delete_member`,
+      {
+        method: 'POST',
+        headers: {
+          apikey: serviceRoleKey,
+          authorization: `Bearer ${serviceRoleKey}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ p_account_id: session.sub }),
+      },
+    );
+    if (!communityDeleteResponse.ok) {
+      console.error('[Account] Community data cleanup failed.', { status: communityDeleteResponse.status });
+      return sendJson(res, 503, { error: 'Community privacy cleanup could not be confirmed; your account was not deleted.' });
+    }
+  }
+  if (record.supabaseUserId) {
+    const supabaseUrl = String(process.env.SUPABASE_URL || process.env.SUPABASE_PROJECT_URL || '').replace(/\/+$/, '');
+    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+    if (!supabaseUrl || !serviceRoleKey) {
+      return sendJson(res, 503, { error: 'Supabase account deletion is not configured; your account was not deleted.' });
+    }
+    const deleteResponse = await fetchWithTimeout(
+      `${supabaseUrl}/auth/v1/admin/users/${encodeURIComponent(record.supabaseUserId)}`,
+      {
+        method: 'DELETE',
+        headers: {
+          apikey: serviceRoleKey,
+          authorization: `Bearer ${serviceRoleKey}`,
+        },
+      },
+    );
+    if (!deleteResponse.ok && deleteResponse.status !== 404) {
+      return sendJson(res, 502, { error: 'Supabase could not delete this account; your FXSnap data was not deleted.' });
+    }
+  }
+  await persistentStore.deleteKey(accountDataStorageKey(session.sub));
+  await persistentStore.deleteKey(key);
+  return sendJson(res, 200, { deleted: true });
 }
 
 async function generateStrategy(req, res) {
@@ -2251,6 +2729,56 @@ async function generateStrategy(req, res) {
   } catch (error) {
     console.error('[Strategy AI]', error);
     return sendJson(res, 502, { error: error.message || 'Unable to generate strategy.' });
+  }
+}
+
+async function generateSupportChatReply(req, res) {
+  const deviceId = requireAuth(req, res);
+  if (!deviceId) return;
+  if (!(await allowRequest(req, deviceId))) return sendJson(res, 429, { error: 'Too many requests. Please wait a moment and try again.' });
+  if (!process.env.OPENROUTER_API_KEY || process.env.OPENROUTER_API_KEY.startsWith('replace_')) {
+    return sendJson(res, 503, { error: 'Customer care AI is not configured right now. Please contact support@fxsnap.app.' });
+  }
+
+  try {
+    const inputResult = SupportChatInputSchema.safeParse(await readJsonBody(req));
+    if (!inputResult.success) return sendJson(res, 400, { error: 'Enter a message to continue.' });
+    const baseUrl = (process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/$/, '');
+    const response = await fetchWithTimeout(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+        'HTTP-Referer': process.env.OPENROUTER_SITE_URL || 'https://fxsnap.vercel.app',
+        'X-Title': process.env.OPENROUTER_APP_NAME || 'FXSnap',
+      },
+      body: JSON.stringify({
+        model: process.env.OPENROUTER_MODEL || 'openai/gpt-4o-mini',
+        temperature: 0.4,
+        max_tokens: 600,
+        messages: [
+          {
+            role: 'system',
+            content: 'You are FXSnap Customer Care, a friendly AI support assistant inside the FXSnap trading app. Help users understand app features, navigation, subscriptions, sign-in, and common troubleshooting. Keep replies concise, empathetic, and practical. Never claim to have checked or changed a user account, payment, subscription, or analysis. Do not give personalized financial advice or promise trading outcomes. If the request needs account access, billing action, or a human decision, explain that you cannot perform it and direct the user to support@fxsnap.app. Make clear when information may be uncertain.',
+          },
+          ...inputResult.data.messages,
+        ],
+      }),
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      console.error('[Support Chat] Provider request failed:', response.status);
+      return sendJson(res, 502, { error: 'Customer care AI is temporarily unavailable. Please try again.' });
+    }
+    const content = payload.choices?.[0]?.message?.content;
+    if (typeof content !== 'string' || !content.trim()) {
+      console.error('[Support Chat] Provider returned an empty reply.');
+      return sendJson(res, 502, { error: 'Customer care AI could not prepare a reply. Please try again.' });
+    }
+    return sendJson(res, 200, { reply: content.trim().slice(0, 3000) });
+  } catch (error) {
+    console.error('[Support Chat] Request failed:', error?.name || 'Unknown error');
+    return sendJson(res, 502, { error: 'Customer care AI is temporarily unavailable. Please try again.' });
   }
 }
 
@@ -2555,6 +3083,8 @@ async function retryPriceConsistencyOnce(result, pairHint, retryMessages, isMult
   }
 
   if (!retried) {
+    const candidate = preserveUnverifiedCandidateLevels(result, firstIssues);
+    if (candidate) return candidate;
     return holdSetupForPriceValidation(result, [
       ...firstIssues,
       'The one allowed reanalysis did not return a verifiable replacement setup.',
@@ -2566,6 +3096,15 @@ async function retryPriceConsistencyOnce(result, pairHint, retryMessages, isMult
         ...firstIssues,
         'The one allowed reanalysis did not establish a fresh, complete setup.',
       ]);
+    }
+    const retryExplanation = [
+      ...(retried.reasons || []),
+      ...(retried.dataLimitations || []),
+      retried.analysis?.notes || '',
+    ].join(' ');
+    if (!/invalidat|missed|crossed|already reached|too far/i.test(retryExplanation)) {
+      const candidate = preserveUnverifiedCandidateLevels(result, firstIssues);
+      if (candidate) return candidate;
     }
     const explanation = `No trade: the initial candidate failed latest-price validation. ${firstIssues.join(' ')}`;
     const noSetup = addPriceDataLimitations(retried, pairHint);
@@ -2584,6 +3123,8 @@ async function retryPriceConsistencyOnce(result, pairHint, retryMessages, isMult
       priceConsistencyRetry: 'passed',
     };
   }
+  const candidate = preserveUnverifiedCandidateLevels(retried, retryIssues);
+  if (candidate) return candidate;
   return holdSetupForPriceValidation(retried, retryIssues);
 }
 
@@ -3227,6 +3768,12 @@ const termsTemplate = fs.existsSync(TERMS_TEMPLATE_PATH) ? fs.readFileSync(TERMS
 const appName = getAppName();
 
 function createRequestHandler() {
+  const handleCommunityRequest = createCommunityApi({
+    getActor: getCommunityActor,
+    sendJson,
+    readJsonBody,
+    saveCommunityUsername,
+  });
   return (req, res) => {
     const url = new URL(req.url || '/', `http://${req.headers.host}`);
     let pathname = url.pathname;
@@ -3241,6 +3788,46 @@ function createRequestHandler() {
         if (!/^[a-zA-Z0-9_-]{16,128}$/.test(freeAnalysisId)) return sendJson(res, 400, { error: 'Invalid free-analysis device identity.' });
         return sendJson(res, 200, { token: createAuth(AUTH_SECRET, deviceId, undefined, freeAnalysisId), expiresIn: 30 * 24 * 60 * 60 });
       }).catch((error) => sendJson(res, 400, { error: error.message }));
+    }
+    if (pathname === '/api/account/google' && req.method === 'POST') {
+      return handleGoogleAccountSignIn(req, res).catch((error) => {
+        console.error('[Account] Google sign-in failed.', error?.name || 'Unknown error');
+        return sendJson(res, 500, { error: 'Unable to complete Google sign-in. Please try again.' });
+      });
+    }
+    if (pathname === '/api/account/supabase' && req.method === 'POST') {
+      return handleSupabaseAccountSignIn(req, res).catch((error) => {
+        console.error('[Account] Supabase sign-in failed.', error?.name || 'Unknown error');
+        return sendJson(res, 500, { error: 'Unable to complete Supabase sign-in. Please try again.' });
+      });
+    }
+    if (pathname === '/api/account/data' && (req.method === 'GET' || req.method === 'POST')) {
+      return handleAccountData(req, res).catch((error) => {
+        console.error('[Account] Data sync failed.', error?.name || 'Unknown error');
+        return sendJson(res, 500, { error: 'Unable to sync your FXSnap data.' });
+      });
+    }
+    if (pathname === '/api/account' && req.method === 'GET') {
+      return handleAccountProfile(req, res).catch((error) => {
+        console.error('[Account] Profile lookup failed.', error?.name || 'Unknown error');
+        return sendJson(res, 500, { error: 'Unable to load your FXSnap account.' });
+      });
+    }
+    if (pathname === '/api/account/session' && req.method === 'DELETE') {
+      return handleAccountSignOut(req, res).catch((error) => {
+        console.error('[Account] Sign-out failed.', error?.name || 'Unknown error');
+        return sendJson(res, 500, { error: 'Unable to securely sign out. Please try again.' });
+      });
+    }
+    if (pathname === '/api/account' && req.method === 'DELETE') {
+      return handleAccountDeletion(req, res).catch((error) => {
+        console.error('[Account] Account deletion failed.', error?.name || 'Unknown error');
+        return sendJson(res, 500, { error: 'Unable to delete your FXSnap account.' });
+      });
+    }
+
+    if (pathname.startsWith('/api/community/') || pathname.startsWith('/api/admin/community/')) {
+      return handleCommunityRequest(req, res, url);
     }
 
     if (pathname === '/api/push-token' && (req.method === 'POST' || req.method === 'DELETE')) {
@@ -3275,6 +3862,7 @@ function createRequestHandler() {
     }
 
     if (pathname === '/api/strategy' && req.method === 'POST') return generateStrategy(req, res);
+    if (pathname === '/api/support-chat' && req.method === 'POST') return generateSupportChatReply(req, res);
     // Market endpoints (demo/skeleton)
     if (pathname === '/market/quotes' && req.method === 'GET') {
       const symbolsParam = url.searchParams.get('symbols') || '';
@@ -3479,6 +4067,7 @@ module.exports.shouldRequestCandidateLevelFollowup = shouldRequestCandidateLevel
 module.exports.buildCandidateLevelFollowupMessages = buildCandidateLevelFollowupMessages;
 module.exports.buildPriceConsistencyRetryMessages = buildPriceConsistencyRetryMessages;
 module.exports.buildMultiTimeframePriceRetryMessages = buildMultiTimeframePriceRetryMessages;
+module.exports.retryPriceConsistencyOnce = retryPriceConsistencyOnce;
 module.exports.applyCandidateLevelFollowup = applyCandidateLevelFollowup;
 module.exports.recoverCandidateLevels = recoverCandidateLevels;
 module.exports.CandidateLevelFollowupSchema = CandidateLevelFollowupSchema;

@@ -258,6 +258,72 @@ test('failed latest-price validation strips candidate levels and returns an expl
   assert.match(held.reasons.join(' '), /entry is stale/i);
 });
 
+test('failed reanalysis preserves structurally valid chart levels as unverified candidates when screenshot metadata is missing', async () => {
+  const missingScreenshotMetadata = {
+    ...consistentPriceSetup,
+    chart: {
+      ...consistentPriceSetup.chart,
+      latest_visible_price: null,
+      current_price_source: 'unreadable',
+      current_candle_status: 'unknown',
+      latest_candle_timestamp: null,
+    },
+  };
+  const previousFetch = global.fetch;
+  const previousApiKey = process.env.OPENROUTER_API_KEY;
+  process.env.OPENROUTER_API_KEY = 'test-key';
+  global.fetch = async () => ({
+    ok: true,
+    status: 200,
+    text: async () => JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: 'not valid analysis' } }] }),
+  });
+  try {
+    const result = await retryPriceConsistencyOnce(missingScreenshotMetadata, 'EURUSD', () => []);
+
+    assert.equal(result.status, 'no_trade');
+    assert.equal(result.candidateValidationStatus, 'unverified');
+    assert.equal(result.trade_setup.entry_zone, '1.10000');
+    assert.equal(result.trade_setup.stop_loss, '1.09900');
+    assert.equal(result.trade_setup.take_profit, '1.10200');
+    assert.ok(Math.abs(result.trade_setup.risk_reward - 2) < 1e-8);
+    assert.equal(result.tradeDecision, 'NONE');
+    assert.match(result.tradeTrigger, /chart context only/i);
+    assert.match(result.dataLimitations.join(' '), /timestamp is unreadable/i);
+  } finally {
+    global.fetch = previousFetch;
+    if (previousApiKey == null) delete process.env.OPENROUTER_API_KEY;
+    else process.env.OPENROUTER_API_KEY = previousApiKey;
+  }
+});
+
+test('failed reanalysis still removes a candidate after visible price invalidates it', async () => {
+  const invalidated = {
+    ...consistentPriceSetup,
+    chart: { ...consistentPriceSetup.chart, latest_visible_price: '1.09800' },
+  };
+  const previousFetch = global.fetch;
+  const previousApiKey = process.env.OPENROUTER_API_KEY;
+  process.env.OPENROUTER_API_KEY = 'test-key';
+  global.fetch = async () => ({
+    ok: true,
+    status: 200,
+    text: async () => JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: 'not valid analysis' } }] }),
+  });
+  try {
+    const result = await retryPriceConsistencyOnce(invalidated, 'EURUSD', () => []);
+
+    assert.equal(result.status, 'no_trade');
+    assert.equal(result.trade_setup.type, 'none');
+    assert.equal(result.trade_setup.entry_zone, 'none');
+    assert.equal(result.tradeDecision, 'NONE');
+    assert.match(result.reasons.join(' '), /crossed the setup stop/i);
+  } finally {
+    global.fetch = previousFetch;
+    if (previousApiKey == null) delete process.env.OPENROUTER_API_KEY;
+    else process.env.OPENROUTER_API_KEY = previousApiKey;
+  }
+});
+
 test('price-consistency retry prompt forces a fresh review of the same image', () => {
   const messages = buildPriceConsistencyRetryMessages(
     'image-data',

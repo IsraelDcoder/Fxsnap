@@ -1,682 +1,845 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
-  KeyboardAvoidingView,
   Linking,
   Platform,
   ScrollView,
   StyleSheet,
   Switch,
   Text,
-  TextInput,
-  TouchableOpacity,
   View,
 } from 'react-native';
-import Animated, {
-  FadeIn,
-  FadeInDown,
-} from 'react-native-reanimated';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { AnimatedTouchableOpacity as TouchableOpacity } from '@/components/AnimatedTouchableOpacity';
 import { Feather } from '@expo/vector-icons';
-import { router } from 'expo-router';
-import * as Haptics from '@/services/haptics';
-import * as Clipboard from 'expo-clipboard';
+import { router, useFocusEffect } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useApp } from '@/context/AppContext';
 import { useColors } from '@/hooks/useColors';
-import { RatingPromptModal } from '@/components/RatingPromptModal';
+import { getSubscriptionDetails, type SubscriptionDetails } from '@/services/billing';
+import { API_BASE_URL } from '@/services/apiAuth';
 import {
-  getNotificationPreferences,
+  deleteFxsnapAccount,
+  getAuthenticatedAccount,
+  signInWithGoogle,
+  signOutOfFxsnapAccount,
+  type FxsnapAccount,
+} from '@/services/account';
+import {
   clearNotificationPreferences,
+  getNotificationPreferences,
+  hasPushNotificationPermission,
   requestAndRegisterPushNotifications,
   saveNotificationPreferences,
   unregisterPushToken,
   type NotificationPreferences,
 } from '@/services/notifications';
-import { getNotificationEnableErrorMessage } from '@/services/notificationErrors';
+
+type ThemeMode = 'light' | 'dark' | 'system';
+type SettingsIcon = React.ComponentProps<typeof Feather>['name'];
+
+function subscriptionPlanName(productIdentifier?: string | null) {
+  if (!productIdentifier) return 'FXSnap Premium';
+  const id = productIdentifier.toLowerCase();
+  if (id.includes('week')) return 'FXSnap Premium · Weekly';
+  if (id.includes('quarter') || id.includes('3month') || id.includes('three')) return 'FXSnap Premium · 3 months';
+  if (id.includes('month')) return 'FXSnap Premium · Monthly';
+  return 'FXSnap Premium';
+}
+
+function formatSubscriptionDate(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? 'date unavailable'
+    : new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', year: 'numeric' }).format(date);
+}
 
 export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
   const colors = useColors();
-  const { settings, updateSettings, isSubscribed, exportData, importData, deleteAccount } = useApp();
-
-  const privacyPolicyUrl = process.env.EXPO_PUBLIC_PRIVACY_POLICY_URL || 'https://fxsnap.app/privacy';
-  const termsUrl = process.env.EXPO_PUBLIC_TERMS_URL || 'https://fxsnap.app/terms';
-  const supportEmail = process.env.EXPO_PUBLIC_SUPPORT_EMAIL || 'support@fxsnap.app';
-  const subscriptionManagerUrl = process.env.EXPO_PUBLIC_SUBSCRIPTION_URL || 'https://play.google.com/store/account/subscriptions';
-
-  const openUrl = async (url: string, fallbackMessage: string) => {
-    try {
-      await Linking.openURL(url);
-    } catch {
-      Alert.alert('Unable to open link', fallbackMessage);
-    }
-  };
-
-  const openPrivacyPolicy = async () => openUrl(privacyPolicyUrl, 'Please visit the privacy page in your browser.');
-  const openTerms = async () => openUrl(termsUrl, 'Please visit the terms page in your browser.');
-  const openSupportEmail = async () => openUrl(`mailto:${supportEmail}`, 'Please copy the support email address to contact us.');
-  const openSubscriptionManager = async () => openUrl(subscriptionManagerUrl, 'Please use Google Play to manage your subscription.');
-
-  const confirmDeleteAccount = () => {
-    Alert.alert(
-      'Delete account?',
-      'This will remove all local data, saved analyses, strategies, and settings. This cannot be undone.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            await unregisterPushToken().catch(() => undefined);
-            await clearNotificationPreferences();
-            await deleteAccount();
-            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-            Alert.alert('Account deleted', 'Your local FXSnap data has been removed.');
-            router.replace('/onboarding');
-          },
-        },
-      ]
-    );
-  };
-
-  const topPad = Platform.OS === 'web' ? 67 : insets.top;
-  const botPad = Platform.OS === 'web' ? 34 : insets.bottom;
-
-  const [displayNameInput, setDisplayNameInput] = useState(settings.displayName);
-  const [ratingPromptVisible, setRatingPromptVisible] = useState(false);
+  const {
+    settings,
+    updateSettings,
+    isSubscribed,
+    billingAvailable,
+    restorePurchases,
+    deleteAccount,
+    syncAccountData,
+    stopAccountDataSync,
+    accountSyncStatus,
+  } = useApp();
+  const [account, setAccount] = useState<FxsnapAccount | null>(null);
+  const [accountLoading, setAccountLoading] = useState(Platform.OS !== 'web');
+  const [accountBusy, setAccountBusy] = useState(false);
+  const [accountError, setAccountError] = useState<string | null>(null);
+  const [subscriptionDetails, setSubscriptionDetails] = useState<SubscriptionDetails | null>(null);
+  const [subscriptionLoading, setSubscriptionLoading] = useState(true);
+  const [subscriptionError, setSubscriptionError] = useState<string | null>(null);
+  const [billingBusy, setBillingBusy] = useState(false);
   const [notificationPreferences, setNotificationPreferences] = useState<NotificationPreferences>({
     enabled: false,
     dailyBrief: true,
     inactivity: true,
     weekly: true,
   });
+  const [notificationsLoading, setNotificationsLoading] = useState(true);
+  const [notificationsBusy, setNotificationsBusy] = useState(false);
+  const [notificationMessage, setNotificationMessage] = useState('');
+  const [notificationError, setNotificationError] = useState('');
+
+  const themeMode: ThemeMode = settings.themeMode || (settings.darkMode ? 'dark' : 'light');
 
   useEffect(() => {
-    void getNotificationPreferences().then(setNotificationPreferences);
+    let active = true;
+    void getNotificationPreferences()
+      .then(async (preferences) => {
+        if (!active) return;
+        if (preferences.enabled && Platform.OS !== 'web' && !(await hasPushNotificationPermission())) {
+          const disabledPreferences = { ...preferences, enabled: false };
+          await saveNotificationPreferences(disabledPreferences);
+          if (active) {
+            setNotificationPreferences(disabledPreferences);
+            setNotificationMessage('Push notifications were turned off because device permission is disabled.');
+          }
+          try {
+            await unregisterPushToken();
+          } catch (error) {
+            console.error('[Settings] Unable to unregister push token after permission was revoked.', error);
+            if (active) {
+              setNotificationError('Device permission is off, but the saved push registration could not be removed. Retry after reconnecting.');
+            }
+          }
+          return;
+        }
+        if (active) setNotificationPreferences(preferences);
+      })
+      .catch((error: unknown) => {
+        if (active) setNotificationError(error instanceof Error ? error.message : 'Unable to load notification preferences.');
+      })
+      .finally(() => {
+        if (active) setNotificationsLoading(false);
+      });
+    return () => { active = false; };
   }, []);
 
-  const updateNotificationPreferences = async (next: NotificationPreferences) => {
-    const previous = notificationPreferences;
-    setNotificationPreferences(next);
-    await saveNotificationPreferences(next);
-    if (!next.enabled) {
-      try {
-        await unregisterPushToken();
-      } catch {
-        Alert.alert('Notifications not fully disabled', 'FXSnap could not update your notification settings on the server.');
-      }
+  useFocusEffect(useCallback(() => {
+    let active = true;
+    setSubscriptionLoading(true);
+    setSubscriptionError(null);
+    void getSubscriptionDetails()
+      .then((details) => {
+        if (active) setSubscriptionDetails(details);
+      })
+      .catch((error: unknown) => {
+        if (active) setSubscriptionError(error instanceof Error ? error.message : 'Unable to load subscription details.');
+      })
+      .finally(() => {
+        if (active) setSubscriptionLoading(false);
+      });
+    return () => { active = false; };
+  }, []));
+
+  useFocusEffect(useCallback(() => {
+    if (Platform.OS === 'web') return;
+    let active = true;
+    setAccountLoading(true);
+    void getAuthenticatedAccount()
+      .then((profile) => {
+        if (active) setAccount(profile);
+      })
+      .catch((error: unknown) => {
+        if (active) setAccountError(error instanceof Error ? error.message : 'Unable to load your FXSnap account.');
+      })
+      .finally(() => {
+        if (active) setAccountLoading(false);
+      });
+    return () => { active = false; };
+  }, []));
+
+  const continueWithGoogle = async () => {
+    if (Platform.OS === 'web') {
+      setAccountError('Google sign-in can only be tested in an installed FXSnap iOS or Android build. The web preview cannot handle the mobile OAuth callback.');
       return;
     }
+    setAccountBusy(true);
+    setAccountError(null);
     try {
-      const result = await requestAndRegisterPushNotifications(next);
-      if (!result.granted) {
-        const disabled = { ...next, enabled: false };
-        setNotificationPreferences(disabled);
-        await saveNotificationPreferences(disabled);
-        Alert.alert('Permission required', 'Allow notifications for FXSnap in your device settings to receive updates.');
+      const profile = await signInWithGoogle();
+      if (profile) {
+        setAccount(profile);
+        try {
+          await syncAccountData();
+        } catch {
+          setAccountError('You are signed in, but your app data could not sync. Check your connection and try again.');
+        }
       }
     } catch (error) {
-      setNotificationPreferences(previous);
-      await saveNotificationPreferences(previous);
-      Alert.alert('Unable to enable notifications', getNotificationEnableErrorMessage(error));
+      setAccountError(error instanceof Error ? error.message : 'Google sign-in failed. Please try again.');
+    } finally {
+      setAccountBusy(false);
     }
   };
 
-  const saveDisplayName = () => {
-    updateSettings({ displayName: displayNameInput.trim().slice(0, 40) });
+  const confirmSignOut = () => {
+    Alert.alert(
+      'Sign out of FXSnap?',
+      'This signs you out of your FXSnap account on this device. It does not cancel your subscription or change your device identity.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Sign out',
+          onPress: async () => {
+            setAccountBusy(true);
+            setAccountError(null);
+            try {
+              await signOutOfFxsnapAccount();
+              stopAccountDataSync();
+              setAccount(null);
+            } catch (error) {
+              setAccountError(error instanceof Error ? error.message : 'Unable to securely sign out.');
+            } finally {
+              setAccountBusy(false);
+            }
+          },
+        },
+      ],
+    );
   };
 
-  const exportBackup = async () => {
+  const confirmDeleteAccount = () => {
+    Alert.alert(
+      'Delete account?',
+      'This permanently removes your FXSnap account and this device’s saved FXSnap data. It does not cancel an App Store or Google Play subscription. This cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete account',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              if (notificationPreferences.enabled && Platform.OS !== 'web') {
+                await unregisterPushToken();
+              }
+              if (account) await deleteFxsnapAccount();
+              await clearNotificationPreferences();
+              await deleteAccount();
+              router.replace('/onboarding');
+            } catch (error) {
+              Alert.alert('Unable to delete account', error instanceof Error ? error.message : 'Please try again.');
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  const setAppearance = (mode: ThemeMode) => {
+    void updateSettings({
+      themeMode: mode,
+      darkMode: mode === 'dark',
+    });
+  };
+
+  const openHelpAndSupport = () => router.push('/support-chat');
+
+  const openSubscriptionOptions = async () => {
+    if (!isSubscribed && subscriptionDetails?.status !== 'active') {
+      router.push('/paywall');
+      return;
+    }
+    if (Platform.OS === 'web') {
+      Alert.alert('Manage subscription', 'Subscription management is available in the app store where you purchased FXSnap Premium.');
+      return;
+    }
+    const subscriptionManagerUrl = subscriptionDetails?.managementUrl
+      || process.env.EXPO_PUBLIC_SUBSCRIPTION_URL
+      || (Platform.OS === 'ios'
+        ? 'https://apps.apple.com/account/subscriptions'
+        : 'https://play.google.com/store/account/subscriptions');
     try {
-      const backupJson = await exportData();
-      await Clipboard.setStringAsync(backupJson);
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      Alert.alert(
-        'Backup copied',
-        'Your FXSnap backup JSON is now on the clipboard. Paste it somewhere safe so you can restore it after an update or on another device.'
-      );
+      await Linking.openURL(subscriptionManagerUrl);
     } catch {
-      Alert.alert('Backup failed', 'FXSnap could not create a backup right now.');
+      Alert.alert('Unable to open subscriptions', 'Use your app store account to manage your subscription.');
     }
   };
 
-  const importBackup = async () => {
+  const openScreenshotGuide = () => {
+    Alert.alert(
+      'Screenshot guide',
+      'For the clearest analysis, capture the full chart with the instrument, timeframe, recent candles, and price scale visible. Include the newest candle and current price marker; avoid cropping or covering chart labels.',
+      [{ text: 'Got it' }],
+    );
+  };
+
+  const refreshSubscription = () => {
+    setSubscriptionLoading(true);
+    setSubscriptionError(null);
+    void getSubscriptionDetails()
+      .then(setSubscriptionDetails)
+      .catch((error: unknown) => setSubscriptionError(error instanceof Error ? error.message : 'Unable to load subscription details.'))
+      .finally(() => setSubscriptionLoading(false));
+  };
+
+  const changeNotificationPreferences = async (changes: Partial<NotificationPreferences>) => {
+    if (notificationsBusy || notificationsLoading) return;
+    const next = { ...notificationPreferences, ...changes };
+    setNotificationsBusy(true);
+    setNotificationError('');
+    setNotificationMessage('');
     try {
-      const backupJson = await Clipboard.getStringAsync();
-      if (!backupJson.trim()) {
-        Alert.alert('No backup found', 'Copy your FXSnap backup JSON to the clipboard first.');
-        return;
+      if (changes.enabled === true) {
+        if (Platform.OS === 'web') {
+          setNotificationMessage('Push notifications are available in the installed iOS and Android apps.');
+          return;
+        }
+        const registration = await requestAndRegisterPushNotifications(next, true);
+        if (!registration.granted) {
+          const disabledPreferences = { ...next, enabled: false };
+          await saveNotificationPreferences(disabledPreferences);
+          setNotificationPreferences(disabledPreferences);
+          setNotificationMessage('Notification permission was not granted. Enable it in device settings to receive updates.');
+          return;
+        }
+      } else if (next.enabled && Platform.OS !== 'web') {
+        const registration = await requestAndRegisterPushNotifications(next, false);
+        if (!registration.granted) {
+          await unregisterPushToken();
+          next.enabled = false;
+        }
+      } else if (changes.enabled === false && notificationPreferences.enabled && Platform.OS !== 'web') {
+        await unregisterPushToken();
       }
 
-      Alert.alert(
-        'Restore backup?',
-        'This will replace your current settings, saved analyses, saved strategies, and subscription state with the backup.',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          {
-            text: 'Restore',
-            style: 'destructive',
-            onPress: async () => {
-              try {
-                await importData(backupJson);
-                Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-                Alert.alert('Backup restored', 'Your FXSnap data has been restored successfully.');
-              } catch {
-                Alert.alert('Restore failed', 'That clipboard content is not a valid FXSnap backup.');
-              }
-            },
-          },
-        ]
-      );
-    } catch {
-      Alert.alert('Restore failed', 'FXSnap could not read the clipboard right now.');
+      await saveNotificationPreferences(next);
+      setNotificationPreferences(next);
+      setNotificationMessage('Notification preferences saved.');
+    } catch (error) {
+      setNotificationError(error instanceof Error ? error.message : 'Unable to save notification preferences.');
+    } finally {
+      setNotificationsBusy(false);
     }
   };
 
-  const SectionHeader = ({ title, subtitle }: { title: string; subtitle?: string }) => (
-    <View style={styles.sectionHeaderBlock}>
-      <Text style={[styles.sectionHeader, { color: colors.textSecondary }]}>{title}</Text>
-      {subtitle && <Text style={[styles.sectionSubheader, { color: colors.textMuted }]}>{subtitle}</Text>}
+  const restoreSubscription = async () => {
+    if (billingBusy) return;
+    setBillingBusy(true);
+    try {
+      const restored = await restorePurchases();
+      if (restored) {
+        const details = await getSubscriptionDetails();
+        setSubscriptionDetails(details);
+        Alert.alert('Purchases restored', 'Your FXSnap subscription is active on this account.');
+      } else {
+        Alert.alert('No active subscription found', 'No active FXSnap subscription was found for this store account.');
+      }
+    } catch (error) {
+      Alert.alert('Unable to restore purchases', error instanceof Error ? error.message : 'Please try again.');
+    } finally {
+      setBillingBusy(false);
+    }
+  };
+
+  const openLegalDocument = async (path: 'privacy' | 'terms') => {
+    try {
+      await Linking.openURL(`${API_BASE_URL}/${path}`);
+    } catch {
+      Alert.alert('Unable to open document', 'Please try again when you have an internet connection.');
+    }
+  };
+
+  const topPadding = Platform.OS === 'web' ? 14 : insets.top;
+  const bottomPadding = Platform.OS === 'web' ? 18 : Math.max(insets.bottom, 12);
+
+  return (
+    <View style={[styles.screen, { backgroundColor: colors.background }]}>
+      <View style={[styles.header, { paddingTop: topPadding, borderBottomColor: colors.cardBorder }]}>
+        <TouchableOpacity
+          onPress={() => (router.canGoBack() ? router.back() : router.replace('/(tabs)/home'))}
+          style={[styles.backButton, { backgroundColor: colors.surface }]}
+          accessibilityLabel="Go back"
+        >
+          <Feather name="chevron-left" size={22} color={colors.textSecondary} />
+        </TouchableOpacity>
+        <View style={styles.headerCopy}>
+          <Text style={[styles.headerTitle, { color: colors.text }]}>Settings</Text>
+          <Text style={[styles.headerSubtitle, { color: colors.textSecondary }]}>Manage your account and preferences.</Text>
+        </View>
+        <View style={styles.headerSpacer} />
+      </View>
+
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: bottomPadding + 22 }]}
+        showsVerticalScrollIndicator={false}
+      >
+        <SettingsGroup title="Subscription" colors={colors}>
+          {subscriptionLoading ? (
+            <View style={styles.subscriptionState}>
+              <ActivityIndicator size="small" color={colors.buy} />
+              <Text style={[styles.stateText, { color: colors.textSecondary }]}>Checking subscription…</Text>
+            </View>
+          ) : subscriptionError && !isSubscribed ? (
+            <View style={styles.subscriptionState}>
+              <Text style={[styles.stateText, { color: colors.sell }]}>{subscriptionError}</Text>
+              <TouchableOpacity onPress={refreshSubscription} accessibilityRole="button">
+                <Text style={[styles.retryLabel, { color: colors.buy }]}>Retry</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <View style={[styles.subscriptionCard, { borderBottomColor: colors.cardBorder }]}>
+              <View style={styles.subscriptionHeading}>
+                <View style={styles.subscriptionCopy}>
+                  <Text style={[styles.subscriptionPlan, { color: colors.text }]}>
+                    {isSubscribed || subscriptionDetails?.status === 'active'
+                      ? subscriptionPlanName(subscriptionDetails?.productIdentifier)
+                      : subscriptionDetails?.status === 'expired' ? 'FXSnap Premium'
+                        : subscriptionDetails ? 'FXSnap Free' : 'Subscription unavailable'}
+                  </Text>
+                  <Text style={[styles.subscriptionDescription, { color: colors.textSecondary }]}>
+                    {isSubscribed || subscriptionDetails?.status === 'active'
+                      ? 'Premium access is active on this store account.'
+                      : subscriptionDetails?.status === 'expired'
+                        ? 'Your Premium access has expired.'
+                        : subscriptionDetails
+                          ? "You're currently using the free plan."
+                          : 'Subscription status could not be verified on this build.'}
+                  </Text>
+                </View>
+                <View style={[
+                  styles.statusBadge,
+                  { backgroundColor: `${(isSubscribed || subscriptionDetails?.status === 'active') ? colors.buy : colors.textMuted}18` },
+                ]}>
+                  <Text style={[
+                    styles.statusLabel,
+                    { color: (isSubscribed || subscriptionDetails?.status === 'active') ? colors.buy : colors.textSecondary },
+                  ]}>
+                    {isSubscribed || subscriptionDetails?.status === 'active'
+                      ? subscriptionDetails?.willRenew === false ? 'Active · ending' : 'Active'
+                      : subscriptionDetails?.status === 'expired' ? 'Expired'
+                        : subscriptionDetails ? 'Free' : 'Unavailable'}
+                  </Text>
+                </View>
+              </View>
+              {subscriptionDetails?.expirationDate ? (
+                <Text style={[styles.subscriptionDate, { color: colors.textSecondary }]}>
+                  {subscriptionDetails.status === 'expired'
+                    ? 'Expired'
+                    : subscriptionDetails.willRenew === false ? 'Access until' : 'Next renewal'}
+                  : {formatSubscriptionDate(subscriptionDetails.expirationDate)}
+                  {subscriptionDetails.willRenew === false && subscriptionDetails.status === 'active' ? ' · will not renew' : ''}
+                </Text>
+              ) : null}
+              <TouchableOpacity
+                onPress={() => void openSubscriptionOptions()}
+                style={[styles.subscriptionAction, { backgroundColor: colors.buy }]}
+                accessibilityRole="button"
+                disabled={billingBusy}
+              >
+                <Text style={[styles.subscriptionActionText, { color: colors.primaryForeground }]}>
+                  {isSubscribed || subscriptionDetails?.status === 'active' ? 'Manage Subscription' : 'Explore Premium'}
+                </Text>
+                <Feather name="arrow-right" size={17} color={colors.primaryForeground} />
+              </TouchableOpacity>
+            </View>
+          )}
+          {billingAvailable && Platform.OS !== 'web' ? (
+            <SettingsRow
+              icon="refresh-cw"
+              label="Restore purchases"
+              colors={colors}
+              onPress={() => void restoreSubscription()}
+              trailing={billingBusy ? <ActivityIndicator size="small" color={colors.buy} /> : undefined}
+              last
+            />
+          ) : null}
+        </SettingsGroup>
+
+        <SettingsGroup title="Account" colors={colors}>
+          <View style={[styles.emailRow, { borderBottomColor: colors.cardBorder }]}>
+            <View style={[styles.rowIcon, { backgroundColor: `${colors.buy}18` }]}>
+              <Feather name="mail" size={18} color={colors.buy} />
+            </View>
+            <View style={styles.emailDetails}>
+              <Text style={[styles.emailLabel, { color: colors.textSecondary }]}>Email</Text>
+              <Text style={[styles.emailValue, { color: colors.text }]} numberOfLines={1}>
+                {accountLoading ? 'Loading account…' : account?.email || 'Guest account'}
+              </Text>
+            </View>
+          </View>
+          {account ? (
+            <SettingsRow icon="user" label="Personal profile" colors={colors} onPress={() => router.push('/profile')} />
+          ) : null}
+          <SettingsRow
+            icon={account ? 'check-circle' : 'log-in'}
+            label={account ? 'Google account linked' : 'Continue with Google'}
+            colors={colors}
+            onPress={account ? undefined : () => void continueWithGoogle()}
+            trailing={accountBusy || accountLoading
+              ? <ActivityIndicator size="small" color={colors.textSecondary} />
+              : account ? <Text style={[styles.accountProvider, { color: colors.buy }]}>Google</Text> : undefined}
+            last
+          />
+          {account?.emailVerified ? (
+            <Text style={[styles.accountSyncStatus, { color: colors.textSecondary }]}>Email address verified by Google.</Text>
+          ) : null}
+          {accountError ? (
+            <Text style={[styles.accountError, { color: colors.sell }]}>{accountError}</Text>
+          ) : null}
+          {account ? (
+            <Text style={[styles.accountSyncStatus, { color: accountSyncStatus === 'error' ? colors.sell : colors.textSecondary }]}>
+              {accountSyncStatus === 'syncing'
+                ? 'Syncing your FXSnap data…'
+                : accountSyncStatus === 'synced'
+                  ? 'Your app data is synced to your account.'
+                  : accountSyncStatus === 'error'
+                    ? 'Your app data could not sync. Check your connection.'
+                    : ''}
+            </Text>
+          ) : null}
+        </SettingsGroup>
+
+        <SettingsGroup title="Security" colors={colors}>
+          <View style={styles.infoRow}>
+            <View style={[styles.rowIcon, { backgroundColor: `${colors.buy}18` }]}>
+              <Feather name="shield" size={18} color={colors.buy} />
+            </View>
+            <View style={styles.infoCopy}>
+              <Text style={[styles.rowLabel, { color: colors.text }]}>Sign-in security</Text>
+              <Text style={[styles.infoDescription, { color: colors.textSecondary }]}>
+                {account ? 'Your account uses Google sign-in. Password changes and two-step verification are managed by Google.' : 'Sign in with Google to secure and sync your FXSnap account.'}
+              </Text>
+            </View>
+          </View>
+        </SettingsGroup>
+
+        <SettingsGroup title="Notifications" colors={colors}>
+          <NotificationToggle
+            icon="bell"
+            label="Push notifications"
+            description={Platform.OS === 'web' ? 'Push notifications are available in the installed app.' : 'Allow FXSnap updates on this device.'}
+            value={notificationPreferences.enabled}
+            disabled={notificationsLoading || notificationsBusy || Platform.OS === 'web'}
+            colors={colors}
+            onValueChange={(enabled) => void changeNotificationPreferences({ enabled })}
+            last={false}
+          />
+          <NotificationToggle
+            icon="book-open"
+            label="Daily Brief"
+            description="New forex learning insights."
+            value={notificationPreferences.dailyBrief}
+            disabled={notificationsLoading || notificationsBusy || !notificationPreferences.enabled}
+            colors={colors}
+            onValueChange={(dailyBrief) => void changeNotificationPreferences({ dailyBrief })}
+          />
+          <NotificationToggle
+            icon="activity"
+            label="Trading reminders"
+            description="A reminder after a period of inactivity."
+            value={notificationPreferences.inactivity}
+            disabled={notificationsLoading || notificationsBusy || !notificationPreferences.enabled}
+            colors={colors}
+            onValueChange={(inactivity) => void changeNotificationPreferences({ inactivity })}
+          />
+          <NotificationToggle
+            icon="bar-chart-2"
+            label="Weekly overview"
+            description="A weekly summary when activity is available."
+            value={notificationPreferences.weekly}
+            disabled={notificationsLoading || notificationsBusy || !notificationPreferences.enabled}
+            colors={colors}
+            onValueChange={(weekly) => void changeNotificationPreferences({ weekly })}
+            last
+          />
+          {notificationsLoading ? (
+            <Text style={[styles.inlineMessage, { color: colors.textSecondary }]}>Loading notification preferences…</Text>
+          ) : null}
+          {notificationMessage ? (
+            <Text style={[styles.inlineMessage, { color: colors.buy }]}>{notificationMessage}</Text>
+          ) : null}
+          {notificationError ? (
+            <Text style={[styles.inlineMessage, { color: colors.sell }]}>{notificationError}</Text>
+          ) : null}
+        </SettingsGroup>
+
+        <SettingsGroup title="Appearance" colors={colors}>
+          <View style={[styles.appearanceSection, { backgroundColor: colors.card }]}>
+            <Text style={[styles.appearanceHeading, { color: colors.textSecondary }]}>App theme</Text>
+            <View style={[styles.appearanceControl, { backgroundColor: colors.segmentBackground }]}>
+              <AppearanceOption icon="sun" label="Light" value="light" selected={themeMode === 'light'} colors={colors} onPress={setAppearance} />
+              <AppearanceOption icon="moon" label="Dark" value="dark" selected={themeMode === 'dark'} colors={colors} onPress={setAppearance} />
+              <AppearanceOption icon="smartphone" label="System" value="system" selected={themeMode === 'system'} colors={colors} onPress={setAppearance} />
+            </View>
+          </View>
+        </SettingsGroup>
+
+        <SettingsGroup title="Your FXSnap" colors={colors}>
+          <SettingsRow icon="archive" label="My saved setups" colors={colors} onPress={() => router.push('/saved')} />
+          <SettingsRow icon="edit" label="Journal your trades" colors={colors} onPress={() => router.push('/risk-management')} />
+          <SettingsRow icon="bar-chart-2" label="Screenshot guide" colors={colors} onPress={openScreenshotGuide} last />
+        </SettingsGroup>
+
+        <SettingsGroup title="Support" colors={colors}>
+          <SettingsRow icon="message-circle" label="Help & contact support" colors={colors} onPress={() => void openHelpAndSupport()} last />
+        </SettingsGroup>
+
+        <SettingsGroup title="Privacy & legal" colors={colors}>
+          <SettingsRow
+            icon="shield"
+            label="Privacy Policy"
+            colors={colors}
+            onPress={() => void openLegalDocument('privacy')}
+          />
+          <SettingsRow icon="file-text" label="Terms of Service" colors={colors} onPress={() => void openLegalDocument('terms')} last />
+          <Text style={[styles.inlineMessage, { color: colors.textSecondary }]}>
+            Community profile visibility controls are not currently supported. Your email is not shown in community posts.
+          </Text>
+        </SettingsGroup>
+
+        {account ? (
+          <SettingsGroup title="Account access" colors={colors}>
+            <SettingsRow
+              icon="log-out"
+              label="Sign out"
+              colors={colors}
+              onPress={confirmSignOut}
+              trailing={accountBusy ? <ActivityIndicator size="small" color={colors.textSecondary} /> : undefined}
+              last
+            />
+          </SettingsGroup>
+        ) : null}
+
+        {account ? (
+          <View style={[styles.deleteSection, { borderTopColor: colors.cardBorder }]}>
+            <Text style={[styles.deleteExplanation, { color: colors.textSecondary }]}>
+              Deleting your FXSnap account does not cancel subscriptions billed by an app store.
+            </Text>
+            <TouchableOpacity
+              onPress={confirmDeleteAccount}
+              style={styles.deleteAction}
+              accessibilityRole="button"
+              disabled={accountBusy}
+            >
+              <Feather name="trash-2" size={18} color={colors.destructive} />
+              <Text style={[styles.deleteText, { color: colors.destructive }]}>Delete account</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
+      </ScrollView>
     </View>
   );
+}
 
-  const Row = ({
-    icon,
-    label,
-    children,
-  }: {
-    icon: string;
-    label: string;
-    children: React.ReactNode;
-  }) => (
-    <View style={styles.row}>
-      <View style={styles.rowLeft}>
-        <View style={[styles.rowIcon, { backgroundColor: colors.surface, borderColor: colors.cardBorder, borderWidth: 1 }]}>
-          <Feather name={icon as any} size={16} color={colors.textMuted} />
-        </View>
-        <Text style={[styles.rowLabel, { color: colors.text }]}>{label}</Text>
-      </View>
+function SettingsGroup({
+  title,
+  colors,
+  children,
+}: {
+  title: string;
+  colors: ReturnType<typeof useColors>;
+  children: React.ReactNode;
+}) {
+  return (
+    <View style={[styles.group, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+      <Text style={[styles.groupTitle, { color: colors.textSecondary, borderBottomColor: colors.cardBorder }]}>
+        {title}
+      </Text>
       {children}
     </View>
   );
+}
 
+function NotificationToggle({
+  icon,
+  label,
+  description,
+  value,
+  disabled,
+  colors,
+  onValueChange,
+  last = false,
+}: {
+  icon: SettingsIcon;
+  label: string;
+  description: string;
+  value: boolean;
+  disabled: boolean;
+  colors: ReturnType<typeof useColors>;
+  onValueChange: (value: boolean) => void;
+  last?: boolean;
+}) {
   return (
-    <KeyboardAvoidingView
-      style={{ flex: 1 }}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-    >
-      <View style={[styles.container, { paddingTop: topPad, backgroundColor: colors.background }]}> 
-        <Animated.View entering={FadeIn.duration(300)} style={styles.header}>
-          <TouchableOpacity style={[styles.backBtn, { backgroundColor: colors.card, borderColor: colors.cardBorder }]} onPress={() => router.back()}>
-            <Feather name="arrow-left" size={22} color={colors.text} />
-          </TouchableOpacity>
-          <Text style={[styles.headerTitle, { color: colors.text }]}>Settings</Text>
-          <View style={{ width: 44 }} />
-        </Animated.View>
-
-        <ScrollView
-          style={styles.scroll}
-          contentContainerStyle={[styles.scrollContent, { paddingBottom: botPad + 32 }]}
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-        >
-          {/* ── Account ── */}
-          <Animated.View entering={FadeInDown.delay(80).duration(500)}>
-            <SectionHeader
-              title="Profile"
-              subtitle="Personalize your FXSnap profile"
-            />
-            <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>  
-              <Row icon="user" label="First name">
-                <TextInput
-                  style={[styles.input, { color: colors.text, backgroundColor: colors.surface, borderColor: colors.cardBorder, borderWidth: 1, borderRadius: 10, paddingHorizontal: 12 }]}
-                  value={displayNameInput}
-                  onChangeText={setDisplayNameInput}
-                  onBlur={saveDisplayName}
-                  onSubmitEditing={saveDisplayName}
-                  returnKeyType="done"
-                  maxLength={40}
-                  placeholder="Your name"
-                  placeholderTextColor={colors.textMuted}
-                />
-              </Row>
-              <TouchableOpacity style={[styles.navigationRow, { marginTop: 12 }]} onPress={() => router.push('/saved-briefs')}>
-                <View style={styles.rowLeft}>
-                  <View style={[styles.rowIcon, { backgroundColor: colors.surface, borderColor: colors.cardBorder, borderWidth: 1 }]}>
-                    <Feather name="bookmark" size={16} color={colors.textMuted} />
-                  </View>
-                  <Text style={[styles.rowLabel, { color: colors.text }]}>Saved Briefs</Text>
-                </View>
-                <Feather name="chevron-right" size={18} color={colors.textMuted} />
-              </TouchableOpacity>
-            </View>
-          </Animated.View>
-
-          {/* ── Subscription ── */}
-          <Animated.View entering={FadeInDown.delay(260).duration(500)}>
-            <SectionHeader title="Subscription" />
-            <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
-              <View style={styles.subRow}>
-                <View style={styles.subLeft}>
-                  <View style={[styles.rowIcon, { backgroundColor: isSubscribed ? colors.surface : colors.card, borderColor: isSubscribed ? colors.buy : colors.cardBorder, borderWidth: 1 }]}>
-                    <Feather name="zap" size={16} color={isSubscribed ? colors.buy : colors.textMuted} />
-                  </View>
-                  <View>
-                    <Text style={[styles.rowLabel, { color: colors.text }]}>FXSnap Premium</Text>
-                    <Text style={[styles.subStatus, { color: colors.textSecondary }]}>
-                      {isSubscribed ? 'Active' : 'Not subscribed'}
-                    </Text>
-                  </View>
-                </View>
-                {!isSubscribed && (
-                  <TouchableOpacity
-                    style={[styles.upgradeBtn, { backgroundColor: colors.primary }]}
-                    onPress={() => router.push('/paywall')}
-                  >
-                    <Text style={[styles.upgradeBtnText, { color: colors.primaryForeground }]}>Upgrade</Text>
-                  </TouchableOpacity>
-                )}
-                {isSubscribed && (
-                  <View style={[styles.activeBadge, { backgroundColor: colors.surface, borderColor: colors.cardBorder }]}>
-                    <Text style={[styles.activeBadgeText, { color: colors.buy }]}>Active</Text>
-                  </View>
-                )}
-              </View>
-              <View style={[styles.rowDivider, { backgroundColor: colors.cardBorder }]} />
-              <TouchableOpacity style={styles.navigationRow} onPress={openSubscriptionManager}>
-                <View style={styles.rowLeft}>
-                  <View style={[styles.rowIcon, { backgroundColor: colors.surface, borderColor: colors.cardBorder, borderWidth: 1 }]}>
-                    <Feather name="settings" size={16} color={colors.textMuted} />
-                  </View>
-                  <Text style={[styles.rowLabel, { color: colors.text }]}>Manage subscription</Text>
-                </View>
-                <Feather name="chevron-right" size={18} color={colors.textMuted} />
-              </TouchableOpacity>
-              <Text style={[styles.cardNote, { color: colors.textSecondary }]}>
-                Subscription billing is handled through Google Play. Use the manage link above to update, cancel, or restore your subscription.
-              </Text>
-            </View>
-          </Animated.View>
-
-          {/* ── App Preferences ── */}
-          <Animated.View entering={FadeInDown.delay(320).duration(500)}>
-            <SectionHeader title="App Preferences" />
-            <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
-              <Row icon="bell" label="Push notifications">
-                <Switch
-                  value={notificationPreferences.enabled}
-                  onValueChange={(enabled) => void updateNotificationPreferences({ ...notificationPreferences, enabled })}
-                  trackColor={{ false: '#E6E8EC', true: '#FFD84D' }}
-                  thumbColor="#FFFFFF"
-                />
-              </Row>
-              {notificationPreferences.enabled && <>
-                <View style={[styles.rowDivider, { backgroundColor: colors.cardBorder }]} />
-                <Row icon="book-open" label="Daily Brief">
-                  <Switch value={notificationPreferences.dailyBrief} onValueChange={(dailyBrief) => void updateNotificationPreferences({ ...notificationPreferences, dailyBrief })} trackColor={{ false: '#E6E8EC', true: '#FFD84D' }} thumbColor="#FFFFFF" />
-                </Row>
-                <View style={[styles.rowDivider, { backgroundColor: colors.cardBorder }]} />
-                <Row icon="clock" label="Return reminders">
-                  <Switch value={notificationPreferences.inactivity} onValueChange={(inactivity) => void updateNotificationPreferences({ ...notificationPreferences, inactivity })} trackColor={{ false: '#E6E8EC', true: '#FFD84D' }} thumbColor="#FFFFFF" />
-                </Row>
-                <View style={[styles.rowDivider, { backgroundColor: colors.cardBorder }]} />
-                <Row icon="trending-up" label="Weekly activity">
-                  <Switch value={notificationPreferences.weekly} onValueChange={(weekly) => void updateNotificationPreferences({ ...notificationPreferences, weekly })} trackColor={{ false: '#E6E8EC', true: '#FFD84D' }} thumbColor="#FFFFFF" />
-                </Row>
-              </>}
-              <View style={[styles.rowDivider, { backgroundColor: colors.cardBorder }]} />
-              <Row icon="zap" label="Haptic Feedback">
-                <Switch
-                  value={settings.hapticsEnabled}
-                  onValueChange={(v) => {
-                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    updateSettings({ hapticsEnabled: v });
-                  }}
-                  trackColor={{ false: '#E6E8EC', true: '#FFD84D' }}
-                  thumbColor="#FFFFFF"
-                />
-              </Row>
-              <View style={[styles.rowDivider, { backgroundColor: colors.cardBorder }]} />
-              <Row icon="moon" label="Dark Mode">
-                <Switch
-                  value={settings.darkMode}
-                  onValueChange={(v) => {
-                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    updateSettings({ darkMode: v });
-                  }}
-                  trackColor={{ false: '#E6E8EC', true: '#FFD84D' }}
-                  thumbColor="#FFFFFF"
-                />
-              </Row>
-            </View>
-          </Animated.View>
-
-          <Animated.View entering={FadeInDown.delay(360).duration(500)}>
-            <SectionHeader title="Legal" />
-            <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}> 
-              <TouchableOpacity style={styles.navigationRow} onPress={openTerms}>
-                <View style={styles.rowLeft}>
-                  <View style={[styles.rowIcon, { backgroundColor: colors.surface, borderColor: colors.cardBorder, borderWidth: 1 }]}>
-                    <Feather name="file-text" size={16} color={colors.textMuted} />
-                  </View>
-                  <Text style={[styles.rowLabel, { color: colors.text }]}>Terms of Use</Text>
-                </View>
-                <Feather name="external-link" size={18} color={colors.textMuted} />
-              </TouchableOpacity>
-              <View style={[styles.rowDivider, { backgroundColor: colors.cardBorder }]} />
-              <TouchableOpacity style={styles.navigationRow} onPress={openPrivacyPolicy}>
-                <View style={styles.rowLeft}>
-                  <View style={[styles.rowIcon, { backgroundColor: colors.surface, borderColor: colors.cardBorder, borderWidth: 1 }]}>
-                    <Feather name="shield" size={16} color={colors.textMuted} />
-                  </View>
-                  <Text style={[styles.rowLabel, { color: colors.text }]}>Privacy policy</Text>
-                </View>
-                <Feather name="external-link" size={18} color={colors.textMuted} />
-              </TouchableOpacity>
-              <Text style={[styles.cardNote, { color: colors.textSecondary }]}>
-                FXSnap analyzes chart images you select. We do not provide financial advice and may not have access to your trading account.
-              </Text>
-            </View>
-          </Animated.View>
-
-          <Animated.View entering={FadeInDown.delay(400).duration(500)}>
-            <SectionHeader title="Support" />
-            <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}> 
-              <TouchableOpacity style={styles.navigationRow} onPress={openSupportEmail}>
-                <View style={styles.rowLeft}>
-                  <View style={[styles.rowIcon, { backgroundColor: colors.surface, borderColor: colors.cardBorder, borderWidth: 1 }]}>
-                    <Feather name="mail" size={16} color={colors.textMuted} />
-                  </View>
-                  <Text style={[styles.rowLabel, { color: colors.text }]}>{supportEmail}</Text>
-                </View>
-                <Feather name="external-link" size={18} color={colors.textMuted} />
-              </TouchableOpacity>
-              <View style={[styles.rowDivider, { backgroundColor: colors.cardBorder }]} />
-              <TouchableOpacity style={styles.navigationRow} onPress={() => setRatingPromptVisible(true)}>
-                <View style={styles.rowLeft}>
-                  <View style={[styles.rowIcon, { backgroundColor: colors.surface, borderColor: colors.cardBorder, borderWidth: 1 }]}>
-                    <Feather name="star" size={16} color={colors.textMuted} />
-                  </View>
-                  <Text style={[styles.rowLabel, { color: colors.text }]}>Rate FXSnap</Text>
-                </View>
-                <Feather name="chevron-right" size={18} color={colors.textMuted} />
-              </TouchableOpacity>
-              <View style={[styles.rowDivider, { backgroundColor: colors.cardBorder }]} />
-              <TouchableOpacity style={styles.destructiveRow} onPress={confirmDeleteAccount}>
-                <View style={styles.rowLeft}>
-                  <View style={[styles.rowIcon, { backgroundColor: colors.surface, borderColor: colors.destructive, borderWidth: 1 }]}> 
-                    <Feather name="trash-2" size={16} color={colors.destructive} />
-                  </View>
-                  <Text style={[styles.destructiveText, { color: colors.destructive } ]}>Delete Account</Text>
-                </View>
-              </TouchableOpacity>
-              <Text style={styles.cardNote}>
-                Need help with billing, account data, or cancellation? Contact support using the email above.
-              </Text>
-            </View>
-          </Animated.View>
-
-          {/* ── Data Backup ── */}
-          <Animated.View entering={FadeInDown.delay(380).duration(500)}>
-            <SectionHeader
-              title="Data Backup"
-              subtitle="Protect your balance, risk settings, and saved data"
-            />
-            <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
-              <TouchableOpacity style={styles.backupRow} onPress={exportBackup}>
-                <View style={[styles.backupIcon, { backgroundColor: colors.surface, borderColor: colors.cardBorder, borderWidth: 1 }] }>
-                  <Feather name="upload" size={17} color={colors.buy} />
-                </View>
-                <View style={styles.backupCopy}>
-                  <Text style={[styles.rowLabel, { color: colors.text }]}>Export backup JSON</Text>
-                  <Text style={[styles.backupDescription, { color: colors.textMuted }]}>Copy all account data to the clipboard</Text>
-                </View>
-                <Feather name="chevron-right" size={18} color={colors.textMuted} />
-              </TouchableOpacity>
-              <View style={[styles.rowDivider, { backgroundColor: colors.cardBorder }]} />
-              <TouchableOpacity style={styles.backupRow} onPress={importBackup}>
-                <View style={[styles.backupIcon, { backgroundColor: colors.surface, borderColor: colors.cardBorder, borderWidth: 1 }] }>
-                  <Feather name="download" size={17} color={colors.buy} />
-                </View>
-                <View style={styles.backupCopy}>
-                  <Text style={[styles.rowLabel, { color: colors.text }]}>Import backup JSON</Text>
-                  <Text style={[styles.backupDescription, { color: colors.textMuted }]}>Restore from copied backup data</Text>
-                </View>
-                <Feather name="chevron-right" size={18} color={colors.textMuted} />
-              </TouchableOpacity>
-            </View>
-          </Animated.View>
-
-          <Text style={[styles.versionText, { color: colors.textSecondary }]}>FXSnap v1.0.0</Text>
-          <Text style={[styles.disclaimer, { color: colors.textSecondary }]}> 
-            This app does not provide financial advice. Trade at your own risk.
-          </Text>
-        </ScrollView>
+    <View style={[
+      styles.notificationRow,
+      !last && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.cardBorder },
+    ]}>
+      <View style={[styles.rowIcon, { backgroundColor: `${colors.buy}18` }]}>
+        <Feather name={icon} size={17} color={colors.buy} />
       </View>
-      <RatingPromptModal visible={ratingPromptVisible} onDismiss={() => setRatingPromptVisible(false)} />
-    </KeyboardAvoidingView>
+      <View style={styles.notificationCopy}>
+        <Text style={[styles.notificationTitle, { color: colors.text }]}>{label}</Text>
+        <Text style={[styles.notificationDescription, { color: colors.textSecondary }]}>{description}</Text>
+      </View>
+      <Switch
+        value={value}
+        onValueChange={onValueChange}
+        disabled={disabled}
+        trackColor={{ false: colors.cardBorder, true: `${colors.buy}88` }}
+        thumbColor={value ? colors.buy : colors.surface}
+        accessibilityLabel={label}
+        accessibilityState={{ checked: value, disabled }}
+      />
+    </View>
+  );
+}
+
+function SettingsRow({
+  icon,
+  label,
+  colors,
+  onPress,
+  trailing,
+  last,
+}: {
+  icon: SettingsIcon;
+  label: string;
+  colors: ReturnType<typeof useColors>;
+  onPress?: () => void;
+  trailing?: React.ReactNode;
+  last?: boolean;
+}) {
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      disabled={!onPress}
+      style={[
+        styles.settingRow,
+        !last && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.cardBorder },
+      ]}
+      accessibilityRole={onPress ? 'button' : 'text'}
+      accessibilityState={onPress ? undefined : { disabled: true }}
+    >
+      <View style={[styles.rowIcon, { backgroundColor: colors.iconBackground }]}>
+        <Feather name={icon} size={18} color="#FFFFFF" />
+      </View>
+      <Text style={[styles.rowLabel, { color: colors.text }]} numberOfLines={1}>{label}</Text>
+      {trailing || (onPress ? <Feather name="chevron-right" size={20} color={colors.textMuted} /> : null)}
+    </TouchableOpacity>
+  );
+}
+
+function AppearanceOption({
+  icon,
+  label,
+  value,
+  selected,
+  colors,
+  onPress,
+}: {
+  icon: SettingsIcon;
+  label: string;
+  value: ThemeMode;
+  selected: boolean;
+  colors: ReturnType<typeof useColors>;
+  onPress: (mode: ThemeMode) => void;
+}) {
+  return (
+    <TouchableOpacity
+      onPress={() => onPress(value)}
+      style={[
+        styles.appearanceOption,
+        selected && { backgroundColor: colors.card, borderColor: colors.cardBorder, borderWidth: 1 },
+      ]}
+      accessibilityRole="button"
+      accessibilityState={{ selected }}
+    >
+      <Feather name={icon} size={16} color={selected ? colors.buy : colors.textMuted} />
+      <Text style={[styles.appearanceLabel, { color: selected ? colors.text : colors.textMuted }]}>{label}</Text>
+    </TouchableOpacity>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
+  screen: { flex: 1 },
   header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-  },
-  backBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-  },
-  headerTitle: { fontSize: 17, fontFamily: 'Inter_600SemiBold', color: '#FFFFFF' },
-  scroll: { flex: 1 },
-  scrollContent: { paddingHorizontal: 20, paddingTop: 8, gap: 16 },
-  sectionHeaderBlock: { gap: 2, marginBottom: 8 },
-  sectionHeader: {
-    fontSize: 13,
-    fontFamily: 'Inter_600SemiBold',
-    color: '#8E8E93',
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-  },
-  sectionSubheader: {
-    fontSize: 12,
-    fontFamily: 'Inter_400Regular',
-    color: '#48484A',
-  },
-  card: {
-    borderRadius: 16,
-    padding: 16,
-    borderWidth: 1,
-  },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 6,
-  },
-  rowLeft: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  rowIcon: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  rowLabel: { fontSize: 15, fontFamily: 'Inter_500Medium', color: '#FFFFFF' },
-  rowDivider: { height: 1, marginVertical: 8 },
-  navigationRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 12,
-  },
-  backupRow: {
+    minHeight: 52,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    paddingVertical: 4,
-  },
-  backupIcon: {
-    width: 34,
-    height: 34,
-    borderRadius: 9,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  backupCopy: { flex: 1, gap: 3 },
-  backupDescription: {
-    fontSize: 12,
-    fontFamily: 'Inter_400Regular',
-  },
-  inputRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: '#2A2A2A',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-  },
-  input: {
-    fontSize: 15,
-    fontFamily: 'Inter_600SemiBold',
-    color: '#FFFFFF',
-    minWidth: 70,
-    textAlign: 'right',
-  },
-  inputSuffix: { fontSize: 13, fontFamily: 'Inter_400Regular', color: '#8E8E93' },
-  balanceTip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: '#1A1600',
-    borderRadius: 10,
-    padding: 12,
-    marginTop: 10,
-    borderWidth: 1,
-    borderColor: '#3D3400',
-  },
-  balanceTipText: {
-    flex: 1,
-    fontSize: 12,
-    fontFamily: 'Inter_400Regular',
-    color: '#C7C7CC',
-    lineHeight: 18,
-  },
-  riskLabel: { fontSize: 15, fontFamily: 'Inter_500Medium', color: '#8E8E93', marginBottom: 12 },
-  riskValue: { fontFamily: 'Inter_700Bold', color: '#FFFFFF' },
-  riskOptions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  riskChip: {
     paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 50,
-    backgroundColor: '#2A2A2A',
-    borderWidth: 1,
-    borderColor: '#3A3A3A',
+    paddingBottom: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  riskChipActive: { backgroundColor: '#FFFFFF', borderColor: '#FFFFFF' },
-  riskChipText: { fontSize: 14, fontFamily: 'Inter_600SemiBold', color: '#FFFFFF' },
-  riskChipTextActive: { color: '#000000' },
-  riskInfo: {
+  backButton: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+  headerTitle: { fontSize: 22, fontFamily: 'Inter_700Bold', letterSpacing: -0.3 },
+  headerCopy: { flex: 1, gap: 2 },
+  headerSubtitle: { fontSize: 12, fontFamily: 'Inter_400Regular' },
+  headerSpacer: { flex: 1 },
+  scroll: { flex: 1 },
+  scrollContent: { paddingHorizontal: 18, paddingTop: 26, gap: 14 },
+  group: { overflow: 'hidden', borderWidth: 1, borderRadius: 15 },
+  groupTitle: {
+    minHeight: 38,
+    paddingHorizontal: 14,
+    paddingTop: 9,
+    paddingBottom: 7,
+    borderBottomWidth: 1,
+    textTransform: 'uppercase',
+    fontSize: 11,
+    fontFamily: 'Inter_700Bold',
+    letterSpacing: 0.8,
+  },
+  emailRow: {
+    minHeight: 61,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 7,
-    marginTop: 14,
-    backgroundColor: '#2A2A2A',
-    borderRadius: 8,
-    padding: 10,
+    gap: 10,
+    paddingHorizontal: 14,
+    borderBottomWidth: 1,
   },
-  riskInfoText: { flex: 1, fontSize: 12, fontFamily: 'Inter_400Regular', color: '#8E8E93', lineHeight: 18 },
-  calcRow: { flexDirection: 'row', gap: 10 },
-  calcField: { flex: 1, gap: 6 },
-  calcLabel: { fontSize: 12, fontFamily: 'Inter_400Regular', color: '#8E8E93' },
-  calcInput: {
-    height: 44,
-    backgroundColor: '#2A2A2A',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    fontSize: 15,
-    fontFamily: 'Inter_600SemiBold',
-    color: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#3A3A3A',
-    textAlign: 'center',
-  },
-  calcResult: {
+  rowIcon: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
+  emailDetails: { flex: 1, gap: 8 },
+  emailLabel: { fontSize: 13, fontFamily: 'Inter_400Regular' },
+  emailValue: { fontSize: 17, fontFamily: 'Inter_500Medium' },
+  subscriptionState: { minHeight: 76, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 15, paddingVertical: 14 },
+  stateText: { flex: 1, fontSize: 13, lineHeight: 19, fontFamily: 'Inter_400Regular' },
+  retryLabel: { padding: 8, fontSize: 13, fontFamily: 'Inter_600SemiBold' },
+  subscriptionCard: { padding: 15, gap: 14, borderBottomWidth: StyleSheet.hairlineWidth },
+  subscriptionHeading: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
+  subscriptionCopy: { flex: 1, gap: 5 },
+  subscriptionPlan: { fontSize: 17, fontFamily: 'Inter_700Bold' },
+  subscriptionDescription: { fontSize: 12, lineHeight: 18, fontFamily: 'Inter_400Regular' },
+  statusBadge: { borderRadius: 20, paddingVertical: 5, paddingHorizontal: 9 },
+  statusLabel: { fontSize: 10, fontFamily: 'Inter_700Bold' },
+  subscriptionDate: { fontSize: 12, lineHeight: 17, fontFamily: 'Inter_500Medium' },
+  subscriptionAction: { minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 15, borderRadius: 12 },
+  subscriptionActionText: { fontSize: 14, fontFamily: 'Inter_700Bold' },
+  infoRow: { minHeight: 78, flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14 },
+  infoCopy: { flex: 1, gap: 5 },
+  infoDescription: { fontSize: 12, lineHeight: 18, fontFamily: 'Inter_400Regular' },
+  notificationRow: { minHeight: 72, flexDirection: 'row', alignItems: 'center', gap: 11, paddingHorizontal: 14, paddingVertical: 10 },
+  notificationCopy: { flex: 1, gap: 3 },
+  notificationTitle: { fontSize: 14, fontFamily: 'Inter_500Medium' },
+  notificationDescription: { fontSize: 11, lineHeight: 16, fontFamily: 'Inter_400Regular' },
+  inlineMessage: { paddingHorizontal: 14, paddingVertical: 10, fontSize: 11, lineHeight: 16, fontFamily: 'Inter_400Regular' },
+  accountProvider: { fontSize: 12, fontFamily: 'Inter_600SemiBold' },
+  appearanceSection: { minHeight: 99, justifyContent: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1 },
+  appearanceHeading: { textTransform: 'uppercase', fontSize: 13, fontFamily: 'Inter_700Bold', letterSpacing: 0.6 },
+  appearanceControl: { minHeight: 42, flexDirection: 'row', alignItems: 'stretch', borderRadius: 14, padding: 3 },
+  appearanceOption: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, borderRadius: 11, borderColor: 'transparent' },
+  appearanceLabel: { fontSize: 13, fontFamily: 'Inter_600SemiBold' },
+  settingRow: {
+    minHeight: 56,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    borderRadius: 12,
-    padding: 16,
-    borderWidth: 1,
+    gap: 12,
+    paddingHorizontal: 14,
   },
-  calcResultLabel: { fontSize: 15, fontFamily: 'Inter_500Medium', color: '#8E8E93' },
-  calcResultValue: { fontSize: 28, fontFamily: 'Inter_700Bold', color: '#00E676' },
-  calcResultNote: {
-    fontSize: 12,
-    fontFamily: 'Inter_400Regular',
-    color: '#A3E635',
-    textAlign: 'center',
-    paddingHorizontal: 4,
-  },
-  syncBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingVertical: 8,
-  },
-  syncBtnText: { fontSize: 12, fontFamily: 'Inter_400Regular', color: '#8E8E93' },
-  calcFormula: { fontSize: 12, fontFamily: 'Inter_400Regular', color: '#48484A', textAlign: 'center' },
-  subRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  subLeft: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  subInfo: { marginTop: 12, color: '#8E8E93', fontSize: 12, fontFamily: 'Inter_400Regular' },
-  subLinkBtn: { marginTop: 12, paddingVertical: 12, borderRadius: 12, borderWidth: 1, borderColor: '#2A2A2A', alignItems: 'center' },
-  subLinkText: { fontSize: 13, fontFamily: 'Inter_600SemiBold', color: '#00E676' },
-  cardNote: { marginTop: 12, fontSize: 12, fontFamily: 'Inter_400Regular', color: '#8E8E93', lineHeight: 18 },
-  destructiveRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 12,
-  },
-  destructiveText: { fontSize: 15, fontFamily: 'Inter_600SemiBold', color: '#FF4D4F' },
-  subStatus: { fontSize: 12, fontFamily: 'Inter_400Regular', color: '#8E8E93', marginTop: 2 },
-  upgradeBtn: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 10,
-    backgroundColor: '#FFFFFF',
-  },
-  upgradeBtnText: { fontSize: 13, fontFamily: 'Inter_700Bold', color: '#000' },
-  activeBadge: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 10,
-    backgroundColor: '#0D1A12',
-    borderWidth: 1,
-    borderColor: '#1A3D26',
-  },
-  activeBadgeText: { fontSize: 13, fontFamily: 'Inter_600SemiBold', color: '#00E676' },
-  versionText: {
-    fontSize: 13,
-    fontFamily: 'Inter_400Regular',
-    color: '#48484A',
-    textAlign: 'center',
-    marginTop: 8,
-  },
-  disclaimer: {
-    fontSize: 12,
-    fontFamily: 'Inter_400Regular',
-    textAlign: 'center',
-    lineHeight: 18,
-  },
+  rowLabel: { flex: 1, fontSize: 16, fontFamily: 'Inter_500Medium' },
+  accountError: { paddingHorizontal: 12, paddingBottom: 12, fontSize: 13, fontFamily: 'Inter_500Medium' },
+  accountSyncStatus: { paddingHorizontal: 12, paddingBottom: 12, fontSize: 12, fontFamily: 'Inter_400Regular' },
+  deleteSection: { minHeight: 76, marginTop: 8, borderTopWidth: 1, alignItems: 'center', paddingTop: 16, gap: 8 },
+  deleteExplanation: { maxWidth: 340, paddingHorizontal: 16, fontSize: 11, lineHeight: 16, textAlign: 'center', fontFamily: 'Inter_400Regular' },
+  deleteAction: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 10 },
+  deleteText: { fontSize: 16, fontFamily: 'Inter_500Medium' },
 });

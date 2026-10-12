@@ -1,8 +1,9 @@
 export interface TradingSessionDefinition {
   name: 'Sydney' | 'Tokyo' | 'London' | 'New York';
   color: string;
-  utcOpen: number;
-  utcClose: number;
+  timeZone: string;
+  localOpen: number;
+  localClose: number;
 }
 
 export interface TradingSessionState {
@@ -13,23 +14,37 @@ export interface TradingSessionState {
 }
 
 export const SESSION_DEFINITIONS: TradingSessionDefinition[] = [
-  { name: 'Sydney', utcOpen: 22 * 60, utcClose: 24 * 60, color: '#FF80AB' },
-  { name: 'Tokyo', utcOpen: 0, utcClose: 9 * 60, color: '#FFD60A' },
-  { name: 'London', utcOpen: 8 * 60, utcClose: 16 * 60, color: '#4FC3F7' },
-  { name: 'New York', utcOpen: 13 * 60, utcClose: 21 * 60, color: '#00E676' },
+  { name: 'Sydney', timeZone: 'Australia/Sydney', localOpen: 8 * 60, localClose: 17 * 60, color: '#FF80AB' },
+  { name: 'Tokyo', timeZone: 'Asia/Tokyo', localOpen: 9 * 60, localClose: 18 * 60, color: '#FFD60A' },
+  { name: 'London', timeZone: 'Europe/London', localOpen: 8 * 60, localClose: 17 * 60, color: '#4FC3F7' },
+  { name: 'New York', timeZone: 'America/New_York', localOpen: 8 * 60, localClose: 17 * 60, color: '#00E676' },
 ];
 
-function inRange(utcMinutes: number, session: TradingSessionDefinition) {
-  const { utcOpen, utcClose } = session;
-  if (utcClose <= utcOpen) {
-    return utcMinutes >= utcOpen || utcMinutes < utcClose;
-  }
-  return utcMinutes >= utcOpen && utcMinutes < utcClose;
+function getLocalSessionTime(date: Date, timeZone: string) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    weekday: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date);
+  const value = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value;
+  const weekday = value('weekday');
+  const hour = Number(value('hour'));
+  const minute = Number(value('minute'));
+  return {
+    isWeekday: weekday !== 'Sat' && weekday !== 'Sun',
+    minutes: hour * 60 + minute,
+  };
+}
+
+function isSessionOpen(date: Date, session: TradingSessionDefinition) {
+  const local = getLocalSessionTime(date, session.timeZone);
+  return local.isWeekday && local.minutes >= session.localOpen && local.minutes < session.localClose;
 }
 
 export function getTradingSessionState(referenceDate = new Date()): TradingSessionState {
-  const utcMinutes = referenceDate.getUTCHours() * 60 + referenceDate.getUTCMinutes();
-  const activeSessions = SESSION_DEFINITIONS.filter((session) => inRange(utcMinutes, session));
+  const activeSessions = SESSION_DEFINITIONS.filter((session) => isSessionOpen(referenceDate, session));
 
   const headline = activeSessions.length === 0
     ? 'No major session active'

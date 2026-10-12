@@ -1,25 +1,21 @@
 import React, { useEffect, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   Image,
   Platform,
   ScrollView,
   StyleSheet,
   Text,
-  TouchableOpacity,
   View,
 } from 'react-native';
+import { AnimatedTouchableOpacity as TouchableOpacity } from '@/components/AnimatedTouchableOpacity';
+import { AmbientBackdrop } from '@/components/AmbientBackdrop';
 import Animated, {
-  Easing,
   FadeIn,
   FadeInDown,
   FadeInUp,
-  useAnimatedStyle,
-  useSharedValue,
-  withRepeat,
-  withSequence,
-  withSpring,
-  withTiming,
+  useReducedMotion,
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
@@ -39,193 +35,26 @@ type Stage = 'pick' | 'preview' | 'analyzing';
 type AnalysisMode = 'quick' | 'multiTimeframe';
 type TimeframeChart = MultiTimeframeChartImage & { uri: string };
 
-// ─── Step states ──────────────────────────────────────────────────────────────
-type StepState = 'done' | 'active' | 'pending';
-
-const STEPS = [
-  { label: 'Reading price structure', icon: 'bar-chart-2' },
-  { label: 'Identifying market direction', icon: 'trending-up' },
-  { label: 'Mapping key levels', icon: 'layers' },
-  { label: 'Risk evaluation', icon: 'shield' },
-  { label: 'Filtering low-probability setups', icon: 'filter' },
-];
-
-const AI_STATUS_MESSAGES = [
-  'Reading structure…',
-  'Detecting trend…',
-  'Marking key zones…',
-  'Evaluating risk levels…',
-  'Filtering low-probability setups…',
-];
-
-function StepRow({ label, icon, state }: { label: string; icon: string; state: StepState }) {
-  const colors = useColors();
-  const pulse = useSharedValue(1);
-
-  useEffect(() => {
-    if (state === 'active') {
-      pulse.value = withRepeat(
-        withSequence(
-          withTiming(1.2, { duration: 700, easing: Easing.inOut(Easing.ease) }),
-          withTiming(0.9, { duration: 700, easing: Easing.inOut(Easing.ease) })
-        ),
-        -1
-      );
-    } else {
-      pulse.value = 1;
-    }
-  }, [state]);
-
-  const animatedIconStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: state === 'active' ? pulse.value : 1 }],
-  }));
-
-  const backgroundColor =
-    state === 'done' ? '#071A0D' : state === 'active' ? '#0E2619' : '#0A0A0A';
-  const borderColor =
-    state === 'done' ? '#00FF9C' : state === 'active' ? '#00FF9C' : '#222222';
-  const opacity = state === 'pending' ? 0.55 : 1;
-  const textColor = state === 'pending' ? '#8E8E93' : '#FFFFFF';
-  const iconColor = state === 'pending' ? '#636366' : '#00FF9C';
-
-  return (
-    <Animated.View
-      entering={FadeInDown.duration(280)}
-      style={[
-        styles.stepRow,
-        {
-          backgroundColor,
-          borderColor,
-          opacity,
-        },
-      ]}
-    >
-      <View style={[styles.stepRowContent, { opacity }]}> 
-        <Animated.View style={[styles.stepIconBox, { borderColor, backgroundColor: state === 'pending' ? '#121212' : '#071B0F' }, animatedIconStyle]}>
-          <Feather name={icon as any} size={18} color={iconColor} />
-        </Animated.View>
-        <Text style={[styles.stepText, { color: textColor }]}>{label}</Text>
-        <View style={styles.stepStatusIcon}>
-          {state === 'done' ? (
-            <Feather name="check" size={18} color="#00FF9C" />
-          ) : state === 'active' ? (
-            <View style={styles.activeDot} />
-          ) : (
-            <View style={styles.pendingDot} />
-          )}
-        </View>
-      </View>
-    </Animated.View>
-  );
-}
-
 function AnalyzingView() {
   const insets = useSafeAreaInsets();
-  const [activeStep, setActiveStep] = useState(0);
-  const [progress, setProgress] = useState(0);
-
-  const progressValue = useSharedValue(0);
-  const glowPulse = useSharedValue(0.12);
-
-  useEffect(() => {
-    const totalDuration = 12000 + Math.random() * 3000;
-    const stepStarts = [0, totalDuration * 0.18, totalDuration * 0.38, totalDuration * 0.58, totalDuration * 0.78];
-
-    glowPulse.value = withRepeat(
-      withSequence(
-        withTiming(0.18, { duration: 1100, easing: Easing.inOut(Easing.ease) }),
-        withTiming(0.08, { duration: 1100, easing: Easing.inOut(Easing.ease) })
-      ),
-      -1
-    );
-
-    progressValue.value = withTiming(96, {
-      duration: totalDuration,
-      easing: Easing.linear,
-    });
-
-    const progressInterval = setInterval(() => {
-      setProgress((current) => Math.min(96, current + 1));
-    }, totalDuration / 96);
-
-    const stepTimers = stepStarts.map((startTime, stepIndex) =>
-      setTimeout(() => {
-        setActiveStep(stepIndex);
-      }, startTime)
-    );
-
-    const finishTimer = setTimeout(() => {
-      clearInterval(progressInterval);
-      setProgress(100);
-      progressValue.value = withTiming(100, { duration: 450 });
-      setActiveStep(STEPS.length);
-    }, totalDuration);
-
-    return () => {
-      clearInterval(progressInterval);
-      stepTimers.forEach(clearTimeout);
-      clearTimeout(finishTimer);
-    };
-  }, []);
-
-  const glowStyle = useAnimatedStyle(() => ({
-    opacity: glowPulse.value,
-  }));
-
-  const progressStyle = useAnimatedStyle(() => ({
-    width: `${progressValue.value}%` as any,
-  }));
-
-  const getStepState = (i: number): StepState => {
-    if (i < activeStep) return 'done';
-    if (i === activeStep) return 'active';
-    return 'pending';
-  };
-
-  const currentStatus = AI_STATUS_MESSAGES[Math.min(activeStep, AI_STATUS_MESSAGES.length - 1)];
+  const colors = useColors();
+  const reduceMotion = useReducedMotion();
 
   return (
-    <View style={[styles.analyzingContainer, { paddingTop: insets.top + 20 }]}> 
-      <Animated.View style={[styles.analyzingGlow, glowStyle]} />
-
-      <Animated.View entering={FadeIn.duration(500)} style={styles.analyzingIcon}>
-        <Feather name="cpu" size={40} color="#00FF9C" />
+    <View style={[styles.analyzingContainer, { paddingTop: insets.top + 20, backgroundColor: colors.background }]}>
+      <Animated.View entering={reduceMotion ? undefined : FadeIn.duration(300)} style={[styles.analyzingIcon, { backgroundColor: colors.card, borderColor: colors.buy }]}>
+        <Feather name="cpu" size={40} color={colors.buy} />
       </Animated.View>
 
-      <Animated.Text
-        entering={FadeInDown.delay(150).duration(500)}
-        style={styles.analyzingTitle}
-      >
-        Analyzing Market Structure
-      </Animated.Text>
-
-      <Animated.Text
-        entering={FadeInDown.delay(220).duration(500)}
-        style={styles.analysisSubtext}
-      >
-        {currentStatus}
-      </Animated.Text>
-
-      <Animated.View
-        entering={FadeInDown.delay(280).duration(500)}
-        style={styles.progressSection}
-      >
-        <View style={styles.progressBarContainer}>
-          <Animated.View style={[styles.progressBarFill, progressStyle]} />
-        </View>
-        <Text style={styles.progressPercent}>{progress}%</Text>
-      </Animated.View>
-
-      <View style={styles.stepsContainer}>
-        {STEPS.map((step, i) => (
-          <StepRow
-            key={step.label}
-            label={step.label}
-            icon={step.icon}
-            state={getStepState(i)}
-          />
-        ))}
-      </View>
+      <Text style={[styles.analyzingTitle, { color: colors.text }]}>Analyzing your chart</Text>
+      {reduceMotion ? (
+        <Feather name="loader" size={19} color={colors.buy} />
+      ) : (
+        <ActivityIndicator size="small" color={colors.buy} />
+      )}
+      <Text style={[styles.analysisSubtext, { color: colors.textSecondary }]}>
+        The analysis is in progress. This may take a moment.
+      </Text>
     </View>
   );
 }
@@ -233,6 +62,7 @@ function AnalyzingView() {
 export default function AnalysisScreen() {
   const insets = useSafeAreaInsets();
   const colors = useColors();
+  const reduceMotion = useReducedMotion();
   const { retry } = useLocalSearchParams<{ retry?: string }>();
   const retryRequest = retry === '1' ? getAnalysisRetryRequest() : null;
   const { setCurrentAnalysis, isSubscribed, isLoading, billingAvailable, checkFeatureAccess, consumeAnalysisAccessGrant } = useApp();
@@ -544,7 +374,7 @@ export default function AnalysisScreen() {
 
 
   const NoticeBanner = () => (
-    <Animated.View entering={FadeInDown.duration(400)} style={[styles.balanceBanner, { backgroundColor: colors.surface, borderColor: colors.gold }]}> 
+    <Animated.View entering={reduceMotion ? undefined : FadeInDown.duration(400)} style={[styles.balanceBanner, { backgroundColor: colors.surface, borderColor: colors.gold }]}>
       <Feather name="bar-chart-2" size={16} color="#FFD60A" />
       <Text style={[styles.balanceBannerText, { color: colors.text }]}>📊 For best results, upload a clear chart image showing price action, timeframe, and visible levels.{"\n"}Blurry, cropped, or cluttered charts may lead to inaccurate analysis.</Text>
     </Animated.View>
@@ -552,10 +382,11 @@ export default function AnalysisScreen() {
 
   return (
     <View style={[styles.container, { paddingTop: topPad, backgroundColor: colors.background }]}>
+      <AmbientBackdrop />
       {stage !== 'analyzing' && (
-        <Animated.View entering={FadeIn.duration(300)} style={styles.header}>
+        <Animated.View entering={reduceMotion ? undefined : FadeIn.duration(300)} style={styles.header}>
           <TouchableOpacity style={[styles.backBtn, { backgroundColor: colors.card, borderColor: colors.cardBorder }]} onPress={() => router.replace('/home')}>
-            <Feather name="arrow-left" size={22} color="#FFFFFF" />
+                  <Feather name="arrow-left" size={22} color={colors.text} />
           </TouchableOpacity>
           <Text style={[styles.headerTitle, { color: colors.text }]}>Chart Analysis</Text>
           <View style={{ width: 44 }} />
@@ -563,7 +394,7 @@ export default function AnalysisScreen() {
       )}
 
       {stage === 'pick' && (
-        <Animated.View entering={FadeInUp.delay(100).duration(500)} style={[styles.content, { paddingBottom: botPad + 24 }]}>
+        <Animated.View entering={reduceMotion ? undefined : FadeInUp.delay(100).duration(500)} style={[styles.content, { paddingBottom: botPad + 24 }]}>
           <View style={[styles.modeSwitcher, { backgroundColor: colors.surface, borderColor: colors.cardBorder }]}>
             <TouchableOpacity accessibilityRole="tab" accessibilityState={{ selected: mode === 'quick' }} onPress={startQuickMode} style={[styles.modeButton, mode === 'quick' && { backgroundColor: colors.card }]}>
               <Text style={[styles.modeButtonText, { color: mode === 'quick' ? colors.text : colors.textMuted }]}>Quick Analysis</Text>
@@ -577,7 +408,7 @@ export default function AnalysisScreen() {
             <>
               <View style={styles.uploadHero}>
                 <View style={[styles.uploadIcon, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
-                  <Feather name="image" size={48} color="#8E8E93" />
+                  <Feather name="image" size={48} color={colors.textMuted} />
                 </View>
                 <Text style={[styles.uploadTitle, { color: colors.text }]}>Quick Analysis</Text>
                 <Text style={[styles.uploadSubtext, { color: colors.textSecondary }]}>Upload one chart for a fast setup read.</Text>
@@ -585,12 +416,12 @@ export default function AnalysisScreen() {
 
               <View style={styles.pickActions}>
                 <TouchableOpacity style={[styles.pickBtn, { backgroundColor: colors.card, borderColor: colors.cardBorder }]} onPress={pickFromCamera}>
-                  <View style={styles.pickBtnIcon}><Feather name="camera" size={28} color="#FFFFFF" /></View>
+                  <View style={[styles.pickBtnIcon, { backgroundColor: colors.surface }]}><Feather name="camera" size={28} color={colors.text} /></View>
                   <Text style={[styles.pickBtnLabel, { color: colors.text }]}>Camera</Text>
                   <Text style={[styles.pickBtnSub, { color: colors.textSecondary }]}>Take a photo now</Text>
                 </TouchableOpacity>
                 <TouchableOpacity style={[styles.pickBtn, { backgroundColor: colors.card, borderColor: colors.cardBorder }]} onPress={pickFromGallery}>
-                  <View style={styles.pickBtnIcon}><Feather name="image" size={28} color="#FFFFFF" /></View>
+                  <View style={[styles.pickBtnIcon, { backgroundColor: colors.surface }]}><Feather name="image" size={28} color={colors.text} /></View>
                   <Text style={[styles.pickBtnLabel, { color: colors.text }]}>Gallery</Text>
                   <Text style={[styles.pickBtnSub, { color: colors.textSecondary }]}>Choose existing chart</Text>
                 </TouchableOpacity>
@@ -651,18 +482,18 @@ export default function AnalysisScreen() {
       )}
 
       {stage === 'preview' && imageUri && (
-        <Animated.View entering={FadeIn.duration(400)} style={[styles.content, { paddingBottom: botPad + 24 }]}>
+        <Animated.View entering={reduceMotion ? undefined : FadeIn.duration(400)} style={[styles.content, { paddingBottom: botPad + 24 }]}>
           <NoticeBanner />
           <View style={[styles.previewContainer, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}> 
             <Image source={{ uri: imageUri }} style={styles.previewImage} resizeMode="cover" />
           </View>
           <View style={styles.previewActions}>
             <TouchableOpacity style={[styles.changeBtn, { backgroundColor: colors.card, borderColor: colors.cardBorder }]} onPress={() => setStage('pick')}>
-              <Feather name="refresh-cw" size={16} color="#8E8E93" />
+                      <Feather name="refresh-cw" size={16} color={colors.textSecondary} />
               <Text style={[styles.changeBtnText, { color: colors.textSecondary }]}>Change Image</Text>
             </TouchableOpacity>
             <TouchableOpacity style={[styles.analyzeBtn, { backgroundColor: colors.primary }]} onPress={handleImageSelected}>
-              <Feather name="zap" size={18} color="#000" />
+              <Feather name="zap" size={18} color={colors.primaryForeground} />
               <Text style={[styles.analyzeBtnText, { color: colors.primaryForeground }]}>{retryingExistingChart ? 'Retry Analysis' : 'Analyse Chart'}</Text>
             </TouchableOpacity>
           </View>

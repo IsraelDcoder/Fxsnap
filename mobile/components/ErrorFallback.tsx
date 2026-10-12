@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import {
   Modal,
   Platform,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -10,6 +9,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useColors } from '@/hooks/useColors';
+import { AnimatedTouchableOpacity } from '@/components/AnimatedTouchableOpacity';
 import { Feather } from '@expo/vector-icons';
 import { reloadAppAsync } from 'expo';
 
@@ -50,21 +50,20 @@ export function ErrorFallback({ error, resetError }: ErrorFallbackProps) {
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       {__DEV__ ? (
-        <Pressable
+        <AnimatedTouchableOpacity
           onPress={() => setIsModalVisible(true)}
           accessibilityLabel="View error details"
           accessibilityRole="button"
-          style={({ pressed }) => [
+          style={[
             styles.topButton,
             {
               top: insets.top + 16,
               backgroundColor: colors.card,
-              opacity: pressed ? 0.8 : 1,
             },
           ]}
         >
           <Feather name="alert-circle" size={20} color={colors.foreground} />
-        </Pressable>
+        </AnimatedTouchableOpacity>
       ) : null}
 
       <View style={styles.content}>
@@ -76,14 +75,12 @@ export function ErrorFallback({ error, resetError }: ErrorFallbackProps) {
           Please reload the app to continue.
         </Text>
 
-        <Pressable
+        <AnimatedTouchableOpacity
           onPress={handleRestart}
-          style={({ pressed }) => [
+          style={[
             styles.button,
             {
               backgroundColor: colors.primary,
-              opacity: pressed ? 0.9 : 1,
-              transform: [{ scale: pressed ? 0.98 : 1 }],
             },
           ]}
         >
@@ -92,7 +89,7 @@ export function ErrorFallback({ error, resetError }: ErrorFallbackProps) {
           >
             Try Again
           </Text>
-        </Pressable>
+        </AnimatedTouchableOpacity>
       </View>
 
       {__DEV__ ? (
@@ -118,17 +115,14 @@ export function ErrorFallback({ error, resetError }: ErrorFallbackProps) {
                 <Text style={[styles.modalTitle, { color: colors.foreground }]}>
                   Error Details
                 </Text>
-                <Pressable
+                <AnimatedTouchableOpacity
                   onPress={() => setIsModalVisible(false)}
                   accessibilityLabel="Close error details"
                   accessibilityRole="button"
-                  style={({ pressed }) => [
-                    styles.closeButton,
-                    { opacity: pressed ? 0.6 : 1 },
-                  ]}
+                  style={styles.closeButton}
                 >
                   <Feather name="x" size={24} color={colors.foreground} />
-                </Pressable>
+                </AnimatedTouchableOpacity>
               </View>
 
               <ScrollView

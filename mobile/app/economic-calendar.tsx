@@ -1,5 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { AnimatedTouchableOpacity as TouchableOpacity } from '@/components/AnimatedTouchableOpacity';
+import { AmbientBackdrop } from '@/components/AmbientBackdrop';
+import Animated, { FadeInDown, useReducedMotion } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 import { router } from 'expo-router';
@@ -28,6 +31,7 @@ function timeLabel(value: string) {
 export default function EconomicCalendarScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
+  const reduceMotion = useReducedMotion();
   const [events, setEvents] = useState<UpcomingEvent[]>([]);
   const [live, setLive] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -67,6 +71,7 @@ export default function EconomicCalendarScreen() {
 
   return (
     <View style={[styles.screen, { backgroundColor: colors.background, paddingTop: insets.top + 8 }]}>
+      <AmbientBackdrop />
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={[styles.headerButton, { backgroundColor: colors.card, borderColor: colors.cardBorder }]} accessibilityLabel="Back">
           <Feather name="arrow-left" size={20} color={colors.text} />
@@ -111,10 +116,14 @@ export default function EconomicCalendarScreen() {
           groupedEvents.map(([day, dayEvents]) => (
             <View key={day} style={styles.dayGroup}>
               <Text style={[styles.dayTitle, { color: colors.textSecondary }]}>{day}</Text>
-              {dayEvents.map((event) => {
+              {dayEvents.map((event, eventIndex) => {
                 const impactColor = event.impact === 'HIGH' ? colors.sell : event.impact === 'MEDIUM' ? colors.buy : colors.textMuted;
                 return (
-                  <View key={event.id} style={[styles.eventCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+                  <Animated.View
+                    key={event.id}
+                    entering={reduceMotion ? undefined : FadeInDown.delay(Math.min(eventIndex * 35, 210)).duration(260)}
+                    style={[styles.eventCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}
+                  >
                     <View style={[styles.impactRail, { backgroundColor: impactColor }]} />
                     <View style={styles.eventContent}>
                       <View style={styles.eventTopline}>
@@ -128,7 +137,7 @@ export default function EconomicCalendarScreen() {
                         {[event.currency, event.country].filter(Boolean).join(' · ') || 'Currency not specified'}
                       </Text>
                     </View>
-                  </View>
+                  </Animated.View>
                 );
               })}
             </View>

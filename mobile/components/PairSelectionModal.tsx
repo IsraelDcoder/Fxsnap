@@ -4,9 +4,9 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TouchableOpacity,
   View,
 } from 'react-native';
+import { AnimatedTouchableOpacity as TouchableOpacity } from '@/components/AnimatedTouchableOpacity';
 import { Feather } from '@expo/vector-icons';
 import {
   INSTRUMENTS,

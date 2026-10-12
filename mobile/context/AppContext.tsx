@@ -7,6 +7,12 @@ import { getServerAnalysisAccess, type ServerAnalysisAccess } from '@/services/a
 import { getFeatureAccessDecision, isFreeAnalysisExhausted, type FeatureAccessDecision, type ProtectedFeature } from '@/services/featureAccess';
 import { setHapticsEnabled } from '@/services/haptics';
 import { createDailyRiskActivity, getLocalRiskDateKey, normalizeDailyRiskActivity, type DailyRiskActivity, type OpenRiskPosition } from '@/services/risk';
+import {
+  getAuthenticatedAccount,
+  getFxsnapAccountData,
+  saveFxsnapAccountData,
+} from '@/services/account';
+import { subscribeToAccountDataChanges } from '@/services/accountDataEvents';
 
 export const APP_DATA_VERSION = 3;
 const DATA_VERSION_KEY = 'fxsnap:dataVersion';
@@ -141,6 +147,11 @@ export interface SavedBrief {
 
 export interface AppSettings {
   displayName: string;
+  themeMode: 'light' | 'dark' | 'system';
+  preferredMarket: 'crypto' | 'stocks' | 'forex' | 'futures';
+  onboardingRiskTolerance: 'low' | 'medium' | 'high';
+  preferredTradingStyle: 'scalping' | 'day_trading' | 'swing';
+  analysisDetail: 'basic' | 'standard' | 'advanced';
   accountBalance: number;
   balanceSet: boolean;
   riskPercent: number;
@@ -184,10 +195,18 @@ interface AppContextValue {
   exportData: () => Promise<string>;
   importData: (backupJson: string) => Promise<void>;
   deleteAccount: () => Promise<void>;
+  syncAccountData: () => Promise<void>;
+  stopAccountDataSync: () => void;
+  accountSyncStatus: 'signed_out' | 'syncing' | 'synced' | 'error';
 }
 
 const defaultSettings: AppSettings = {
   displayName: '',
+  themeMode: 'light',
+  preferredMarket: 'forex',
+  onboardingRiskTolerance: 'low',
+  preferredTradingStyle: 'day_trading',
+  analysisDetail: 'basic',
   accountBalance: 1000,
   balanceSet: false,
   riskPercent: 1,
@@ -196,7 +215,7 @@ const defaultSettings: AppSettings = {
   maxTradesPerDay: 3,
   maxConsecutiveLosses: 3,
   hapticsEnabled: true,
-  darkMode: true,
+  darkMode: false,
 };
 
 export interface AppBackup {
@@ -210,14 +229,58 @@ export interface AppBackup {
   savedStrategies: SavedStrategy[];
   savedBriefs: SavedBrief[];
   riskActivity?: DailyRiskActivity;
+  localPreferences?: Record<string, string | null>;
+}
+
+const SYNCED_LOCAL_PREFERENCE_KEYS = [
+  'fxsnap:notificationSettings',
+  'fxsnap:dailyBrief:assignments:v1',
+  'fxsnap:dailyBrief:reads:v1',
+  'fxsnap:profilePhoto:v1',
+  'fxsnap:traderProfile:v1',
+];
+
+function isPreferredMarket(value: unknown): value is AppSettings['preferredMarket'] {
+  return value === 'crypto' || value === 'stocks' || value === 'forex' || value === 'futures';
+}
+
+function isRiskTolerance(value: unknown): value is AppSettings['onboardingRiskTolerance'] {
+  return value === 'low' || value === 'medium' || value === 'high';
+}
+
+function isTradingStyle(value: unknown): value is AppSettings['preferredTradingStyle'] {
+  return value === 'scalping' || value === 'day_trading' || value === 'swing';
+}
+
+function isAnalysisDetail(value: unknown): value is AppSettings['analysisDetail'] {
+  return value === 'basic' || value === 'standard' || value === 'advanced';
 }
 
 function migrateSettings(value: unknown): AppSettings {
   const stored = value && typeof value === 'object' ? value as Partial<AppSettings> : {};
+  const themeMode = stored.themeMode === 'light' || stored.themeMode === 'dark' || stored.themeMode === 'system'
+    ? stored.themeMode
+    : stored.darkMode === false
+      ? 'light'
+      : defaultSettings.themeMode;
   return {
     ...defaultSettings,
     ...stored,
+    themeMode,
+    darkMode: themeMode === 'dark',
     displayName: typeof stored.displayName === 'string' ? stored.displayName : '',
+    preferredMarket: isPreferredMarket(stored.preferredMarket)
+      ? stored.preferredMarket
+      : defaultSettings.preferredMarket,
+    onboardingRiskTolerance: isRiskTolerance(stored.onboardingRiskTolerance)
+      ? stored.onboardingRiskTolerance
+      : defaultSettings.onboardingRiskTolerance,
+    preferredTradingStyle: isTradingStyle(stored.preferredTradingStyle)
+      ? stored.preferredTradingStyle
+      : defaultSettings.preferredTradingStyle,
+    analysisDetail: isAnalysisDetail(stored.analysisDetail)
+      ? stored.analysisDetail
+      : defaultSettings.analysisDetail,
     maxDailyLossPercent: Number.isFinite(Number(stored.maxDailyLossPercent)) ? Number(stored.maxDailyLossPercent) : defaultSettings.maxDailyLossPercent,
     maxOpenRiskPercent: Number.isFinite(Number(stored.maxOpenRiskPercent)) ? Number(stored.maxOpenRiskPercent) : defaultSettings.maxOpenRiskPercent,
     maxTradesPerDay: Number.isFinite(Number(stored.maxTradesPerDay)) ? Number(stored.maxTradesPerDay) : defaultSettings.maxTradesPerDay,
@@ -303,8 +366,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [riskActivity, setRiskActivity] = useState<DailyRiskActivity>(() => createDailyRiskActivity(getLocalRiskDateKey()));
   const [currentAnalysis, setCurrentAnalysis] = useState<AnalysisResult | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [cloudSyncEnabled, setCloudSyncEnabled] = useState(false);
+  const [accountDataRevision, setAccountDataRevision] = useState(0);
+  const [accountSyncStatus, setAccountSyncStatus] = useState<AppContextValue['accountSyncStatus']>('signed_out');
   const [pendingFeatureRoute, setPendingFeatureRoute] = useState<string | null>(null);
   const analysisAccessGrant = useRef(false);
+  const accountSyncQueue = useRef<Promise<void>>(Promise.resolve());
 
   useEffect(() => {
     const load = async () => {
@@ -540,6 +607,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   };
 
   const exportData = async (): Promise<string> => {
+    const localPreferenceEntries = await AsyncStorage.multiGet(SYNCED_LOCAL_PREFERENCE_KEYS);
+    const localPreferences = Object.fromEntries(localPreferenceEntries.filter(([key, value]) => (
+      key !== 'fxsnap:profilePhoto:v1' || value?.startsWith('data:image/')
+    )));
     const backup: AppBackup = {
       backupVersion: BACKUP_VERSION,
       appDataVersion: APP_DATA_VERSION,
@@ -551,6 +622,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       savedStrategies,
       savedBriefs,
       riskActivity,
+      localPreferences,
     };
     return JSON.stringify(backup, null, 2);
   };
@@ -570,6 +642,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       .map(migrateSavedBrief)
       .filter((brief): brief is SavedBrief => brief !== null);
     const importedOnboarding = backup.onboardingComplete === true;
+    const preferenceEntries = Object.entries(backup.localPreferences || {})
+      .filter(([key, value]) => SYNCED_LOCAL_PREFERENCE_KEYS.includes(key) && typeof value === 'string')
+      .map(([key, value]) => [key, value as string] as [string, string]);
+    const removedPreferences = Object.entries(backup.localPreferences || {})
+      .filter(([key, value]) => SYNCED_LOCAL_PREFERENCE_KEYS.includes(key) && value === null)
+      .map(([key]) => key);
     await AsyncStorage.multiSet([
       ['onboardingComplete', String(importedOnboarding)],
       ['settings', JSON.stringify(importedSettings)],
@@ -578,7 +656,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       ['savedBriefs', JSON.stringify(importedBriefs)],
       [RISK_ACTIVITY_KEY, JSON.stringify(normalizeDailyRiskActivity(backup.riskActivity || null, getLocalRiskDateKey()))],
       [DATA_VERSION_KEY, String(APP_DATA_VERSION)],
+      ...preferenceEntries,
     ]);
+    if (removedPreferences.length > 0) await AsyncStorage.multiRemove(removedPreferences);
     setOnboardingComplete(importedOnboarding);
     setSettings(importedSettings);
     setSavedAnalyses(importedAnalyses);
@@ -587,7 +667,90 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setRiskActivity(normalizeDailyRiskActivity(backup.riskActivity || null, getLocalRiskDateKey()));
   };
 
+  const syncAccountData = async () => {
+    if (Platform.OS === 'web') throw new Error('Account data sync is available in the FXSnap mobile app.');
+    setAccountSyncStatus('syncing');
+    try {
+      const cloudData = await getFxsnapAccountData();
+      if (cloudData) {
+        await importData(JSON.stringify(cloudData));
+      } else {
+        const initialData = JSON.parse(await exportData()) as Record<string, unknown>;
+        await saveFxsnapAccountData(initialData);
+      }
+      setCloudSyncEnabled(true);
+      setAccountSyncStatus('synced');
+    } catch (error) {
+      setAccountSyncStatus('error');
+      throw error;
+    }
+  };
+
+  const stopAccountDataSync = () => {
+    setCloudSyncEnabled(false);
+    setAccountSyncStatus('signed_out');
+  };
+
+  useEffect(() => {
+    if (isLoading || Platform.OS === 'web') return;
+    let active = true;
+    void getAuthenticatedAccount()
+      .then(async (account) => {
+        if (!active) return;
+        if (!account) {
+          setAccountSyncStatus('signed_out');
+          return null;
+        }
+        const cloudData = await getFxsnapAccountData();
+        if (cloudData) await importData(JSON.stringify(cloudData));
+        setCloudSyncEnabled(true);
+        setAccountSyncStatus('synced');
+        return cloudData;
+      })
+      .catch(() => {
+        if (active) setAccountSyncStatus('error');
+      });
+    return () => { active = false; };
+  }, [isLoading]);
+
+  useEffect(() => {
+    return subscribeToAccountDataChanges(() => setAccountDataRevision((revision) => revision + 1));
+  }, []);
+
+  useEffect(() => {
+    if (!cloudSyncEnabled || isLoading) return;
+    const timeout = setTimeout(() => {
+      setAccountSyncStatus('syncing');
+      void exportData()
+        .then((backup) => {
+          const data = JSON.parse(backup) as Record<string, unknown>;
+          accountSyncQueue.current = accountSyncQueue.current
+            .catch(() => undefined)
+            .then(() => saveFxsnapAccountData(data));
+          return accountSyncQueue.current;
+        })
+        .then(() => setAccountSyncStatus('synced'))
+        .catch((error: unknown) => {
+          console.error('[Account] FXSnap data sync failed.', error instanceof Error ? error.message : 'Unknown error');
+          setAccountSyncStatus('error');
+        });
+    }, 900);
+    return () => clearTimeout(timeout);
+  }, [
+    cloudSyncEnabled,
+    isLoading,
+    onboardingComplete,
+    settings,
+    savedAnalyses,
+    savedStrategies,
+    savedBriefs,
+    riskActivity,
+    accountDataRevision,
+  ]);
+
   const deleteAccount = async () => {
+    setCloudSyncEnabled(false);
+    setAccountSyncStatus('signed_out');
     await AsyncStorage.multiRemove([
       'onboardingComplete',
       'settings',
@@ -644,6 +807,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         exportData,
         importData,
         deleteAccount,
+        syncAccountData,
+        stopAccountDataSync,
+        accountSyncStatus,
       }}
     >
       {children}
