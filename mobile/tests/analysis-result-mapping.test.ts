@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { normalizeChartTradeSetup, normalizeLatestVisiblePrice, type ChartAnalysisResult } from '../services/chartDetection';
-import { buildAnalysisResult, formatDevelopingNote, formatTradeReadiness, getMarketDevelopmentPlan, getMissingTradeLevelsExplanation, getTradeReadinessLabel } from '../services/analysisResult';
+import { buildAnalysisResult, formatDevelopingNote, formatRiskReward, formatTradeReadiness, getMarketDevelopmentPlan, getMissingTradeLevelsExplanation, getTradeReadinessLabel, hasCompleteTradeLevels, isUnavailableAnalysisValue } from '../services/analysisResult';
 
 function chartResult(overrides: Partial<ChartAnalysisResult> = {}): ChartAnalysisResult {
   return {
@@ -292,7 +292,10 @@ test('explains missing no-trade levels as a hold while the market develops', () 
     getMissingTradeLevelsExplanation(result),
     'Hold for now — the market is still developing. Wait for direction and price levels to confirm before considering an entry. Risk/reward will be calculated when the chart supports entry, stop, and target prices.',
   );
-  assert.equal(getMissingTradeLevelsExplanation({ ...result, status: 'success' }), null);
+  assert.match(
+    getMissingTradeLevelsExplanation({ ...result, status: 'success' }) ?? '',
+    /Hold for now — the market is still developing/,
+  );
   assert.equal(getMissingTradeLevelsExplanation({
     ...result,
     tradeSetup: { ...result.tradeSetup!, entryZone: '1.1000', stopLoss: '1.0950' },
@@ -324,6 +327,33 @@ test('neutral chart results always include a clear market-development plan', () 
 test('developing analysis notes replace blocked-trade language with confirmation guidance', () => {
   const note = formatDevelopingNote('No trade: the stop was not established and RR is not calculable.');
   assert.equal(note, 'hold for now: the stop was awaiting confirmation and RR is calculated when levels are confirmed.');
+});
+
+test('recognizes model-generated unavailable phrases instead of displaying them as prices', () => {
+  assert.equal(isUnavailableAnalysisValue('Not established from the chart'), true);
+  assert.equal(isUnavailableAnalysisValue('Entry not established'), true);
+  assert.equal(isUnavailableAnalysisValue('1.0850'), false);
+  assert.equal(formatRiskReward('Not established'), '—');
+  assert.equal(formatRiskReward('RR not calculable'), '—');
+  assert.equal(formatRiskReward('1:2'), '1:2');
+});
+
+test('incomplete successful responses are presented as developing, not as established trades', () => {
+  const partial = buildAnalysisResult(chartResult({
+    status: 'success',
+    trade_setup: {
+      type: 'buy',
+      entry_zone: 'Entry not established',
+      stop_loss: 'not established from chart',
+      take_profit: 'not established',
+      take_profit_levels: [],
+      risk_reward: 'not established',
+    },
+  }), 'EUR/USD');
+
+  assert.equal(hasCompleteTradeLevels(partial), false);
+  assert.match(getMissingTradeLevelsExplanation(partial) ?? '', /Hold for now — the market is still developing/);
+  assert.match(getMarketDevelopmentPlan(partial), /Hold for now — the market is still developing/);
 });
 
 test('trade readiness describes a hold while levels are incomplete', () => {

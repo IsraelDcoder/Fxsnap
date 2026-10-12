@@ -2,22 +2,35 @@ import type { AnalysisResult } from '@/context/AppContext';
 import type { ChartAnalysisResult } from '@/services/chartDetection';
 import { resolveAnalysisDirection } from '@/services/analysisDirection';
 
-export function getMissingTradeLevelsExplanation(analysis: Pick<AnalysisResult, 'status' | 'tradeSetup' | 'takeProfitLevels'>): string | null {
-  if (analysis.status !== 'no_trade') return null;
+export function isUnavailableAnalysisValue(value: unknown): boolean {
+  if (value == null || String(value).trim() === '') return true;
+  const normalized = String(value).trim().toLowerCase();
+  return ['none', 'not_clear', 'unknown', 'n/a', 'na', '—', 'not provided', 'not established', 'not calculable']
+    .includes(normalized)
+    || /^(?:(?:entry|stop(?:\s+loss)?|take\s+profit(?:\s+\d+)?|risk\s*:\s*reward|rr|price\s+levels?)\s*)?(?:(?:is|are)\s+)?(?:not|unavailable|unknown|pending|awaiting|cannot\s+be|can't\s+be|could\s+not\s+be)\s+(?:yet\s+)?(?:established|provided|identified|readable|calculable|calculated|available|confirmed|determined)(?:\b.*)?$/i.test(String(value).trim());
+}
 
-  const isAvailable = (value: string | number | undefined) => value != null
-    && String(value).trim() !== ''
-    && !['none', 'not_clear', 'unknown', 'n/a', 'na', '—'].includes(String(value).trim().toLowerCase());
-  const hasTakeProfit = (analysis.takeProfitLevels ?? []).some(isAvailable)
-    || isAvailable(analysis.tradeSetup?.takeProfit);
-  const hasEntryAndStop = isAvailable(analysis.tradeSetup?.entryZone)
-    && isAvailable(analysis.tradeSetup?.stopLoss);
-  if (hasEntryAndStop && hasTakeProfit) return null;
+export function hasCompleteTradeLevels(analysis: Pick<AnalysisResult, 'tradeSetup' | 'takeProfitLevels'>): boolean {
+  const hasTarget = (analysis.takeProfitLevels ?? []).some((value) => !isUnavailableAnalysisValue(value))
+    || !isUnavailableAnalysisValue(analysis.tradeSetup?.takeProfit);
+  return hasTarget
+    && !isUnavailableAnalysisValue(analysis.tradeSetup?.entryZone)
+    && !isUnavailableAnalysisValue(analysis.tradeSetup?.stopLoss);
+}
+
+export function getMissingTradeLevelsExplanation(analysis: Pick<AnalysisResult, 'status' | 'tradeSetup' | 'takeProfitLevels'>): string | null {
+  if (analysis.status !== 'no_trade' && analysis.status !== 'success') return null;
+  if (hasCompleteTradeLevels(analysis)) return null;
   return 'Hold for now — the market is still developing. Wait for direction and price levels to confirm before considering an entry. Risk/reward will be calculated when the chart supports entry, stop, and target prices.';
 }
 
-export function getMarketDevelopmentPlan(analysis: Pick<AnalysisResult, 'status' | 'marketBias' | 'analysis'>, includeFullContext = false): string {
-  if (analysis.status !== 'no_trade') return 'Review the chart evidence and confirm the setup against current market conditions before acting.';
+export function getMarketDevelopmentPlan(
+  analysis: Pick<AnalysisResult, 'status' | 'marketBias' | 'analysis' | 'tradeSetup' | 'takeProfitLevels'>,
+  includeFullContext = false,
+): string {
+  if (analysis.status !== 'no_trade' && (analysis.status !== 'success' || hasCompleteTradeLevels(analysis))) {
+    return 'Review the chart evidence and confirm the setup against current market conditions before acting.';
+  }
 
   const bias = analysis.marketBias ?? analysis.analysis?.trend ?? 'neutral';
   const waitCondition = bias === 'bullish'
@@ -45,6 +58,13 @@ export function formatDevelopingNote(note: string): string {
     .replace(/\bnot calculable\b/gi, 'calculated when levels are confirmed');
 }
 
+export function formatRiskReward(value: unknown): string {
+  if (isUnavailableAnalysisValue(value)) return '—';
+  if (typeof value === 'string' && value.includes(':')) return value;
+  const number = Number(value);
+  return Number.isFinite(number) ? String(Math.round(number * 100) / 100) : String(value);
+}
+
 export function getTradeReadinessLabel(
   tradeStatus: string | undefined,
   entry: string,
@@ -56,8 +76,7 @@ export function getTradeReadinessLabel(
   if (tradeStatus === 'actionable') return 'Ready';
   if (tradeStatus?.startsWith('waiting')) return 'Waiting for confirmation';
 
-  const isIdentified = (value: string) => value.trim() !== ''
-    && !['—', 'not established', 'not provided', 'none', 'unknown', 'not_clear'].includes(value.trim().toLowerCase());
+  const isIdentified = (value: string) => !isUnavailableAnalysisValue(value);
   if (isIdentified(entry) && isIdentified(stopLoss) && isIdentified(takeProfit)) {
     const side = direction === 'BUY' || direction === 'SELL' ? `${direction} ` : '';
     const ratio = Number(riskReward);
