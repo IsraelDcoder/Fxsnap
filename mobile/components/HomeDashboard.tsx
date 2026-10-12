@@ -296,7 +296,7 @@ export default function HomeDashboard() {
               <FeatureShortcut icon="calendar" label="Economic Calendar" onPress={() => navigate('/economic-calendar')} />
               <FeatureShortcut icon="bookmark" label="Saved Setups" onPress={() => navigate('/saved')} />
               <FeatureShortcut icon="grid" label="Lot Calculator" onPress={() => navigate('/lot-size-calculator')} />
-              <FeatureShortcut icon="users" label="Community" onPress={() => router.push('/community')} />
+              <FeatureShortcut icon="trending-up" label="Trade Setup" onPress={() => void openProtectedFeature('TRADE_SETUP', '/analysis')} />
               <FeatureShortcut icon="sliders" label="Strategies" onPress={() => void openStrategy()} />
               <FeatureShortcut icon="shield" label="Risk Management" onPress={() => navigate('/risk-management')} />
               <FeatureShortcut icon="book-open" label="Learning Hub" onPress={() => navigate('/daily-brief')} />

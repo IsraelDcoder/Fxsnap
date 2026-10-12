@@ -498,22 +498,6 @@ export default function ProfileScreen() {
           )}
         </View>
 
-        <View style={[styles.brokerCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
-          <View style={styles.brokerIcon}>
-            <Feather name="briefcase" size={18} color={colors.buy} />
-          </View>
-          <View style={styles.brokerContent}>
-            <Text style={[styles.eyebrow, { color: colors.textSecondary }]}>BROKER DISCOVERY</Text>
-            <Text style={[styles.sectionTitle, { color: colors.text }]}>Explore Brokers</Text>
-            <Text style={[styles.helperText, { color: colors.textSecondary }]}>
-              Exness and Deriv are listed as options, not endorsements. Compare instruments, conditions, fees, and regulation independently before choosing.
-            </Text>
-            <TouchableOpacity onPress={() => router.push('/instrument/EURUSD')} style={styles.brokerAction} accessibilityRole="button">
-              <Text style={[styles.completionButtonText, { color: colors.buy }]}>Explore FXSnap instruments</Text>
-              <Feather name="arrow-right" size={15} color={colors.buy} />
-            </TouchableOpacity>
-          </View>
-        </View>
       </ScrollView>
 
       <View style={[styles.bottomNav, { paddingBottom: Math.max(insets.bottom, Platform.OS === 'web' ? 10 : 6), backgroundColor: colors.background, borderTopColor: colors.cardBorder }]}>
@@ -820,10 +804,6 @@ const styles = StyleSheet.create({
   memberBadgeText: { fontSize: 8, letterSpacing: 0.5, fontFamily: 'Inter_700Bold' },
   communityLink: { minHeight: 34, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   shareLink: { minHeight: 32, flexDirection: 'row', alignItems: 'center', gap: 7 },
-  brokerCard: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, borderWidth: 1, borderRadius: 17, padding: 15 },
-  brokerIcon: { width: 38, height: 38, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: '#00E88718' },
-  brokerContent: { flex: 1, gap: 6 },
-  brokerAction: { minHeight: 31, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   errorBox: { minHeight: 42, borderWidth: 1, borderRadius: 12, paddingHorizontal: 11, flexDirection: 'row', alignItems: 'center', gap: 8 },
   errorText: { flex: 1, fontSize: 11, lineHeight: 16, fontFamily: 'Inter_500Medium' },
   bottomNav: { position: 'absolute', left: 0, right: 0, bottom: 0, minHeight: 70, borderTopWidth: StyleSheet.hairlineWidth, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around', paddingTop: 8 },

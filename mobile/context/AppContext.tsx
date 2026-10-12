@@ -366,12 +366,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [riskActivity, setRiskActivity] = useState<DailyRiskActivity>(() => createDailyRiskActivity(getLocalRiskDateKey()));
   const [currentAnalysis, setCurrentAnalysis] = useState<AnalysisResult | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [billingStatusReady, setBillingStatusReady] = useState(!billingIsConfigured());
   const [cloudSyncEnabled, setCloudSyncEnabled] = useState(false);
   const [accountDataRevision, setAccountDataRevision] = useState(0);
   const [accountSyncStatus, setAccountSyncStatus] = useState<AppContextValue['accountSyncStatus']>('signed_out');
   const [pendingFeatureRoute, setPendingFeatureRoute] = useState<string | null>(null);
   const analysisAccessGrant = useRef(false);
   const accountSyncQueue = useRef<Promise<void>>(Promise.resolve());
+  const billingStatusPromise = useRef<Promise<boolean> | null>(null);
 
   useEffect(() => {
     const load = async () => {
@@ -400,7 +402,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         );
 
         setOnboardingComplete(ob === 'true');
-        if (await configureBilling()) setIsSubscribed(await getPremiumStatus());
         setSettings(storedSettings);
         setHapticsEnabled(storedSettings.hapticsEnabled);
         setSavedAnalyses(storedAnalyses);
@@ -436,11 +437,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     let cleanup: () => void = () => undefined;
-    void configureBilling().then(async (available) => {
-      if (!available) return;
-      setIsSubscribed(await getPremiumStatus());
-      cleanup = addBillingListener(setIsSubscribed);
-    }).catch(() => setIsSubscribed(false));
+    const statusPromise = configureBilling()
+      .then((available) => available ? getPremiumStatus() : false)
+      .catch((error: unknown) => {
+        console.warn('[Billing] Could not load subscription status during startup.', error);
+        return false;
+      });
+    billingStatusPromise.current = statusPromise;
+    void statusPromise.then((active) => {
+      setIsSubscribed(active);
+      setBillingStatusReady(true);
+      if (billingIsConfigured()) cleanup = addBillingListener(setIsSubscribed);
+    });
     return () => cleanup();
   }, []);
 
@@ -461,7 +469,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       return { allowed: false, requiresPaywall: false, error: 'Account access is still loading. Please try again.' };
     }
 
-    const subscriptionActive = isSubscribed;
+    const subscriptionActive = billingAvailable && !billingStatusReady
+      ? await (billingStatusPromise.current ?? Promise.resolve(false))
+      : isSubscribed;
     let analysisAccess: ServerAnalysisAccess | null = null;
     let accessCheckError: unknown;
     if (!subscriptionActive && (feature === 'AI_ANALYSIS' || feature === 'TRADE_SETUP')) {
@@ -521,7 +531,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       router.replace('/paywall');
     }
     return decision;
-  }, [isLoading, isSubscribed]);
+  }, [billingAvailable, billingStatusReady, isLoading, isSubscribed]);
 
   const consumeAnalysisAccessGrant = useCallback(() => {
     const granted = analysisAccessGrant.current;
