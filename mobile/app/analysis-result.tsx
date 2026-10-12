@@ -44,7 +44,7 @@ import { canViewFullAnalysis } from '@/services/featureAccess';
 import { getInstrument } from '@/services/instruments';
 import { shareAnalysisCardOnWeb } from '@/services/shareAnalysisCard';
 import { formatAnalysisDirection, resolveAnalysisDirection } from '@/services/analysisDirection';
-import { formatTradeReadiness, getMissingTradeLevelsExplanation } from '@/services/analysisResult';
+import { formatDevelopingNote, formatTradeReadiness, getMarketDevelopmentPlan, getMissingTradeLevelsExplanation } from '@/services/analysisResult';
 import { formatInstrumentPriceText } from '@/services/priceFormatting';
 
 type ResultTab = 'analysis' | 'insights';
@@ -69,11 +69,11 @@ function currencyFlag(currency: string) {
 function firstAvailableLevel(...values: (string | number | undefined)[]) {
   return values.find((value) => value != null
     && String(value).trim() !== ''
-    && !['none', 'not_clear', 'unknown'].includes(String(value).trim().toLowerCase()));
+    && !['none', 'not_clear', 'unknown', 'n/a', 'na', 'not established', 'not provided'].includes(String(value).trim().toLowerCase()));
 }
 
 function formatRiskReward(value: unknown) {
-  if (typeof value === 'string' && ['none', 'unknown', 'not_clear'].includes(value.trim().toLowerCase())) return '—';
+  if (typeof value === 'string' && ['none', 'unknown', 'not_clear', 'not calculable', 'not provided'].includes(value.trim().toLowerCase())) return '—';
   if (typeof value === 'string' && value.includes(':')) return value;
   const number = Number(value);
   return Number.isFinite(number) ? String(Math.round(number * 100) / 100) : String(value ?? '—');
@@ -209,6 +209,13 @@ export default function AnalysisResultScreen() {
   }, [currentAnalysis?.id]);
 
   useEffect(() => {
+    setAnalysisExpanded(
+      currentAnalysis?.status === 'no_trade'
+      && canViewFullAnalysis(isSubscribed, currentAnalysis.freeAnalysisUsed === true),
+    );
+  }, [currentAnalysis?.id, currentAnalysis?.status, currentAnalysis?.freeAnalysisUsed, isSubscribed]);
+
+  useEffect(() => {
     let active = true;
     const timer = setTimeout(() => {
       void consumeRatingPrompt().then((shouldShow) => {
@@ -261,10 +268,13 @@ export default function AnalysisResultScreen() {
   const stopLevel = formatInstrumentPriceText(firstAvailableLevel(currentAnalysis?.sl, currentAnalysis?.tradeSetup?.stopLoss), pair);
   const tp1Level = formatInstrumentPriceText(usableTargetLevels[0], pair);
   const tp2Level = formatInstrumentPriceText(usableTargetLevels[1], pair);
-  const unavailableLevelLabel = isNoTrade ? 'Not established' : 'Not provided';
+  const unavailableLevelLabel = isNoTrade ? 'Awaiting confirmation' : 'Not provided';
   const entryLevelText = entryLevel === '—' ? unavailableLevelLabel : entryLevel;
-  const stopLevelText = stopLevel === '—' ? unavailableLevelLabel : stopLevel;
-  const tp1LevelText = tp1Level === '—' ? unavailableLevelLabel : tp1Level;
+  const stopLevelText = stopLevel === '—' ? (isNoTrade ? 'Defined with confirmed entry' : unavailableLevelLabel) : stopLevel;
+  const tp1LevelText = tp1Level === '—' ? (isNoTrade ? 'Defined after direction confirms' : unavailableLevelLabel) : tp1Level;
+  const marketDevelopmentPlan = currentAnalysis
+    ? getMarketDevelopmentPlan(currentAnalysis, hasFullAnalysisAccess)
+    : '';
   const missingLevelsExplanation = currentAnalysis
     ? getMissingTradeLevelsExplanation(currentAnalysis)
     : null;
@@ -291,7 +301,7 @@ export default function AnalysisResultScreen() {
     : priceChangeFavorable ? '#39E58C' : '#FF6262';
   const riskReward = formatRiskReward(currentAnalysis?.tradeSetup?.riskReward);
   const riskRewardText = riskReward === '—'
-    ? isNoTrade ? 'Not calculable' : 'Not provided'
+    ? isNoTrade ? 'Calculated when levels confirm' : 'Not provided'
     : riskReward.includes(':') ? riskReward : `1:${riskReward}`;
   const confidence = currentAnalysis?.marketConfidence ?? currentAnalysis?.confidence ?? 0;
   const entryReadiness = Math.round(Math.max(0, Math.min(100, currentAnalysis?.entryReadiness ?? 0)));
@@ -438,7 +448,7 @@ export default function AnalysisResultScreen() {
       if (hasFullAnalysisAccess && currentAnalysis.whyNotNow?.length) {
         lines.push('');
         lines.push('Why Not Now:');
-        currentAnalysis.whyNotNow.forEach((reason) => lines.push(`- ${reason}`));
+        currentAnalysis.whyNotNow.forEach((reason) => lines.push(`- ${isNoTrade ? formatDevelopingNote(reason) : reason}`));
       }
     } else if (isInvalid) {
       lines.push('⚠️ FXSnap — Invalid Chart Image');
@@ -721,12 +731,18 @@ export default function AnalysisResultScreen() {
               <View style={styles.confidenceLine}><Text style={[styles.bodyMuted, { color: colors.textSecondary }]}>Evidence score</Text><Text style={[styles.confidenceText, { color: colors.text }]}>{confidenceLabel} · {confidence}%</Text></View>
               <View style={[styles.confidenceTrack, { backgroundColor: colors.surface }]}><View style={[styles.confidenceProgress, { width: `${Math.max(0, Math.min(confidence, 100))}%`, backgroundColor: directionColor }]} /></View>
             </Animated.View>
+            {isNoTrade ? (
+              <View style={[styles.levelsCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+                <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>MARKET DEVELOPMENT</Text>
+                <Text style={[styles.reasoningText, { color: colors.textSecondary }]}>{marketDevelopmentPlan}</Text>
+              </View>
+            ) : null}
             <View style={[styles.levelsCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
-              <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>TRADE LEVELS</Text>
+              <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>{isNoTrade ? 'CONDITIONAL LEVELS' : 'TRADE LEVELS'}</Text>
               <TradeLevelRow label="Entry" value={entryLevelText} /><View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
               <TradeLevelRow label="Stop Loss" value={stopLevelText} color={colors.sell} /><View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
               <TradeLevelRow label="Take Profit 1" value={tp1LevelText} color={colors.buy} /><View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
-              <TradeLevelRow label="Take Profit 2" value={usableTargetLevels.length > 1 ? (hasFullAnalysisAccess ? tp2Level : '••••••') : 'Not provided'} color={colors.buy} locked={!hasFullAnalysisAccess && usableTargetLevels.length > 1} onPress={() => openLockedContent('tp2')} /><View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
+              <TradeLevelRow label="Take Profit 2" value={usableTargetLevels.length > 1 ? (hasFullAnalysisAccess ? tp2Level : '••••••') : (isNoTrade ? 'Optional after TP1 confirms' : 'Not provided')} color={colors.buy} locked={!hasFullAnalysisAccess && usableTargetLevels.length > 1} onPress={() => openLockedContent('tp2')} /><View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
                 <TradeLevelRow label="Risk : Reward" value={hasFullAnalysisAccess ? riskRewardText : '••••'} color={colors.buy} locked={!hasFullAnalysisAccess} onPress={() => openLockedContent('risk-reward')} />
             </View>
             {missingLevelsExplanation ? (
@@ -745,9 +761,9 @@ export default function AnalysisResultScreen() {
                 <Feather name={hasFullAnalysisAccess && analysisExpanded ? 'chevron-up' : 'chevron-down'} size={18} color={colors.textSecondary} />
               </TouchableOpacity>
               {hasFullAnalysisAccess && analysisExpanded ? (
-                <View style={styles.reasoningList}>{(reasoning.length ? reasoning : ['No additional reasoning was provided for this setup.']).map((reason, index) => <View key={`${index}-${reason}`} style={styles.reasoningRow}><View style={[styles.reasoningBullet, { backgroundColor: colors.buy }]} /><Text style={[styles.reasoningText, { color: colors.textSecondary }]}>{reason}</Text></View>)}</View>
+                <View style={styles.reasoningList}>{(reasoning.length ? reasoning : ['No additional reasoning was provided for this setup.']).map((reason, index) => <View key={`${index}-${reason}`} style={styles.reasoningRow}><View style={[styles.reasoningBullet, { backgroundColor: colors.buy }]} /><Text style={[styles.reasoningText, { color: colors.textSecondary }]}>{isNoTrade ? formatDevelopingNote(reason) : reason}</Text></View>)}</View>
               ) : !hasFullAnalysisAccess ? (
-                <View style={styles.lockedReasoning}><View pointerEvents="none" style={styles.lockedReasoningPreview}>{(reasoning.length ? reasoning.slice(0, 3) : ['Trend and structure analysis', 'Key levels and confluence']).map((reason, index) => <Text key={`${index}-${reason}`} numberOfLines={1} style={[styles.reasoningText, { color: colors.textSecondary }]}>{`• ${reason}`}</Text>)}<BlurView intensity={36} tint={colors.text === '#FFFFFF' ? 'dark' : 'light'} style={StyleSheet.absoluteFill} /></View><TouchableOpacity style={[styles.unlockButton, { backgroundColor: colors.primary }]} onPress={() => openLockedContent('ai-analysis')}><Feather name="lock" size={14} color={colors.primaryForeground} /><Text style={[styles.unlockButtonText, { color: colors.primaryForeground }]}>Unlock full analysis</Text></TouchableOpacity></View>
+                <View style={styles.lockedReasoning}><View pointerEvents="none" style={styles.lockedReasoningPreview}>{(reasoning.length ? reasoning.slice(0, 3) : ['Trend and structure analysis', 'Key levels and confluence']).map((reason, index) => <Text key={`${index}-${reason}`} numberOfLines={1} style={[styles.reasoningText, { color: colors.textSecondary }]}>{`• ${isNoTrade ? formatDevelopingNote(reason) : reason}`}</Text>)}<BlurView intensity={36} tint={colors.text === '#FFFFFF' ? 'dark' : 'light'} style={StyleSheet.absoluteFill} /></View><TouchableOpacity style={[styles.unlockButton, { backgroundColor: colors.primary }]} onPress={() => openLockedContent('ai-analysis')}><Feather name="lock" size={14} color={colors.primaryForeground} /><Text style={[styles.unlockButtonText, { color: colors.primaryForeground }]}>Unlock full analysis</Text></TouchableOpacity></View>
               ) : null}
             </View>
           </>
@@ -789,7 +805,7 @@ export default function AnalysisResultScreen() {
             <View style={[styles.levelsCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
               <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>RISK NOTES</Text>
               {[...(currentAnalysis.whyNotNow ?? []), ...(currentAnalysis.dataLimitations ?? []), ...(currentAnalysis.rrIssues ?? [])].length
-                ? [...(currentAnalysis.whyNotNow ?? []), ...(currentAnalysis.dataLimitations ?? []), ...(currentAnalysis.rrIssues ?? [])].map((note, index) => <View key={`${index}-${note}`} style={styles.reasoningRow}><Feather name="alert-circle" size={14} color="#FFC857" /><Text style={[styles.reasoningText, { color: colors.textSecondary }]}>{note}</Text></View>)
+                ? [...(currentAnalysis.whyNotNow ?? []), ...(currentAnalysis.dataLimitations ?? []), ...(currentAnalysis.rrIssues ?? [])].map((note, index) => <View key={`${index}-${note}`} style={styles.reasoningRow}><Feather name="alert-circle" size={14} color="#FFC857" /><Text style={[styles.reasoningText, { color: colors.textSecondary }]}>{isNoTrade ? formatDevelopingNote(note) : note}</Text></View>)
                 : <Text style={[styles.reasoningText, { color: colors.textSecondary }]}>No additional risk notes provided.</Text>}
             </View>
           </>

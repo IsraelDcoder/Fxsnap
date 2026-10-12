@@ -58,16 +58,24 @@ const directionalChartWithoutLevels = {
   reasons: [],
 };
 
-test('one conditional follow-up is requested for readable charts with incomplete levels', () => {
+test('one conditional follow-up is requested only for readable directional charts with incomplete levels', () => {
   assert.equal(shouldRequestCandidateLevelFollowup(directionalChartWithoutLevels), true);
   assert.equal(shouldRequestCandidateLevelFollowup({
     ...directionalChartWithoutLevels,
     marketBias: 'neutral',
-  }), true);
+  }), false);
   assert.equal(shouldRequestCandidateLevelFollowup({
     ...directionalChartWithoutLevels,
     marketBias: 'mixed',
-  }), true);
+  }), false);
+  assert.equal(shouldRequestCandidateLevelFollowup({
+    ...directionalChartWithoutLevels,
+    marketBias: undefined,
+  }), false);
+  assert.equal(shouldRequestCandidateLevelFollowup({
+    ...directionalChartWithoutLevels,
+    chart: { ...directionalChartWithoutLevels.chart, has_enough_candles: false },
+  }), false);
   assert.equal(shouldRequestCandidateLevelFollowup({
     ...directionalChartWithoutLevels,
     chart: { ...directionalChartWithoutLevels.chart, price_scale_visible: false },
@@ -75,6 +83,10 @@ test('one conditional follow-up is requested for readable charts with incomplete
   assert.equal(shouldRequestCandidateLevelFollowup({
     ...directionalChartWithoutLevels,
     chart: { ...directionalChartWithoutLevels.chart, chart_quality: 'poor' },
+  }), false);
+  assert.equal(shouldRequestCandidateLevelFollowup({
+    ...directionalChartWithoutLevels,
+    chart: { ...directionalChartWithoutLevels.chart, candles_visible: false },
   }), false);
   assert.equal(shouldRequestCandidateLevelFollowup({
     ...directionalChartWithoutLevels,
@@ -477,50 +489,6 @@ test('follow-up calculates RR when it supplies TP1 for existing entry and stop l
   assert.equal(result.trade_setup.risk_reward, 2);
   assert.equal(result.status, 'no_trade');
   assert.equal(result.tradeDecision, 'WAIT');
-});
-
-test('neutral first-pass bias can return evidence-based candidate levels without validating a trade', () => {
-  const neutralChart = {
-    ...directionalChartWithoutLevels,
-    marketBias: 'neutral',
-    analysis: { trend: 'neutral', structure: 'Price is consolidating between visible levels.' },
-  };
-  const result = applyCandidateLevelFollowup(neutralChart, {
-    status: 'candidate',
-    direction: 'buy',
-    entry_zone: '1.1000',
-    stop_loss: '1.0900',
-    take_profit_levels: ['1.1200'],
-    setup_status: 'unclear',
-    reason: 'The chart shows a supported conditional level set, but freshness is unclear.',
-  });
-
-  assert.equal(result.status, 'no_trade');
-  assert.equal(result.trade_setup.type, 'buy');
-  assert.equal(result.trade_setup.entry_zone, '1.1000');
-  assert.equal(result.trade_setup.stop_loss, '1.0900');
-  assert.equal(result.trade_setup.take_profit, '1.1200');
-  assert.equal(result.trade_setup.risk_reward, 2);
-  assert.equal(result.tradeDecision, 'NONE');
-});
-
-test('neutral first-pass bias does not guess direction when follow-up omits it', () => {
-  const neutralChart = {
-    ...directionalChartWithoutLevels,
-    marketBias: 'neutral',
-  };
-  const result = applyCandidateLevelFollowup(neutralChart, {
-    status: 'candidate',
-    entry_zone: '1.1000',
-    stop_loss: '1.0900',
-    take_profit_levels: ['1.1200'],
-    setup_status: 'unclear',
-  });
-
-  assert.equal(result.trade_setup.type, 'none');
-  assert.equal(result.trade_setup.entry_zone, 'none');
-  assert.equal(result.levelFollowupStatus, 'no_candidate');
-  assert.match(result.levelFollowupReason, /clear direction/i);
 });
 
 test('unclear current-price freshness does not hide chart-supported follow-up levels', () => {

@@ -68,7 +68,7 @@ function AnalyzingView({ ready = false }: { ready?: boolean }) {
       </Text>
       <Text style={[styles.analysisSubtext, { color: colors.textSecondary }]}>
         {ready
-          ? 'Your chart read is complete. Opening your results…'
+          ? 'Opening your analysis outcome…'
           : 'We’re reviewing the chart so your result is based on the price action you shared.'}
       </Text>
 
@@ -86,7 +86,7 @@ function AnalyzingView({ ready = false }: { ready?: boolean }) {
           </Animated.Text>
         </View>
         <Text style={[styles.analysisProgressDetail, { color: colors.textSecondary }]}>
-          {ready ? 'Your analysis is ready to view.' : step.detail}
+          {ready ? 'Your result is ready to view.' : step.detail}
         </Text>
         {!ready && (
           <View style={styles.analysisStepDots} accessibilityLabel={`Analysis step ${activeStep + 1} of ${ANALYSIS_STEPS.length}`}>
@@ -307,20 +307,10 @@ export default function AnalysisScreen() {
 
     if (chart.status === 'ai_unavailable' || chart.status === 'ai_invalid_response') {
       trackEvent('analysis_ai_unavailable', { pair });
-      const unavailableMessage = chart.message || 'The analysis response was invalid. Please retry.';
-      setAnalysisError(unavailableMessage);
-      Alert.alert('Analysis unavailable', unavailableMessage);
-      returnToInput();
-      return;
     }
 
     if (chart.status === 'invalid_image') {
-      clearAnalysisRetryRequest();
       trackEvent('analysis_invalid_image', { pair });
-      setAnalysisError(chart.analysis.notes || 'No valid trading chart detected. Please upload a clearer chart.');
-      Alert.alert('Invalid Image', chart.analysis.notes || 'No valid trading chart detected. Please upload a clearer chart.');
-      returnToInput();
-      return;
     }
 
     const result = buildAnalysisResult(chart, pair, sourceImageUri);
@@ -329,9 +319,11 @@ export default function AnalysisScreen() {
       setRetryingExistingChart(false);
     }
     setCurrentAnalysis(result);
-    trackEvent('analysis_succeeded', { pair, status: chart.status, confidence: chart.confidence });
-    await recordRatingEligibleAnalysis();
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    if (chart.status === 'success' || chart.status === 'no_trade') {
+      trackEvent('analysis_succeeded', { pair, status: chart.status, confidence: chart.confidence });
+      await recordRatingEligibleAnalysis();
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    }
     setStage('ready');
     await new Promise((resolve) => setTimeout(resolve, 900));
     router.replace('/analysis-result');

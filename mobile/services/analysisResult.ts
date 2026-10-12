@@ -2,25 +2,47 @@ import type { AnalysisResult } from '@/context/AppContext';
 import type { ChartAnalysisResult } from '@/services/chartDetection';
 import { resolveAnalysisDirection } from '@/services/analysisDirection';
 
-export function getMissingTradeLevelsExplanation(analysis: Pick<AnalysisResult, 'status' | 'direction' | 'tradeSetup' | 'takeProfitLevels'>): string | null {
-  if (analysis.status !== 'no_trade' || !analysis.direction) return null;
+export function getMissingTradeLevelsExplanation(analysis: Pick<AnalysisResult, 'status' | 'tradeSetup' | 'takeProfitLevels'>): string | null {
+  if (analysis.status !== 'no_trade') return null;
 
   const isAvailable = (value: string | number | undefined) => value != null
     && String(value).trim() !== ''
     && !['none', 'not_clear', 'unknown', 'n/a', 'na', '—'].includes(String(value).trim().toLowerCase());
   const hasTakeProfit = (analysis.takeProfitLevels ?? []).some(isAvailable)
     || isAvailable(analysis.tradeSetup?.takeProfit);
-  const missing = [
-    !isAvailable(analysis.tradeSetup?.entryZone) ? 'Entry' : null,
-    !isAvailable(analysis.tradeSetup?.stopLoss) ? 'Stop Loss' : null,
-    !hasTakeProfit ? 'Take Profit 1' : null,
-  ].filter((level): level is string => level != null);
+  const hasEntryAndStop = isAvailable(analysis.tradeSetup?.entryZone)
+    && isAvailable(analysis.tradeSetup?.stopLoss);
+  if (hasEntryAndStop && hasTakeProfit) return null;
+  return 'Hold for now — the market is still developing. Wait for direction and price levels to confirm before considering an entry. Risk/reward will be calculated when the chart supports entry, stop, and target prices.';
+}
 
-  if (missing.length === 0) return null;
-  const missingLevels = missing.length === 1
-    ? missing[0]
-    : `${missing.slice(0, -1).join(', ')} and ${missing[missing.length - 1]}`;
-  return `This is a ${analysis.direction} market read, not a validated trade setup. ${missingLevels} could not be established from the chart, so no prices have been inferred. Risk : Reward cannot be calculated without complete levels.`;
+export function getMarketDevelopmentPlan(analysis: Pick<AnalysisResult, 'status' | 'marketBias' | 'analysis'>, includeFullContext = false): string {
+  if (analysis.status !== 'no_trade') return 'Review the chart evidence and confirm the setup against current market conditions before acting.';
+
+  const bias = analysis.marketBias ?? analysis.analysis?.trend ?? 'neutral';
+  const waitCondition = bias === 'bullish'
+    ? 'Wait for a confirmed bullish entry or retest.'
+    : bias === 'bearish'
+      ? 'Wait for a confirmed bearish entry or retest.'
+      : 'Wait for a clear break, rejection, or directional confirmation.';
+  const structure = analysis.analysis?.structure?.trim();
+  const context = includeFullContext ? analysis.analysis?.notes?.trim() : undefined;
+  const details = [structure, context]
+    .filter((value): value is string => Boolean(value))
+    .map(formatDevelopingNote)
+    .filter((value, index, values) => values.indexOf(value) === index);
+  return `Hold for now — the market is still developing. ${waitCondition}${details.length ? ` Chart context: ${details.join(' ')}` : ''}`;
+}
+
+export function formatDevelopingNote(note: string): string {
+  return note
+    .replace(/\bno[_ -]trade\b/gi, 'hold for now')
+    .replace(/\bno[_ -]setup\b/gi, 'setup is still developing')
+    .replace(/\bnot a validated trade setup\b/gi, 'a setup still awaiting confirmation')
+    .replace(/\b(?:risk\s*\/\s*reward|rr)\s+(?:cannot|can't|could not)\s+be calculated(?:\s+without complete levels)?/gi, 'Risk/reward will be calculated when the price levels are confirmed')
+    .replace(/\bcould not be established\b/gi, 'awaiting chart confirmation')
+    .replace(/\bnot established\b/gi, 'awaiting confirmation')
+    .replace(/\bnot calculable\b/gi, 'calculated when levels are confirmed');
 }
 
 export function getTradeReadinessLabel(
@@ -44,8 +66,7 @@ export function getTradeReadinessLabel(
       : 'awaiting validation';
     return `${side}candidate setup · ${reason}`;
   }
-  if (isIdentified(entry)) return 'Entry identified · setup incomplete';
-  return 'Setup not identified';
+  return 'Hold — market still developing';
 }
 
 export function formatTradeReadiness(

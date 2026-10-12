@@ -2961,7 +2961,7 @@ async function callOpenRouterTrader(imageBase64, mimeType, pair, timeoutMs = 450
 function shouldRequestCandidateLevelFollowup(result) {
   if (!result
     || result.status !== 'no_trade'
-    || !['bullish', 'bearish', 'neutral', 'mixed'].includes(result.marketBias)
+    || !['bullish', 'bearish'].includes(result.marketBias)
     || result.chart?.is_chart !== true
     || !['good', 'acceptable'].includes(result.chart?.chart_quality)
     || !result.chart?.price_scale_visible
@@ -2982,7 +2982,7 @@ function buildCandidateLevelFollowupMessages(imageBase64, mimeType, pair, result
     appInstrumentHint: pair || 'not provided; do not treat as authoritative',
     visibleInstrument: result.chart?.pair || result.detectedPair || 'not identified',
     timeframe: result.timeframe || result.chart?.timeframe || 'not identified',
-    firstPassBias: result.marketBias,
+    establishedDirection: result.marketBias,
     latestVisiblePrice: result.chart?.latest_visible_price,
     currentCandleStatus: result.chart?.current_candle_status,
     firstPassEntry: result.trade_setup?.entry_zone || 'not established',
@@ -2993,7 +2993,7 @@ function buildCandidateLevelFollowupMessages(imageBase64, mimeType, pair, result
   return [
     {
       role: 'system',
-      content: `You are doing exactly one focused second-pass review of the same uploaded chart because the first pass left one or more core trade levels incomplete. Re-examine the latest visible candles, chart scale, and nearby support/resistance, without assuming the app's instrument hint is correct. If the first-pass bias is bullish or bearish, keep that direction unless the chart itself contradicts it. If the first-pass bias is neutral or mixed, choose buy or sell only if the chart gives clear directional evidence; otherwise return no_candidate rather than forcing a direction. Return each candidate price independently only when it can be defensibly anchored to visible chart evidence; do not invent exact prices, calculate from an assumed pip size, or extrapolate unseen prices. Fill missing levels and retain supported first-pass levels. Partial results are useful: return any supported entry, stop, or target even when another level or a complete risk/reward calculation is unavailable; omit only unsupported fields. Missing or unreadable current-price markers, candle timestamps, or candle state do not prevent returning chart-supported candidate levels: set setup_status="unclear" when freshness or current-price validity cannot be verified. Use "missed" or "invalidated" when visible chart evidence shows that explicitly. Set status="no_candidate" only if no additional level can be supported, the scale cannot anchor exact prices, direction is unclear, or candidate geometry is contradictory. These are candidate levels, not a validated or actionable trade. Do not describe them as a fresh opportunity unless freshness is independently verified. Return only JSON: {"status":"candidate|no_candidate","direction":"buy|sell","entry_zone":"visible price or range, if supported","stop_loss":"visible price, if supported","take_profit_levels":["TP1","TP2 optional, if supported"],"setup_status":"valid|missed|invalidated|unclear","reason":"brief chart evidence for each level and any verification limitation"}. For no_candidate, return status and reason.`,
+      content: `You are doing exactly one focused second-pass review of the same uploaded chart because the first pass found a clear direction but missed one or more core trade levels. Re-examine the latest visible candles, chart scale, and nearby support/resistance, without assuming the app's instrument hint is correct. Keep the established direction. Return each candidate price independently only when it can be defensibly anchored to visible chart evidence; do not invent exact prices, calculate from an assumed pip size, or extrapolate unseen prices. Fill missing levels and retain supported first-pass levels. Partial results are useful: return any supported entry, stop, or target even when another level or a complete risk/reward calculation is unavailable; omit only unsupported fields. Missing or unreadable current-price markers, candle timestamps, or candle state do not prevent returning chart-supported candidate levels: set setup_status="unclear" when freshness or current-price validity cannot be verified. Use "missed" or "invalidated" when visible chart evidence shows that explicitly. Set status="no_candidate" only if no additional level can be supported, the scale cannot anchor exact prices, or candidate geometry is contradictory. These are candidate levels, not a validated or actionable trade. Do not describe them as a fresh opportunity unless freshness is independently verified. Return only JSON: {"status":"candidate|no_candidate","direction":"buy|sell","entry_zone":"visible price or range, if supported","stop_loss":"visible price, if supported","take_profit_levels":["TP1","TP2 optional, if supported"],"setup_status":"valid|missed|invalidated|unclear","reason":"brief chart evidence for each level and any verification limitation"}. For no_candidate, return status and reason.`,
     },
     {
       role: 'user',
@@ -3188,10 +3188,8 @@ function applyCandidateLevelFollowup(result, rawFollowup) {
   }
 
   const candidate = parsed.data;
-  const expectedDirection = result.marketBias === 'bullish'
-    ? 'buy'
-    : result.marketBias === 'bearish' ? 'sell' : null;
-  if (expectedDirection && candidate.direction && candidate.direction !== expectedDirection) {
+  const expectedDirection = result.marketBias === 'bullish' ? 'buy' : 'sell';
+  if (candidate.direction && candidate.direction !== expectedDirection) {
     const reason = 'The follow-up direction conflicted with the established market read; its levels were not used.';
     return {
       ...result,
@@ -3203,15 +3201,6 @@ function applyCandidateLevelFollowup(result, rawFollowup) {
 
   const original = result.trade_setup || DEFAULT_TRADE_SETUP;
   const direction = candidate.direction || expectedDirection;
-  if (!direction) {
-    const reason = 'The chart review could not establish a clear direction for the candidate levels.';
-    return {
-      ...result,
-      levelFollowupStatus: 'no_candidate',
-      levelFollowupReason: reason,
-      dataLimitations: mergeUniqueStrings([...(result.dataLimitations || []), reason]),
-    };
-  }
   const originalEntry = parsePriceOrRange(original.entry_zone) ? original.entry_zone : null;
   const candidateEntry = parsePriceOrRange(candidate.entry_zone) ? candidate.entry_zone : null;
   const entry = originalEntry || candidateEntry;
@@ -3554,6 +3543,12 @@ async function analyzeChart(req, res) {
 
       const evaluatedSetup = finalResult.trade_setup || DEFAULT_TRADE_SETUP;
       const evaluatedTargets = parseTakeProfitLevels(evaluatedSetup.take_profit_levels, evaluatedSetup.take_profit);
+      const needsCandidateLevels = !(
+        parsePriceOrRange(evaluatedSetup.entry_zone)
+        && parsePriceOrRange(evaluatedSetup.stop_loss)
+        && evaluatedTargets.some((target) => parsePriceOrRange(target))
+      );
+      const canReviewCandidateLevels = shouldRequestCandidateLevelFollowup(finalResult);
       if (!parsePriceOrRange(evaluatedSetup.entry_zone)
         || !parsePriceOrRange(evaluatedSetup.stop_loss)
         || !evaluatedTargets.some((target) => parsePriceOrRange(target))) {
@@ -3567,6 +3562,15 @@ async function analyzeChart(req, res) {
             direction: evaluatedSetup.type,
             status: finalResult.status,
           },
+        });
+      }
+      if (needsCandidateLevels && !canReviewCandidateLevels && finalResult.status === 'no_trade') {
+        console.info('[Chart AI] Candidate-level follow-up skipped by chart-readability gate.', {
+          chartVisible: finalResult.chart?.is_chart === true,
+          chartQuality: finalResult.chart?.chart_quality || 'unknown',
+          priceScaleVisible: finalResult.chart?.price_scale_visible === true,
+          candlesVisible: finalResult.chart?.candles_visible === true,
+          marketBias: finalResult.marketBias || 'unknown',
         });
       }
 

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { normalizeChartTradeSetup, normalizeLatestVisiblePrice, type ChartAnalysisResult } from '../services/chartDetection';
-import { buildAnalysisResult, formatTradeReadiness, getMissingTradeLevelsExplanation, getTradeReadinessLabel } from '../services/analysisResult';
+import { buildAnalysisResult, formatDevelopingNote, formatTradeReadiness, getMarketDevelopmentPlan, getMissingTradeLevelsExplanation, getTradeReadinessLabel } from '../services/analysisResult';
 
 function chartResult(overrides: Partial<ChartAnalysisResult> = {}): ChartAnalysisResult {
   return {
@@ -275,7 +275,7 @@ test('renders a directional market read when analysis has no established trade l
   assert.deepEqual(result.reasoning, apiPayload.reasoning);
 });
 
-test('explains missing directional no-trade levels without implying a fabricated setup', () => {
+test('explains missing no-trade levels as a hold while the market develops', () => {
   const result = buildAnalysisResult(chartResult({
     status: 'no_trade',
     trade_setup: {
@@ -290,7 +290,7 @@ test('explains missing directional no-trade levels without implying a fabricated
 
   assert.equal(
     getMissingTradeLevelsExplanation(result),
-    'This is a BUY market read, not a validated trade setup. Entry, Stop Loss and Take Profit 1 could not be established from the chart, so no prices have been inferred. Risk : Reward cannot be calculated without complete levels.',
+    'Hold for now — the market is still developing. Wait for direction and price levels to confirm before considering an entry. Risk/reward will be calculated when the chart supports entry, stop, and target prices.',
   );
   assert.equal(getMissingTradeLevelsExplanation({ ...result, status: 'success' }), null);
   assert.equal(getMissingTradeLevelsExplanation({
@@ -300,18 +300,44 @@ test('explains missing directional no-trade levels without implying a fabricated
   }), null);
 });
 
-test('trade readiness describes provided levels instead of reporting entry as unidentified', () => {
+test('neutral chart results always include a clear market-development plan', () => {
+  assert.equal(
+    getMarketDevelopmentPlan({
+      status: 'no_trade',
+      marketBias: 'neutral',
+      analysis: {
+        trend: 'neutral',
+        structure: 'Price is consolidating around 4170.976.',
+        volatility: 'moderate',
+        volume: 'not_visible',
+        sentiment: 'neutral',
+        indicators: 'none',
+        notes: 'Wait for a confirmed break of the range.',
+      },
+    }, true),
+    'Hold for now — the market is still developing. Wait for a clear break, rejection, or directional confirmation. Chart context: Price is consolidating around 4170.976. Wait for a confirmed break of the range.',
+  );
+  assert.match(getMarketDevelopmentPlan({ status: 'no_trade', marketBias: 'bearish' }), /Wait for a confirmed bearish entry or retest/);
+  assert.doesNotMatch(getMarketDevelopmentPlan({ status: 'no_trade', marketBias: 'neutral' }), /no trade/i);
+});
+
+test('developing analysis notes replace blocked-trade language with confirmation guidance', () => {
+  const note = formatDevelopingNote('No trade: the stop was not established and RR is not calculable.');
+  assert.equal(note, 'hold for now: the stop was awaiting confirmation and RR is calculated when levels are confirmed.');
+});
+
+test('trade readiness describes a hold while levels are incomplete', () => {
   assert.equal(
     getTradeReadinessLabel('no_setup', '158.23000', '158.15500', '158.29000', 'BUY', 0.8),
     'BUY candidate setup · RR 0.8 below 1.5 minimum',
   );
   assert.equal(
     getTradeReadinessLabel(undefined, '1.10000', 'Not established', 'Not established'),
-    'Entry identified · setup incomplete',
+    'Hold — market still developing',
   );
   assert.equal(
     getTradeReadinessLabel(undefined, 'Not established', 'Not established', 'Not established'),
-    'Setup not identified',
+    'Hold — market still developing',
   );
   assert.equal(getTradeReadinessLabel('actionable', '1.10', '1.09', '1.12'), 'Ready');
   assert.equal(getTradeReadinessLabel('waiting_for_confirmation', '1.10', '1.09', '1.12'), 'Waiting for confirmation');
