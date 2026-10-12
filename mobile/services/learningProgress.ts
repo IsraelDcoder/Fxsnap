@@ -1,0 +1,112 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { notifyAccountDataChanged } from '@/services/accountDataEvents';
+
+export const LEARNING_PROGRESS_KEY = 'fxsnap:learningHub:v1';
+const MAX_RECENT_LESSONS = 8;
+
+export interface LearningProgress {
+  lastOpenedLessonId: string | null;
+  recentLessonIds: string[];
+  bookmarkedLessonIds: string[];
+  completedLessonIds: string[];
+  lessonPositions: Record<string, number>;
+}
+
+const emptyProgress: LearningProgress = {
+  lastOpenedLessonId: null,
+  recentLessonIds: [],
+  bookmarkedLessonIds: [],
+  completedLessonIds: [],
+  lessonPositions: {},
+};
+
+let writeQueue: Promise<void> = Promise.resolve();
+
+function normalizeProgress(value: unknown): LearningProgress {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Saved Learning Hub progress is invalid. Clear the Learning Hub data and try again.');
+  }
+  const data = value as Record<string, unknown>;
+  const stringList = (list: unknown) => Array.isArray(list)
+    ? [...new Set(list.filter((item): item is string => typeof item === 'string' && item.length > 0))]
+    : [];
+  const rawPositions = data.lessonPositions && typeof data.lessonPositions === 'object'
+    ? data.lessonPositions as Record<string, unknown>
+    : {};
+  const lessonPositions = Object.fromEntries(
+    Object.entries(rawPositions)
+      .filter(([, position]) => typeof position === 'number' && Number.isFinite(position) && position >= 0)
+      .map(([id, position]) => [id, Math.floor(position as number)]),
+  );
+  return {
+    lastOpenedLessonId: typeof data.lastOpenedLessonId === 'string' ? data.lastOpenedLessonId : null,
+    recentLessonIds: stringList(data.recentLessonIds).slice(0, MAX_RECENT_LESSONS),
+    bookmarkedLessonIds: stringList(data.bookmarkedLessonIds),
+    completedLessonIds: stringList(data.completedLessonIds),
+    lessonPositions,
+  };
+}
+
+export async function getLearningProgress(): Promise<LearningProgress> {
+  const stored = await AsyncStorage.getItem(LEARNING_PROGRESS_KEY);
+  if (stored == null) return emptyProgress;
+  try {
+    return normalizeProgress(JSON.parse(stored));
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw new Error('Saved Learning Hub progress could not be read. Clear the Learning Hub data and try again.');
+    }
+    throw error;
+  }
+}
+
+function updateLearningProgress(
+  update: (progress: LearningProgress) => LearningProgress,
+): Promise<LearningProgress> {
+  const operation = writeQueue.then(async () => {
+    const current = await getLearningProgress();
+    const next = normalizeProgress(update(current));
+    await AsyncStorage.setItem(LEARNING_PROGRESS_KEY, JSON.stringify(next));
+    notifyAccountDataChanged();
+    return next;
+  });
+  writeQueue = operation.then(() => undefined, () => undefined);
+  return operation;
+}
+
+export function recordLessonOpened(lessonId: string) {
+  return updateLearningProgress((progress) => ({
+    ...progress,
+    lastOpenedLessonId: lessonId,
+    recentLessonIds: [lessonId, ...progress.recentLessonIds.filter((id) => id !== lessonId)].slice(0, MAX_RECENT_LESSONS),
+  }));
+}
+
+export function saveLessonPosition(lessonId: string, position: number) {
+  if (!Number.isFinite(position) || position < 0) {
+    return Promise.reject(new Error('Lesson reading position must be a non-negative number.'));
+  }
+  return updateLearningProgress((progress) => ({
+    ...progress,
+    lessonPositions: { ...progress.lessonPositions, [lessonId]: Math.floor(position) },
+  }));
+}
+
+export function toggleLessonBookmark(lessonId: string) {
+  return updateLearningProgress((progress) => ({
+    ...progress,
+    bookmarkedLessonIds: progress.bookmarkedLessonIds.includes(lessonId)
+      ? progress.bookmarkedLessonIds.filter((id) => id !== lessonId)
+      : [...progress.bookmarkedLessonIds, lessonId],
+  }));
+}
+
+export function markLessonCompleted(lessonId: string) {
+  return updateLearningProgress((progress) => ({
+    ...progress,
+    completedLessonIds: progress.completedLessonIds.includes(lessonId)
+      ? progress.completedLessonIds
+      : [...progress.completedLessonIds, lessonId],
+    lessonPositions: { ...progress.lessonPositions, [lessonId]: 0 },
+  }));
+}

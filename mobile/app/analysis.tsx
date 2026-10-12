@@ -31,30 +31,77 @@ import { recordRatingEligibleAnalysis } from '@/services/ratingPrompt';
 import { clearAnalysisRetryRequest, getAnalysisRetryRequest, storeAnalysisRetryRequest } from '@/services/analysisRetry';
 import { buildAnalysisResult } from '@/services/analysisResult';
 
-type Stage = 'pick' | 'preview' | 'analyzing';
+type Stage = 'pick' | 'preview' | 'analyzing' | 'ready';
 type AnalysisMode = 'quick' | 'multiTimeframe';
 type TimeframeChart = MultiTimeframeChartImage & { uri: string };
 
-function AnalyzingView() {
+const ANALYSIS_STEPS = [
+  { title: 'Cooking your analysis', detail: 'Reading the newest visible candles and current price action.' },
+  { title: 'Mapping the market structure', detail: 'Checking nearby support, resistance, and momentum.' },
+  { title: 'Checking setup quality and risk', detail: 'Looking for a high-probability setup without forcing a trade.' },
+];
+
+function AnalyzingView({ ready = false }: { ready?: boolean }) {
   const insets = useSafeAreaInsets();
   const colors = useColors();
   const reduceMotion = useReducedMotion();
+  const [activeStep, setActiveStep] = useState(0);
+
+  useEffect(() => {
+    if (ready || reduceMotion) return;
+    const interval = setInterval(() => {
+      setActiveStep((current) => (current + 1) % ANALYSIS_STEPS.length);
+    }, 2400);
+    return () => clearInterval(interval);
+  }, [ready, reduceMotion]);
+
+  const step = ANALYSIS_STEPS[activeStep];
 
   return (
     <View style={[styles.analyzingContainer, { paddingTop: insets.top + 20, backgroundColor: colors.background }]}>
       <Animated.View entering={reduceMotion ? undefined : FadeIn.duration(300)} style={[styles.analyzingIcon, { backgroundColor: colors.card, borderColor: colors.buy }]}>
-        <Feather name="cpu" size={40} color={colors.buy} />
+        <Feather name={ready ? 'check' : 'activity'} size={36} color={colors.buy} />
       </Animated.View>
 
-      <Text style={[styles.analyzingTitle, { color: colors.text }]}>Analyzing your chart</Text>
-      {reduceMotion ? (
-        <Feather name="loader" size={19} color={colors.buy} />
-      ) : (
-        <ActivityIndicator size="small" color={colors.buy} />
-      )}
-      <Text style={[styles.analysisSubtext, { color: colors.textSecondary }]}>
-        The analysis is in progress. This may take a moment.
+      <Text style={[styles.analyzingTitle, { color: colors.text }]}>
+        {ready ? 'Your analysis is ready' : 'Analyzing your chart'}
       </Text>
+      <Text style={[styles.analysisSubtext, { color: colors.textSecondary }]}>
+        {ready
+          ? 'Your chart read is complete. Opening your results…'
+          : 'We’re reviewing the chart so your result is based on the price action you shared.'}
+      </Text>
+
+      <View style={[styles.analysisProgressCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+        <View style={styles.analysisProgressHeading}>
+          {ready
+            ? <Feather name="check-circle" size={19} color={colors.buy} />
+            : <ActivityIndicator size="small" color={colors.buy} />}
+          <Animated.Text
+            key={ready ? 'ready' : activeStep}
+            entering={reduceMotion ? undefined : FadeIn.duration(250)}
+            style={[styles.analysisProgressTitle, { color: colors.text }]}
+          >
+            {ready ? 'Review complete' : step.title}
+          </Animated.Text>
+        </View>
+        <Text style={[styles.analysisProgressDetail, { color: colors.textSecondary }]}>
+          {ready ? 'Your analysis is ready to view.' : step.detail}
+        </Text>
+        {!ready && (
+          <View style={styles.analysisStepDots} accessibilityLabel={`Analysis step ${activeStep + 1} of ${ANALYSIS_STEPS.length}`}>
+            {ANALYSIS_STEPS.map((item, index) => (
+              <View
+                key={item.title}
+                style={[
+                  styles.analysisStepDot,
+                  { backgroundColor: index === activeStep ? colors.buy : colors.border },
+                ]}
+              />
+            ))}
+          </View>
+        )}
+      </View>
     </View>
   );
 }
@@ -255,7 +302,7 @@ export default function AnalysisScreen() {
       return;
     }
 
-    const remainingMinimumTime = Math.max(0, 10000 - (Date.now() - analysisStartedAt));
+    const remainingMinimumTime = Math.max(0, 2500 - (Date.now() - analysisStartedAt));
     await new Promise((resolve) => setTimeout(resolve, remainingMinimumTime));
 
     if (chart.status === 'ai_unavailable' || chart.status === 'ai_invalid_response') {
@@ -285,6 +332,8 @@ export default function AnalysisScreen() {
     trackEvent('analysis_succeeded', { pair, status: chart.status, confidence: chart.confidence });
     await recordRatingEligibleAnalysis();
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    setStage('ready');
+    await new Promise((resolve) => setTimeout(resolve, 900));
     router.replace('/analysis-result');
   };
 
@@ -383,7 +432,7 @@ export default function AnalysisScreen() {
   return (
     <View style={[styles.container, { paddingTop: topPad, backgroundColor: colors.background }]}>
       <AmbientBackdrop />
-      {stage !== 'analyzing' && (
+      {stage !== 'analyzing' && stage !== 'ready' && (
         <Animated.View entering={reduceMotion ? undefined : FadeIn.duration(300)} style={styles.header}>
           <TouchableOpacity style={[styles.backBtn, { backgroundColor: colors.card, borderColor: colors.cardBorder }]} onPress={() => router.replace('/home')}>
                   <Feather name="arrow-left" size={22} color={colors.text} />
@@ -503,7 +552,7 @@ export default function AnalysisScreen() {
         </Animated.View>
       )}
 
-      {stage === 'analyzing' && <AnalyzingView />}
+      {(stage === 'analyzing' || stage === 'ready') && <AnalyzingView ready={stage === 'ready'} />}
 
       <PairSelectionModal
         visible={showPairModal}
@@ -651,138 +700,65 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingHorizontal: 22,
     paddingBottom: 24,
-    backgroundColor: '#000000',
-    justifyContent: 'flex-start',
-  },
-  analyzingGlow: {
-    position: 'absolute',
-    width: 140,
-    height: 140,
-    borderRadius: 70,
-    backgroundColor: '#00FF9C',
-    top: 28,
-    alignSelf: 'center',
-    opacity: 0.14,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   analyzingIcon: {
-    width: 64,
-    height: 64,
-    borderRadius: 18,
-    backgroundColor: '#071B0F',
+    width: 76,
+    height: 76,
+    borderRadius: 24,
     borderWidth: 1.5,
-    borderColor: '#0A3F25',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 12,
-    zIndex: 1,
+    marginBottom: 22,
   },
   analyzingTitle: {
-    fontSize: 26,
+    fontSize: 25,
     fontFamily: 'Inter_700Bold',
-    color: '#FFFFFF',
-    marginBottom: 8,
+    marginBottom: 10,
     textAlign: 'center',
     letterSpacing: -0.4,
   },
   analysisSubtext: {
     fontSize: 14,
     fontFamily: 'Inter_500Medium',
-    color: '#B3B3B8',
     textAlign: 'center',
-    marginBottom: 20,
-    lineHeight: 20,
+    marginBottom: 28,
+    lineHeight: 21,
+    maxWidth: 320,
   },
-  progressSection: {
+  analysisProgressCard: {
+    width: '100%',
+    maxWidth: 380,
+    padding: 18,
+    borderRadius: 18,
+    borderWidth: 1,
+  },
+  analysisProgressHeading: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 12,
-    marginBottom: 24,
+    gap: 11,
+    minHeight: 24,
   },
-  progressBarContainer: {
+  analysisProgressTitle: {
     flex: 1,
-    height: 8,
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    borderRadius: 999,
-    overflow: 'hidden',
+    fontSize: 15,
+    fontFamily: 'Inter_600SemiBold',
   },
-  progressBarFill: {
-    height: '100%',
-    backgroundColor: '#00FF9C',
-    borderRadius: 999,
-    shadowColor: '#00FF9C',
-    shadowOpacity: 0.45,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 0 },
-    elevation: 3,
-  },
-  progressPercent: {
-    minWidth: 48,
-    textAlign: 'right',
+  analysisProgressDetail: {
+    marginTop: 9,
     fontSize: 13,
-    fontFamily: 'Inter_600SemiBold',
-    color: '#E5E5EA',
-  },
-  stepsContainer: {
-    gap: 14,
-    marginBottom: 16,
-  },
-  stepRow: {
-    borderRadius: 16,
-    borderWidth: 1.25,
-    paddingHorizontal: 16,
-    paddingVertical: 16,
-    borderColor: '#161616',
-    backgroundColor: '#070A0B',
-  },
-  stepRowContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-  },
-  stepIconBox: {
-    width: 42,
-    height: 42,
-    borderRadius: 14,
-    borderWidth: 1.5,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  stepText: {
-    flex: 1,
-    fontSize: 14,
-    fontFamily: 'Inter_600SemiBold',
-    lineHeight: 20,
-  },
-  stepStatusIcon: {
-    width: 24,
-    height: 24,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  activeDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: '#00FF9C',
-    shadowColor: '#00FF9C',
-    shadowOpacity: 0.9,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 0 },
-    elevation: 2,
-  },
-  pendingDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: '#3C3C43',
-  },
-  aiStatusMessage: {
-    fontSize: 12,
     fontFamily: 'Inter_400Regular',
-    color: '#48484A',
-    textAlign: 'center',
-    lineHeight: 17,
-    fontStyle: 'italic',
+    lineHeight: 19,
+  },
+  analysisStepDots: {
+    flexDirection: 'row',
+    gap: 6,
+    marginTop: 16,
+  },
+  analysisStepDot: {
+    flex: 1,
+    height: 3,
+    borderRadius: 2,
   },
 });

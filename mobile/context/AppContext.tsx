@@ -238,6 +238,7 @@ const SYNCED_LOCAL_PREFERENCE_KEYS = [
   'fxsnap:dailyBrief:reads:v1',
   'fxsnap:profilePhoto:v1',
   'fxsnap:traderProfile:v1',
+  'fxsnap:learningHub:v1',
 ];
 
 function isPreferredMarket(value: unknown): value is AppSettings['preferredMarket'] {
@@ -770,6 +771,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       RISK_ACTIVITY_KEY,
       'fxsnap:dailyBrief:assignments:v1',
       'fxsnap:dailyBrief:reads:v1',
+      'fxsnap:learningHub:v1',
       DATA_VERSION_KEY,
     ]);
     setOnboardingComplete(false);

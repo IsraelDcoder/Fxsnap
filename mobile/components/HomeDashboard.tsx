@@ -84,7 +84,7 @@ export default function HomeDashboard() {
     return () => clearTimeout(timer);
   }, [briefSaveError, briefSaveMessage]);
 
-  const navigate = (path: '/analysis' | '/strategy' | '/settings' | '/daily-brief' | '/economic-calendar' | '/lot-size-calculator' | '/risk-management' | '/saved' | '/my-strategies') => {
+  const navigate = (path: '/analysis' | '/strategy' | '/settings' | '/daily-brief' | '/economic-calendar' | '/lot-size-calculator' | '/risk-management' | '/saved' | '/my-strategies' | '/learning-hub') => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     router.push(path);
   };
@@ -299,7 +299,7 @@ export default function HomeDashboard() {
               <FeatureShortcut icon="trending-up" label="Trade Setup" onPress={() => void openProtectedFeature('TRADE_SETUP', '/analysis')} />
               <FeatureShortcut icon="sliders" label="Strategies" onPress={() => void openStrategy()} />
               <FeatureShortcut icon="shield" label="Risk Management" onPress={() => navigate('/risk-management')} />
-              <FeatureShortcut icon="book-open" label="Learning Hub" onPress={() => navigate('/daily-brief')} />
+              <FeatureShortcut icon="book-open" label="Learning Hub" onPress={() => navigate('/learning-hub')} />
               <FeatureShortcut icon="headphones" label="Help & Support" onPress={support} />
             </View>
             <View style={styles.toolsPanelFooter}>

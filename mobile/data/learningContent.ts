@@ -1,0 +1,1783 @@
+export type CategoryId =
+  | "fundamentals"
+  | "technical-analysis"
+  | "risk-management"
+  | "fundamental-analysis"
+  | "trading-psychology"
+  | "strategies-practice";
+
+export type LessonDifficulty = "beginner" | "intermediate" | "advanced";
+
+export type ToolRoute =
+  | "/lot-size-calculator"
+  | "/risk-management"
+  | "/economic-calendar"
+  | "/daily-brief";
+
+export interface LearningCategory {
+  id: CategoryId;
+  title: string;
+  description: string;
+  icon: string;
+  groups: LearningGroup[];
+}
+
+export interface LearningGroup {
+  id: string;
+  title: string;
+  lessonIds: string[];
+}
+
+export interface LessonSection {
+  heading: string;
+  paragraphs?: string[];
+  bullets?: string[];
+  formula?: string;
+}
+
+export interface LearningLesson {
+  id: string;
+  title: string;
+  shortDescription: string;
+  categoryId: CategoryId;
+  topicGroup: string;
+  difficulty: LessonDifficulty;
+  estimatedMinutes: number;
+  aliases: string[];
+  intro: string;
+  sections: LessonSection[];
+  keyTakeaways: string[];
+  commonMistakes: string[];
+  relatedLessonIds: string[];
+  toolRoute?: ToolRoute;
+}
+
+const categoryDefinitions: {
+  id: CategoryId;
+  title: string;
+  description: string;
+  icon: string;
+  groups: Omit<LearningGroup, "lessonIds">[];
+}[] = [
+  {
+    id: "fundamentals",
+    title: "Trading Fundamentals",
+    description: "How markets, orders, and trades work.",
+    icon: "book-open",
+    groups: [
+      { id: "getting-started", title: "Getting started" },
+      { id: "markets-and-instruments", title: "Markets and instruments" },
+      { id: "orders-and-execution", title: "Orders and execution" },
+    ],
+  },
+  {
+    id: "technical-analysis",
+    title: "Technical Analysis",
+    description: "Read price charts while accounting for uncertainty.",
+    icon: "bar-chart-2",
+    groups: [
+      { id: "candlesticks", title: "Candlesticks" },
+      { id: "chart-patterns", title: "Chart patterns" },
+      { id: "market-structure", title: "Market structure" },
+      { id: "liquidity-and-smc", title: "Liquidity and SMC" },
+      { id: "tools-and-chart-reading", title: "Tools and chart reading" },
+    ],
+  },
+  {
+    id: "risk-management",
+    title: "Risk Management",
+    description: "Plan exposure, losses, and trade invalidation before entry.",
+    icon: "shield",
+    groups: [
+      { id: "position-sizing", title: "Position sizing" },
+      { id: "risk-and-reward", title: "Risk and reward" },
+      { id: "protection-and-portfolio-risk", title: "Protection and portfolio risk" },
+    ],
+  },
+  {
+    id: "fundamental-analysis",
+    title: "Fundamental Analysis",
+    description: "Understand economic releases, valuation drivers, and event risk.",
+    icon: "globe",
+    groups: [
+      { id: "economic-context", title: "Economic context" },
+      { id: "company-and-asset-analysis", title: "Company and asset analysis" },
+      { id: "events-and-research", title: "Events and research" },
+    ],
+  },
+  {
+    id: "trading-psychology",
+    title: "Trading Psychology",
+    description: "Build process-focused habits for uncertain outcomes.",
+    icon: "heart",
+    groups: [
+      { id: "decision-making", title: "Decision-making" },
+      { id: "emotions-and-discipline", title: "Emotions and discipline" },
+      { id: "review-and-wellbeing", title: "Review and wellbeing" },
+    ],
+  },
+  {
+    id: "strategies-practice",
+    title: "Strategies and Practice",
+    description: "Turn ideas into testable rules and practice them safely.",
+    icon: "check-square",
+    groups: [
+      { id: "strategy-design", title: "Strategy design" },
+      { id: "backtesting", title: "Backtesting" },
+      { id: "simulated-practice", title: "Simulated practice" },
+    ],
+  },
+];
+
+export const LEARNING_LESSONS: LearningLesson[] = [
+  {
+    id: "fundamentals-market-basics",
+    title: "What is a financial market?",
+    shortDescription: "Learn what markets do and why prices change.",
+    categoryId: "fundamentals",
+    topicGroup: "Getting started",
+    difficulty: "beginner",
+    estimatedMinutes: 5,
+    aliases: ["market basics", "financial market", "buyers and sellers"],
+    intro: "A market is a system for matching people who want to trade an asset.",
+    sections: [
+      {
+        heading: "Prices are negotiated",
+        paragraphs: [
+          "A traded price is the result of orders meeting, not a guaranteed estimate of an asset's true worth. Buyers submit bids and sellers submit offers; completed trades show where willing participants found a match.",
+          "Expectations, available information, liquidity, and urgency can all change those offers. A price move alone does not reveal why it happened.",
+        ],
+      },
+      {
+        heading: "Markets differ",
+        bullets: [
+          "Stocks represent ownership interests; bonds are debt instruments; currencies are traded in pairs; commodities and derivatives have their own contract terms.",
+          "Trading hours, settlement, leverage, fees, and regulation vary by venue and instrument.",
+        ],
+      },
+    ],
+    keyTakeaways: ["A market price reflects transactions and available orders.", "Know an instrument's terms and risks before trading it."],
+    commonMistakes: ["Treating a recent price as a promise of future value.", "Assuming all markets have the same hours, costs, or protections."],
+    relatedLessonIds: ["fundamentals-how-trades-work", "fundamentals-orders-execution"],
+  },
+  {
+    id: "fundamentals-how-trades-work",
+    title: "How a trade works",
+    shortDescription: "Follow a trade from an order to its result.",
+    categoryId: "fundamentals",
+    topicGroup: "Getting started",
+    difficulty: "beginner",
+    estimatedMinutes: 6,
+    aliases: ["trade lifecycle", "buy and sell", "long and short"],
+    intro: "A trade opens exposure to price movement, then closes or settles under the instrument's rules.",
+    sections: [
+      {
+        heading: "Opening and closing exposure",
+        paragraphs: [
+          "Buying first is commonly called going long; selling first to benefit from a decline is commonly called going short. Shorting may require borrowing, margin, or a derivative and can have losses that exceed the initial amount at risk.",
+          "The result depends on entry and exit prices, position size, contract value, fees, financing, and execution. A correct market view can still lose after costs or poor execution.",
+        ],
+      },
+      {
+        heading: "An order is an instruction",
+        bullets: [
+          "A market order prioritizes execution, not a particular price; fast markets can produce slippage.",
+          "A limit order sets a price boundary but may not fill. A stop order's trigger and resulting execution behavior depend on venue and broker rules.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Understand how the instrument is opened, closed, and settled.", "Execution and costs affect outcomes as well as direction."],
+    commonMistakes: ["Assuming an order type guarantees both fill and price.", "Ignoring margin, financing, borrow costs, or contract specifications."],
+    relatedLessonIds: ["fundamentals-market-basics", "fundamentals-orders-execution", "risk-position-sizing"],
+  },
+  {
+    id: "fundamentals-orders-execution",
+    title: "Orders, spread, and execution",
+    shortDescription: "Compare common orders and the practical cost of execution.",
+    categoryId: "fundamentals",
+    topicGroup: "Orders and execution",
+    difficulty: "beginner",
+    estimatedMinutes: 6,
+    aliases: ["market order", "limit order", "spread", "slippage"],
+    intro: "An order specifies how you want to participate; it cannot remove market or execution uncertainty.",
+    sections: [
+      {
+        heading: "Choosing an order",
+        paragraphs: [
+          "The bid is the best displayed buying price and the ask is the best displayed selling price; their difference is the spread. A buy commonly executes at or near the ask and a sell at or near the bid, subject to the venue and available depth.",
+          "A market order seeks available liquidity. A limit order controls the worst acceptable price but may remain unfilled. Stop orders can trigger into market or limit instructions, depending on their type.",
+        ],
+      },
+      {
+        heading: "Execution is not guaranteed",
+        bullets: [
+          "Slippage is the difference between an expected and actual execution price.",
+          "Thin liquidity, gaps, volatility, latency, and partial fills can change the result. Check the broker's order and protection rules.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Spread is an immediate trading cost to consider.", "A limit price may prevent an unfavorable fill but does not ensure a fill."],
+    commonMistakes: ["Assuming a stop-loss always executes at its trigger price.", "Ignoring spread and slippage when evaluating a strategy."],
+    relatedLessonIds: ["fundamentals-how-trades-work", "risk-stop-and-gap-risk"],
+  },
+  {
+    id: "fundamentals-market-participants",
+    title: "Who participates in markets?",
+    shortDescription: "See how different participants and time horizons interact.",
+    categoryId: "fundamentals",
+    topicGroup: "Markets and instruments",
+    difficulty: "beginner",
+    estimatedMinutes: 5,
+    aliases: ["market participants", "liquidity providers", "investors and traders"],
+    intro: "Market activity combines many goals, constraints, and holding periods.",
+    sections: [
+      {
+        heading: "Different roles, mixed motives",
+        paragraphs: [
+          "Participants may include long-term investors, companies hedging exposures, funds, dealers, market makers, and short-term traders. A single participant can also act differently across instruments and time.",
+          "Some participants provide liquidity by quoting both sides; others consume it to transact. These roles are not fixed, and displayed orders may change or disappear.",
+        ],
+      },
+      {
+        heading: "No single explanation",
+        bullets: [
+          "Price and volume can inform an analysis, but usually cannot identify the trader or motive behind an order.",
+          "Avoid narratives that claim certainty about institutional intent from one candle, sweep, or volume spike.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Markets aggregate diverse decisions rather than one controlling viewpoint.", "Observed price action rarely proves who traded or why."],
+    commonMistakes: ["Attributing every move to a specific participant without evidence.", "Confusing a useful market narrative with a verified cause."],
+    relatedLessonIds: ["fundamentals-market-basics", "technical-liquidity-smc"],
+  },
+  {
+    id: "technical-candlestick-anatomy",
+    title: "Candlestick anatomy and context",
+    shortDescription: "Read open, high, low, close, body, and wicks.",
+    categoryId: "technical-analysis",
+    topicGroup: "Candlesticks",
+    difficulty: "beginner",
+    estimatedMinutes: 5,
+    aliases: ["OHLC", "candle body", "wick", "candlestick chart"],
+    intro: "A candle compresses four prices over a chosen interval; it is a summary, not a forecast.",
+    sections: [
+      {
+        heading: "Four prices, one interval",
+        paragraphs: [
+          "OHLC means open, high, low, and close. The real body spans open to close; the upper and lower wicks show the interval's extremes beyond the body. Chart colors are configurable, so check the platform legend.",
+          "A candle's shape depends on timeframe and data source. A five-minute candle and a daily candle can tell different stories about the same session.",
+        ],
+      },
+      {
+        heading: "Read rather than predict",
+        bullets: [
+          "A long wick shows rejection or movement away from an extreme within that interval, but does not establish what happens next.",
+          "Compare candles with nearby structure, volatility, volume quality, and the instrument's trading hours.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Know the interval and OHLC values behind each candle.", "Candle shape is descriptive evidence, not a standalone signal."],
+    commonMistakes: ["Reading a wick as proof of a reversal.", "Comparing candle patterns across inconsistent timeframes."],
+    relatedLessonIds: ["technical-doji-and-spinning-top", "technical-engulfing-patterns", "technical-chart-reading"],
+  },
+  {
+    id: "technical-doji-and-spinning-top",
+    title: "Doji and spinning-top candles",
+    shortDescription: "Interpret small real bodies without overreading them.",
+    categoryId: "technical-analysis",
+    topicGroup: "Candlesticks",
+    difficulty: "beginner",
+    estimatedMinutes: 4,
+    aliases: ["doji", "spinning top", "indecision candle"],
+    intro: "A small body means open and close were relatively close for that candle; context decides whether it matters.",
+    sections: [
+      {
+        heading: "Shape and interpretation",
+        paragraphs: [
+          "A doji typically has nearly equal open and close; a spinning top has a small body with wicks on both sides. Exact definitions vary between charting references and depend on the instrument's scale.",
+          "Either shape can appear during consolidation or after a strong move. It can reflect temporary balance, but one candle cannot confirm a change in control.",
+        ],
+      },
+      {
+        heading: "Look for confirmation",
+        bullets: [
+          "Ask where the candle formed relative to a well-defined range, trend, or level.",
+          "Wait for subsequent price behavior if a strategy requires confirmation; confirmation still does not guarantee follow-through.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Small-body candles describe limited net movement within an interval.", "Use location and later evidence rather than a candle name alone."],
+    commonMistakes: ["Calling every doji a reversal.", "Ignoring the timeframe and surrounding range."],
+    relatedLessonIds: ["technical-candlestick-anatomy", "technical-chart-reading"],
+  },
+  {
+    id: "technical-hammer-shooting-star",
+    title: "Hammer and shooting-star shapes",
+    shortDescription: "Compare long-wick candles and their location.",
+    categoryId: "technical-analysis",
+    topicGroup: "Candlesticks",
+    difficulty: "beginner",
+    estimatedMinutes: 5,
+    aliases: ["hammer candle", "hanging man", "shooting star", "inverted hammer", "pin bar"],
+    intro: "Long-wick shapes have different traditional names depending on their location, but neither predicts a reversal by itself.",
+    sections: [
+      {
+        heading: "Anatomy and location",
+        paragraphs: [
+          "A hammer-like candle has a small upper body and a relatively long lower wick. Near a decline it is traditionally called a hammer; near an advance a similar shape may be called a hanging man. A shooting-star shape has a small lower body and a long upper wick; location affects its traditional label.",
+          "The labels are conventions, not laws. These shapes are sometimes grouped under the informal term pin bar, though definitions vary. A wick shows that price traveled and then moved back before the close; it does not reveal future order flow.",
+        ],
+      },
+      {
+        heading: "Test the setup",
+        bullets: [
+          "Define the preceding trend, nearby structure, candle-size threshold, and confirmation rule before testing.",
+          "Consider gaps, session boundaries, and volatility, which can create similar shapes for unrelated reasons.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Location and prior movement matter to traditional pattern names.", "Any reversal hypothesis needs explicit confirmation and invalidation rules."],
+    commonMistakes: ["Treating a long wick as a guaranteed rejection.", "Changing pattern definitions after seeing the outcome."],
+    relatedLessonIds: ["technical-candlestick-anatomy", "technical-engulfing-patterns", "technical-market-structure"],
+  },
+  {
+    id: "technical-engulfing-patterns",
+    title: "Engulfing candles",
+    shortDescription: "Define bullish and bearish engulfing patterns consistently.",
+    categoryId: "technical-analysis",
+    topicGroup: "Candlesticks",
+    difficulty: "beginner",
+    estimatedMinutes: 5,
+    aliases: ["bullish engulfing", "bearish engulfing", "outside body"],
+    intro: "An engulfing pattern compares consecutive candle bodies; its definition and meaning need context.",
+    sections: [
+      {
+        heading: "A common definition",
+        paragraphs: [
+          "In a common convention, a bullish engulfing candle closes up and its body covers the prior down candle's body; a bearish engulfing candle does the reverse. Some definitions compare full ranges instead, so state which rule you use.",
+          "A larger body can represent a shift in interval-level pressure, but a pattern can fail, especially in sideways or illiquid conditions.",
+        ],
+      },
+      {
+        heading: "Evaluate consistently",
+        bullets: [
+          "Specify whether equal boundaries count and whether wicks are included.",
+          "Record location, trend, spread, and confirmation criteria in a test; avoid selecting only visually compelling examples.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Engulfing definitions differ; use a repeatable rule.", "A large candle is not proof of durable buying or selling."],
+    commonMistakes: ["Mixing body-based and range-based definitions.", "Using the pattern without defining risk or invalidation."],
+    relatedLessonIds: ["technical-candlestick-anatomy", "strategies-backtesting-basics"],
+  },
+  {
+    id: "technical-morning-evening-star",
+    title: "Morning-star and evening-star patterns",
+    shortDescription: "Understand three-candle reversal hypotheses and their limits.",
+    categoryId: "technical-analysis",
+    topicGroup: "Candlesticks",
+    difficulty: "intermediate",
+    estimatedMinutes: 5,
+    aliases: ["morning star", "evening star", "three-candle reversal"],
+    intro: "These traditional three-candle patterns describe a pause and a strong move in the opposite direction.",
+    sections: [
+      {
+        heading: "Typical structure",
+        paragraphs: [
+          "A morning star is commonly described as a substantial bearish candle, a smaller middle candle, then a bullish candle closing well into the first body's range. An evening star reverses those directions. Gap requirements differ across markets and references.",
+          "The sequence is a hypothesis about changing pressure, not a causal explanation. Its reliability depends on market, timeframe, costs, and exact rule choices.",
+        ],
+      },
+      {
+        heading: "Make it testable",
+        bullets: [
+          "Write down body-size, gap, and closing-location thresholds before reviewing examples.",
+          "Compare outcomes with a baseline and include transaction costs and failed signals.",
+        ],
+      },
+    ],
+    keyTakeaways: ["The pattern's three-candle sequence has several accepted variants.", "A visually recognizable setup still needs objective testing."],
+    commonMistakes: ["Requiring gaps in markets that trade continuously without checking the convention.", "Counting only successful examples."],
+    relatedLessonIds: ["technical-candlestick-anatomy", "strategies-backtesting-basics"],
+  },
+  {
+    id: "technical-inside-outside-bars",
+    title: "Inside bars and outside bars",
+    shortDescription: "Compare a candle's range with the previous candle.",
+    categoryId: "technical-analysis",
+    topicGroup: "Candlesticks",
+    difficulty: "beginner",
+    estimatedMinutes: 4,
+    aliases: ["inside candle", "outside candle", "mother bar"],
+    intro: "Range relationships can describe contraction or expansion, but do not determine direction.",
+    sections: [
+      {
+        heading: "Range comparison",
+        paragraphs: [
+          "An inside bar has a high below and a low above the previous bar's high and low, under a strict definition. An outside bar has a high above and low below the previous bar's range. Some practitioners allow equal boundaries.",
+          "An inside bar may reflect temporary contraction; an outside bar may reflect expansion and two-sided movement. Either can occur in a trend or a range.",
+        ],
+      },
+      {
+        heading: "Avoid directional assumptions",
+        bullets: [
+          "Choose whether boundaries are strict or inclusive and keep that rule fixed.",
+          "If trading a breakout hypothesis, plan for false breaks and gaps through the trigger.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Inside/outside describes relative ranges, not bullish or bearish certainty.", "Volatility expansion can move in either direction."],
+    commonMistakes: ["Assuming an inside bar must break toward the prior trend.", "Ignoring how equal highs and lows are classified."],
+    relatedLessonIds: ["technical-candlestick-anatomy", "technical-chart-reading"],
+  },
+  {
+    id: "technical-double-tops-bottoms",
+    title: "Double tops and double bottoms",
+    shortDescription: "Study repeated tests of an area and neckline confirmation.",
+    categoryId: "technical-analysis",
+    topicGroup: "Chart patterns",
+    difficulty: "intermediate",
+    estimatedMinutes: 6,
+    aliases: ["M pattern", "W pattern", "neckline", "double bottom"],
+    intro: "A double top or bottom is a chart interpretation of two tests near a similar price area.",
+    sections: [
+      {
+        heading: "Structure and confirmation",
+        paragraphs: [
+          "A double top has two peaks separated by a trough; a double bottom has two troughs separated by a peak. The intervening swing is often called the neckline. The pattern is commonly treated as confirmed only after a break of that level, though definitions vary.",
+          "Peaks need not be identical. A second test can fail to reverse, and a neckline break can be a false breakout.",
+        ],
+      },
+      {
+        heading: "Use measured moves cautiously",
+        bullets: [
+          "Some traders project the pattern's height from the neckline; this is a heuristic, not a price target with assured reach.",
+          "Define swing points, tolerance, confirmation, and invalidation before evaluating examples.",
+        ],
+      },
+    ],
+    keyTakeaways: ["A repeated test is not confirmed until your stated rule is met.", "Pattern projections are estimates and can fail."],
+    commonMistakes: ["Labeling ordinary noise as matching tops or bottoms after the fact.", "Entering before defining what invalidates the pattern."],
+    relatedLessonIds: ["technical-market-structure", "technical-chart-reading", "risk-trade-planning"],
+  },
+  {
+    id: "technical-head-and-shoulders",
+    title: "Head-and-shoulders patterns",
+    shortDescription: "Identify shoulders, head, neckline, and failure conditions.",
+    categoryId: "technical-analysis",
+    topicGroup: "Chart patterns",
+    difficulty: "intermediate",
+    estimatedMinutes: 6,
+    aliases: ["inverse head and shoulders", "neckline break", "H&S pattern"],
+    intro: "This reversal pattern organizes swing highs or lows into a testable visual structure.",
+    sections: [
+      {
+        heading: "The pattern",
+        paragraphs: [
+          "A standard head-and-shoulders has a central higher peak (the head) between lower peaks (shoulders), with a neckline drawn through the intervening lows. The inverse form uses three lows, with the central low deepest.",
+          "Necklines can slope, and analysts differ on whether confirmation requires a close, a touch, or a retest beyond it. Pick a rule in advance.",
+        ],
+      },
+      {
+        heading: "Limits of interpretation",
+        bullets: [
+          "A pattern can remain incomplete or fail after a neckline break.",
+          "Volume is sometimes used as context, but volume data quality and interpretation differ across venues.",
+        ],
+      },
+    ],
+    keyTakeaways: ["The pattern is defined by relative swings and a chosen neckline rule.", "Do not treat a neckline break as certainty."],
+    commonMistakes: ["Forcing shoulders onto irregular price action.", "Ignoring sloped necklines, timeframe, or the risk of a false break."],
+    relatedLessonIds: ["technical-market-structure", "technical-double-tops-bottoms", "strategies-backtesting-basics"],
+  },
+  {
+    id: "technical-triangles-flags-wedges",
+    title: "Triangles, flags, and wedges",
+    shortDescription: "Compare common continuation and compression patterns.",
+    categoryId: "technical-analysis",
+    topicGroup: "Chart patterns",
+    difficulty: "intermediate",
+    estimatedMinutes: 7,
+    aliases: ["ascending triangle", "descending triangle", "symmetrical triangle", "bull flag", "bear flag", "wedge"],
+    intro: "These pattern names describe converging boundaries or pauses; their labels do not guarantee a breakout direction.",
+    sections: [
+      {
+        heading: "Common forms",
+        paragraphs: [
+          "Ascending and descending triangles pair a relatively flat boundary with rising lows or falling highs. A symmetrical triangle has converging boundaries. Flags are short consolidations after a sharp move; wedges have converging, often sloped boundaries.",
+          "Textbook labels simplify messy charts. Analysts disagree about swing-point selection, minimum touches, duration, and whether a breakout needs a closing price or retest.",
+        ],
+      },
+      {
+        heading: "Plan for either outcome",
+        bullets: [
+          "Mark boundaries using a consistent method and identify the point where the idea is no longer valid.",
+          "Breakouts can reverse or gap beyond a planned entry. Risk controls and costs matter more than the pattern name.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Compression patterns describe geometry, not a certain future move.", "Define boundaries and confirmation rules before testing."],
+    commonMistakes: ["Assuming an ascending triangle must break upward.", "Redrawing boundaries to fit a preferred result."],
+    relatedLessonIds: ["technical-market-structure", "technical-trendlines", "strategies-breakout-example"],
+  },
+  {
+    id: "technical-market-structure",
+    title: "Market structure: swings, BOS, and CHoCH",
+    shortDescription: "Map swing sequences and define break-of-structure terminology.",
+    categoryId: "technical-analysis",
+    topicGroup: "Market structure",
+    difficulty: "intermediate",
+    estimatedMinutes: 7,
+    aliases: ["BOS", "break of structure", "CHoCH", "change of character", "swing highs and lows"],
+    intro: "Market-structure labels can help describe price sequences, but terminology varies among traders.",
+    sections: [
+      {
+        heading: "Swings and breaks",
+        paragraphs: [
+          "A swing high or low is a local turning point defined by a chosen number of bars or a price threshold. In a common framework, higher highs and higher lows describe an advancing sequence; lower highs and lower lows describe a declining sequence.",
+          "BOS (break of structure) often means price breaks a prior swing in the direction of the current trend. CHoCH (change of character) often labels a break against the prior sequence and may be treated as an early warning, not confirmation of a lasting reversal.",
+        ],
+      },
+      {
+        heading: "State the methodology",
+        bullets: [
+          "Specify swing rules, timeframe, whether a wick or close counts, and which swing is relevant.",
+          "A minor swing break can coexist with a larger-timeframe trend; timeframe hierarchy is an analytical choice, not a universal rule.",
+        ],
+      },
+    ],
+    keyTakeaways: ["BOS and CHoCH do not have universally fixed definitions.", "A structure break is evidence to assess, not a prediction."],
+    commonMistakes: ["Switching swing definitions mid-analysis.", "Treating a wick through a level as confirmation without a predefined rule."],
+    relatedLessonIds: ["technical-liquidity-smc", "technical-trendlines", "technical-chart-reading"],
+  },
+  {
+    id: "technical-liquidity-smc",
+    title: "Liquidity and Smart Money Concepts",
+    shortDescription: "Examine liquidity, stop clusters, order blocks, and fair value gaps carefully.",
+    categoryId: "technical-analysis",
+    topicGroup: "Liquidity and SMC",
+    difficulty: "advanced",
+    estimatedMinutes: 8,
+    aliases: ["SMC", "liquidity sweep", "stop hunt", "order block", "fair value gap", "FVG"],
+    intro: "SMC is a family of chart-reading frameworks; its labels are interpretations, not direct views of hidden orders.",
+    sections: [
+      {
+        heading: "What a chart can and cannot show",
+        paragraphs: [
+          "Liquidity broadly describes how readily an asset can trade without large price impact. Traders sometimes infer likely stop areas near visible highs and lows and call a move through them a sweep. A chart alone cannot prove stops were present, who triggered them, or intent.",
+          "An order block is commonly marked as a prior candle or zone before a strong move; a fair value gap is often defined as a three-candle range imbalance. There is no single standardized definition, and price may never revisit a marked zone.",
+        ],
+      },
+      {
+        heading: "Use labels as hypotheses",
+        bullets: [
+          "Record the exact zone and confirmation rule, then test it across unseen data with costs.",
+          "Avoid claims that institutions must defend a zone or that every sweep causes reversal.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Liquidity concepts can organize hypotheses but do not reveal hidden intent.", "SMC terms and drawing rules vary substantially."],
+    commonMistakes: ["Treating inferred stops or order blocks as observable facts.", "Selecting zones retrospectively after a reaction."],
+    relatedLessonIds: ["fundamentals-market-participants", "technical-market-structure", "strategies-backtesting-basics"],
+  },
+  {
+    id: "technical-trendlines",
+    title: "Trendlines and support/resistance",
+    shortDescription: "Draw levels as zones and test them without false precision.",
+    categoryId: "technical-analysis",
+    topicGroup: "Tools and chart reading",
+    difficulty: "beginner",
+    estimatedMinutes: 6,
+    aliases: ["support", "resistance", "trend line", "horizontal levels"],
+    intro: "Trendlines and horizontal levels summarize prior reactions; they are approximate regions, not barriers.",
+    sections: [
+      {
+        heading: "Drawing a useful reference",
+        paragraphs: [
+          "A trendline connects selected rising lows or falling highs. Horizontal support and resistance mark areas where price previously paused or turned. Different swing choices create different lines, and prices can pass through them.",
+          "Treat a level as a zone appropriate to the instrument's volatility. More touches do not automatically make it stronger; repeated tests may also consume resting interest.",
+        ],
+      },
+      {
+        heading: "Make drawings reproducible",
+        bullets: [
+          "Choose swing rules and timeframe before drawing; record why a line would be invalidated.",
+          "Do not move a line after a loss simply to make the original idea appear correct.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Chart levels are approximate and analyst-dependent.", "A reaction at a level is uncertain and must be evaluated in context."],
+    commonMistakes: ["Drawing through arbitrary points to fit a narrative.", "Assuming past support must hold again."],
+    relatedLessonIds: ["technical-market-structure", "technical-triangles-flags-wedges", "technical-chart-reading"],
+  },
+  {
+    id: "technical-indicators",
+    title: "Moving averages, RSI, and MACD",
+    shortDescription: "Understand what common indicators calculate and what they omit.",
+    categoryId: "technical-analysis",
+    topicGroup: "Tools and chart reading",
+    difficulty: "intermediate",
+    estimatedMinutes: 8,
+    aliases: ["SMA", "EMA", "relative strength index", "MACD", "technical indicators"],
+    intro: "Indicators transform past price or volume data; they do not add certainty or independent information automatically.",
+    sections: [
+      {
+        heading: "Three common tools",
+        paragraphs: [
+          "A simple moving average is the mean of a selected number of recent prices; an exponential moving average weights recent values more heavily. Both smooth data and lag turning points.",
+          "RSI compares recent average gains and losses on a bounded scale. MACD compares moving averages and is often displayed with a signal line and histogram. Formula details, input prices, and settings may vary by platform.",
+        ],
+      },
+      {
+        heading: "Use with restraint",
+        bullets: [
+          "An 'overbought' RSI reading can persist in a strong rise; 'oversold' can persist in a decline.",
+          "Indicators built from the same price series are often correlated. Adding more indicators can create redundancy rather than confirmation.",
+          "Test settings on data not used to choose them and account for lag, costs, and regime changes.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Indicators summarize historical inputs and necessarily have limitations.", "A threshold is not a trade instruction by itself."],
+    commonMistakes: ["Treating RSI extremes as automatic reversals.", "Optimizing many indicator settings on the same historical sample."],
+    relatedLessonIds: ["technical-chart-reading", "strategies-backtesting-basics"],
+  },
+  {
+    id: "technical-chart-reading",
+    title: "A practical chart-reading workflow",
+    shortDescription: "Move from broad context to a testable, risk-aware observation.",
+    categoryId: "technical-analysis",
+    topicGroup: "Tools and chart reading",
+    difficulty: "beginner",
+    estimatedMinutes: 7,
+    aliases: ["chart analysis", "top down analysis", "read price action"],
+    intro: "A repeatable chart routine separates observation from prediction and keeps uncertainty visible.",
+    sections: [
+      {
+        heading: "A simple sequence",
+        bullets: [
+          "Confirm the symbol, data source, timeframe, session, and whether prices are adjusted.",
+          "Describe the broad regime: advancing, declining, ranging, or unclear. Mark only a few relevant swings and zones.",
+          "Observe current price action and any pattern using explicit definitions; write down alternative explanations.",
+          "If considering a trade, specify the trigger, invalidation, position risk, costs, and what would make you stand aside.",
+        ],
+      },
+      {
+        heading: "Keep evidence in proportion",
+        paragraphs: [
+          "A chart is a lossy view of a market. Apparent patterns can result from random variation, and different timeframes can conflict. A useful process records what was knowable at the time rather than annotating only after the outcome.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Separate observations, interpretations, and decisions.", "A valid decision can have an adverse outcome; process quality is not the same as profit."],
+    commonMistakes: ["Adding indicators until a preferred story appears.", "Ignoring data quality, timeframe, and the possibility of no trade."],
+    relatedLessonIds: ["technical-candlestick-anatomy", "technical-market-structure", "risk-trade-planning"],
+  },
+  {
+    id: "risk-position-sizing",
+    title: "Position sizing from a risk limit",
+    shortDescription: "Calculate a theoretical size from account risk and stop distance.",
+    categoryId: "risk-management",
+    topicGroup: "Position sizing",
+    difficulty: "beginner",
+    estimatedMinutes: 7,
+    aliases: ["lot size", "position size", "risk per trade", "units calculation"],
+    intro: "Position size connects a planned exit distance to a chosen loss limit; it cannot cap every real-world loss.",
+    sections: [
+      {
+        heading: "Basic arithmetic",
+        formula: "position units = cash risk / (entry-to-stop distance per unit)",
+        paragraphs: [
+          "For a linear instrument quoted in the account currency, a simplified formula is: position units = cash risk / (entry-to-stop distance per unit). If account equity is $10,000 and the hypothetical risk limit is 0.5%, cash risk is $10,000 x 0.005 = $50. With a $2 per-unit stop distance, size is $50 / $2 = 25 units before costs.",
+          "If the stop distance is $2 per share but each share's value changes by $2 at the stop, 25 shares imply a planned $50 loss. This arithmetic assumes a fill at the stop and excludes fees, spread, gaps, FX conversion, and contract multipliers.",
+        ],
+      },
+      {
+        heading: "Instrument-specific adjustments",
+        bullets: [
+          "Futures, options, CFDs, FX, and leveraged products have different contract values, margin, and loss behavior. Verify tick value, multiplier, quote currency, and broker rules.",
+          "Round size down to an allowed increment and recalculate the exposure. A stop does not guarantee the planned loss.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Size follows from a defined risk amount and instrument-specific stop value.", "The planned risk is not a guaranteed maximum loss."],
+    commonMistakes: ["Using account balance instead of a deliberate risk limit.", "Forgetting contract multipliers, currency conversion, or gap risk."],
+    relatedLessonIds: ["risk-risk-reward", "risk-stop-and-gap-risk", "risk-trade-planning"],
+    toolRoute: "/lot-size-calculator",
+  },
+  {
+    id: "risk-risk-reward",
+    title: "Risk, reward, and expectancy",
+    shortDescription: "Compare planned outcomes using probabilities and costs.",
+    categoryId: "risk-management",
+    topicGroup: "Risk and reward",
+    difficulty: "intermediate",
+    estimatedMinutes: 7,
+    aliases: ["risk reward ratio", "R multiple", "expectancy", "win rate"],
+    intro: "A reward-to-risk estimate describes a plan, not the probability that its target will be reached.",
+    sections: [
+      {
+        heading: "Use consistent units",
+        formula: "expectancy = (win probability x average win) - (loss probability x average loss)",
+        paragraphs: [
+          "If planned loss is $50 and planned gain is $100, the reward-to-risk ratio is $100 / $50 = 2:1 before costs. In R notation, a $50 planned loss is 1R and a $100 gain is 2R.",
+          "A simplified expectancy is (win probability x average win) - (loss probability x average loss). For a hypothetical 40% win rate, $100 average win, and $50 average loss: 0.40 x $100 - 0.60 x $50 = $10 per trade before costs. This is an estimate, not a promise; observed rates and outcomes vary.",
+        ],
+      },
+      {
+        heading: "Interpret carefully",
+        bullets: [
+          "Include fees, spread, slippage, financing, partial exits, and unfilled trades when measuring outcomes.",
+          "A favorable ratio alone says nothing about whether the setup reaches its target often enough.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Compare planned gain and loss in the same units.", "Expectancy depends on both outcome size and frequency, and on costs."],
+    commonMistakes: ["Assuming a 2:1 plan means twice as many wins as losses.", "Estimating win probability from a tiny or selectively chosen sample."],
+    relatedLessonIds: ["risk-position-sizing", "strategies-backtesting-basics"],
+    toolRoute: "/risk-management",
+  },
+  {
+    id: "risk-stop-and-gap-risk",
+    title: "Stops, gaps, and loss limits",
+    shortDescription: "Understand what stops can and cannot control.",
+    categoryId: "risk-management",
+    topicGroup: "Protection and portfolio risk",
+    difficulty: "intermediate",
+    estimatedMinutes: 6,
+    aliases: ["stop loss", "stop order", "gap risk", "slippage risk"],
+    intro: "Stops are risk-management instructions, not insurance against execution at a specific price.",
+    sections: [
+      {
+        heading: "Trigger versus fill",
+        paragraphs: [
+          "A stop-market order commonly becomes a market order after its trigger condition is met. It prioritizes an exit but can fill at a worse price in a fast market or gap. A stop-limit adds a price boundary but may not execute at all.",
+          "Some platforms use last-traded, bid, ask, or other trigger references. Check the venue's rules and simulate likely behavior before relying on an order.",
+        ],
+      },
+      {
+        heading: "Layer risk controls",
+        bullets: [
+          "Size positions for plausible adverse movement, not only the intended stop distance.",
+          "Consider overnight announcements, illiquidity, correlated positions, and operational failure.",
+        ],
+      },
+    ],
+    keyTakeaways: ["A stop trigger and execution price are different concepts.", "Gaps and thin markets can exceed a planned loss."],
+    commonMistakes: ["Describing stop distance as a guaranteed maximum loss.", "Using stop-limit orders without considering non-execution."],
+    relatedLessonIds: ["fundamentals-orders-execution", "risk-position-sizing", "risk-portfolio-exposure"],
+  },
+  {
+    id: "risk-portfolio-exposure",
+    title: "Portfolio exposure and drawdown",
+    shortDescription: "Consider correlated trades, concentration, and losing periods.",
+    categoryId: "risk-management",
+    topicGroup: "Protection and portfolio risk",
+    difficulty: "intermediate",
+    estimatedMinutes: 6,
+    aliases: ["portfolio risk", "correlation", "drawdown", "concentration risk"],
+    intro: "Several positions can amount to one concentrated bet when their risks move together.",
+    sections: [
+      {
+        heading: "Aggregate rather than isolate",
+        paragraphs: [
+          "Two trades in related assets may lose together. Correlations change over time, so historical diversification can weaken during stress. Consider total exposure by currency, sector, instrument, and scenario rather than only risk per trade.",
+          "Drawdown is a decline from a prior account peak. A 20% decline on $10,000 leaves $8,000; returning from $8,000 to $10,000 requires a 25% gain because $2,000 / $8,000 = 0.25.",
+        ],
+      },
+      {
+        heading: "Plan resilience",
+        bullets: [
+          "Set exposure limits and a review process appropriate to personal circumstances and instrument risk.",
+          "Stress-test clustered losses, gaps, and reduced liquidity; no historical scenario covers every future event.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Per-trade sizing does not capture all portfolio risk.", "Loss recovery percentages are asymmetric."],
+    commonMistakes: ["Assuming different tickers guarantee diversification.", "Increasing risk to quickly recover a drawdown."],
+    relatedLessonIds: ["risk-position-sizing", "risk-stop-and-gap-risk", "psychology-losses"],
+  },
+  {
+    id: "risk-trade-planning",
+    title: "Write a trade plan before entry",
+    shortDescription: "Specify a hypothesis, invalidation, size, and contingencies.",
+    categoryId: "risk-management",
+    topicGroup: "Risk and reward",
+    difficulty: "beginner",
+    estimatedMinutes: 6,
+    aliases: ["trade plan", "invalidation", "pre-trade checklist"],
+    intro: "A written plan makes assumptions visible and reduces the temptation to improvise under pressure.",
+    sections: [
+      {
+        heading: "A compact plan",
+        bullets: [
+          "State the setup and the evidence that would trigger entry.",
+          "Define the price or condition that invalidates the hypothesis and the exit instruction.",
+          "Calculate position size, total exposure, costs, and plausible gap loss.",
+          "Record target logic, event risks, and what you will do if the order only partially fills.",
+        ],
+      },
+      {
+        heading: "Allow for no trade",
+        paragraphs: [
+          "If the trigger, risk, or instrument details are unclear, waiting is a valid decision. A plan organizes uncertainty; it does not remove it or make a trade suitable for every person.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Decide in advance what would change your view.", "A clear plan includes size and failure conditions, not just entry."],
+    commonMistakes: ["Writing a rationale only after taking a position.", "Moving an invalidation level to avoid recording a loss."],
+    relatedLessonIds: ["risk-position-sizing", "technical-chart-reading", "psychology-journaling"],
+    toolRoute: "/risk-management",
+  },
+  {
+    id: "fundamental-economic-drivers",
+    title: "Economic drivers and market expectations",
+    shortDescription: "Relate growth, inflation, rates, and expectations cautiously.",
+    categoryId: "fundamental-analysis",
+    topicGroup: "Economic context",
+    difficulty: "beginner",
+    estimatedMinutes: 7,
+    aliases: ["macroeconomics", "interest rates", "inflation", "economic drivers"],
+    intro: "Fundamental analysis studies factors that may affect value; markets respond to expectations as well as published data.",
+    sections: [
+      {
+        heading: "A connected system",
+        paragraphs: [
+          "Growth, employment, inflation, fiscal policy, and central-bank decisions can influence rates, currencies, bonds, equities, and commodities through multiple channels. Relationships are not fixed: the same data can be interpreted differently across regimes.",
+          "Prices often move before an announcement as expectations change. A result that is strong in absolute terms can still disappoint if it is weaker than expected.",
+        ],
+      },
+      {
+        heading: "Separate fact from forecast",
+        bullets: [
+          "Record the release, prior value, consensus estimate, and revisions from a reliable source.",
+          "Treat a causal story as a hypothesis; unexpected positioning, policy, or external shocks may dominate.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Markets price expectations, not just headline values.", "Macroeconomic relationships vary over time."],
+    commonMistakes: ["Assuming a strong report must lift every related asset.", "Treating consensus or one economic model as certainty."],
+    relatedLessonIds: ["fundamentals-events-calendar", "fundamentals-company-analysis"],
+  },
+  {
+    id: "fundamentals-company-analysis",
+    title: "Company and asset fundamentals",
+    shortDescription: "Organize a basic review of business quality, valuation, and risk.",
+    categoryId: "fundamental-analysis",
+    topicGroup: "Company and asset analysis",
+    difficulty: "intermediate",
+    estimatedMinutes: 8,
+    aliases: ["financial statements", "valuation", "revenue and cash flow", "company analysis"],
+    intro: "Fundamental research asks what can support or undermine an asset's value, without producing a certain fair price.",
+    sections: [
+      {
+        heading: "Questions to investigate",
+        bullets: [
+          "How does the business earn revenue, and what affects its costs, margins, and competitive position?",
+          "Review cash flow, debt, liquidity, dilution, and accounting notes alongside reported earnings.",
+          "Compare valuation measures only among reasonably comparable businesses and understand their assumptions.",
+          "For non-company assets, examine supply, demand, contract design, custody, and relevant policy or network risks.",
+        ],
+      },
+      {
+        heading: "Valuation is assumption-sensitive",
+        paragraphs: [
+          "A valuation model translates assumptions into an estimate; small changes to growth, discount rates, margins, or terminal value can change the result materially. Financial statements are historical and may be revised or affected by accounting choices.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Use multiple sources and examine cash, debt, and business risks.", "A valuation is conditional on assumptions, not an objective guarantee."],
+    commonMistakes: ["Relying on one ratio without comparing business models.", "Confusing a good company with an asset that is attractively priced."],
+    relatedLessonIds: ["fundamental-economic-drivers", "fundamentals-events-calendar"],
+  },
+  {
+    id: "fundamentals-events-calendar",
+    title: "Economic calendars and event risk",
+    shortDescription: "Prepare for scheduled releases and uncertainty around them.",
+    categoryId: "fundamental-analysis",
+    topicGroup: "Events and research",
+    difficulty: "beginner",
+    estimatedMinutes: 6,
+    aliases: ["economic calendar", "earnings calendar", "news risk", "event trading"],
+    intro: "A calendar helps identify scheduled events; it cannot predict their market impact.",
+    sections: [
+      {
+        heading: "Prepare, do not predict",
+        paragraphs: [
+          "Central-bank decisions, inflation releases, employment reports, earnings, and policy announcements can coincide with wider spreads and rapid repricing. Check the event time, time zone, source, and whether a release has been revised.",
+          "The direction of the first move may differ from the later response. Consensus, positioning, guidance, and details can matter as much as the headline.",
+        ],
+      },
+      {
+        heading: "Manage exposure",
+        bullets: [
+          "Know whether positions will be open during a scheduled event and what the instrument's overnight rules are.",
+          "A calendar is incomplete for unscheduled news. Avoid relying on a scheduled stop fill in a gap.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Scheduled events can change liquidity and volatility.", "A calendar informs preparation, not the result."],
+    commonMistakes: ["Trading a headline without checking the actual release and context.", "Assuming all event risk is listed in advance."],
+    relatedLessonIds: ["fundamental-economic-drivers", "risk-stop-and-gap-risk"],
+    toolRoute: "/economic-calendar",
+  },
+  {
+    id: "fundamentals-research-sources",
+    title: "Build a reliable research routine",
+    shortDescription: "Check sources, timestamps, revisions, and alternative explanations.",
+    categoryId: "fundamental-analysis",
+    topicGroup: "Events and research",
+    difficulty: "intermediate",
+    estimatedMinutes: 6,
+    aliases: ["research methodology", "data quality", "market news sources"],
+    intro: "Research quality depends on source quality and a transparent distinction between evidence and interpretation.",
+    sections: [
+      {
+        heading: "Verify inputs",
+        bullets: [
+          "Prefer primary releases, filings, exchange notices, or clearly attributed data providers.",
+          "Check units, period, currency, release time, revisions, and whether figures are seasonally adjusted.",
+          "Keep the original observation separate from commentary or a forecast.",
+        ],
+      },
+      {
+        heading: "Keep uncertainty explicit",
+        paragraphs: [
+          "A concise daily brief can summarize known events and plausible scenarios, but should not imply that it knows the next price move. Confirm material claims independently and note when information is unavailable or stale.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Timestamp and verify data before drawing conclusions.", "Separate observed facts, estimates, and interpretations."],
+    commonMistakes: ["Repeating an unverified headline as established fact.", "Ignoring revisions or using a data point from the wrong period."],
+    relatedLessonIds: ["fundamental-economic-drivers", "fundamentals-events-calendar"],
+    toolRoute: "/daily-brief",
+  },
+  {
+    id: "psychology-process-over-outcome",
+    title: "Process over outcome",
+    shortDescription: "Judge decisions by the information and rules available at the time.",
+    categoryId: "trading-psychology",
+    topicGroup: "Decision-making",
+    difficulty: "beginner",
+    estimatedMinutes: 5,
+    aliases: ["process focused trading", "outcome bias", "decision quality"],
+    intro: "A good process can produce a loss, and a poor process can occasionally produce a gain.",
+    sections: [
+      {
+        heading: "Separate decision and result",
+        paragraphs: [
+          "Because each trade has an uncertain outcome, one result is weak evidence about whether a decision rule is sound. Review whether you followed a defined plan, used valid information, and respected risk limits.",
+          "Over many observations, carefully collected results can help assess a method, but even a large sample may not represent a changed market regime.",
+        ],
+      },
+      {
+        heading: "Use a review checklist",
+        bullets: [
+          "Was the setup valid by the rule written before entry?",
+          "Was exposure within plan, and were changes documented?",
+          "What would you repeat or revise based on evidence rather than hindsight?",
+        ],
+      },
+    ],
+    keyTakeaways: ["Evaluate the decision process separately from one trade's result.", "Consistent review is more informative than reacting to a single outcome."],
+    commonMistakes: ["Calling a risky rule good because it won once.", "Abandoning a tested process after a small run of losses."],
+    relatedLessonIds: ["psychology-journaling", "strategies-backtesting-basics", "psychology-losses"],
+  },
+  {
+    id: "psychology-losses",
+    title: "Losses, drawdowns, and emotional control",
+    shortDescription: "Recognize common reactions and use pre-planned boundaries.",
+    categoryId: "trading-psychology",
+    topicGroup: "Emotions and discipline",
+    difficulty: "beginner",
+    estimatedMinutes: 6,
+    aliases: ["loss aversion", "revenge trading", "drawdown psychology", "fear and greed"],
+    intro: "Uncertainty and losses can prompt impulsive decisions; practical limits help reduce the chance of escalation.",
+    sections: [
+      {
+        heading: "Notice the pattern",
+        paragraphs: [
+          "After a loss, people may increase size to recover quickly, move a stop, or take a low-quality setup. After a win, overconfidence can lead to the same disregard for limits. These reactions are common but not inevitable.",
+          "A losing streak does not by itself prove that a method has stopped working, and it also does not justify continuing without review.",
+        ],
+      },
+      {
+        heading: "Set guardrails",
+        bullets: [
+          "Define a maximum session loss, pause conditions, and when to seek an independent review before trading.",
+          "Reduce exposure or step away when tired, distressed, or unable to follow the plan.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Emotional guardrails should be decided before high-pressure moments.", "Protect wellbeing and capital rather than trying to force a recovery."],
+    commonMistakes: ["Revenge trading to erase a loss immediately.", "Increasing risk because a recent outcome feels unusually certain."],
+    relatedLessonIds: ["risk-portfolio-exposure", "psychology-process-over-outcome", "psychology-journaling"],
+  },
+  {
+    id: "psychology-journaling",
+    title: "Trading journals and review",
+    shortDescription: "Record decisions in a way that supports honest learning.",
+    categoryId: "trading-psychology",
+    topicGroup: "Review and wellbeing",
+    difficulty: "beginner",
+    estimatedMinutes: 6,
+    aliases: ["trade journal", "trading diary", "performance review"],
+    intro: "A journal is useful when it captures decisions and context consistently, including trades that were not taken.",
+    sections: [
+      {
+        heading: "What to record",
+        bullets: [
+          "Timestamp, instrument, timeframe, setup rule, entry and exit, planned risk, and actual costs.",
+          "A chart or note showing what was visible before the outcome, plus any rule deviation.",
+          "Market context, emotional state, and an alternative explanation where relevant.",
+        ],
+      },
+      {
+        heading: "Review without hindsight",
+        paragraphs: [
+          "Use fixed labels and review periods so categories remain comparable. Preserve the original plan; do not edit it after the result. Protect personal and financial data stored in a journal.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Consistent records reveal process patterns that memory can distort.", "Include missed, invalid, and losing setups to reduce selection bias."],
+    commonMistakes: ["Recording only winning trades.", "Changing labels or rules during analysis to improve apparent results."],
+    relatedLessonIds: ["psychology-process-over-outcome", "strategies-backtesting-basics"],
+  },
+  {
+    id: "psychology-routines",
+    title: "Routines, attention, and boundaries",
+    shortDescription: "Create sustainable limits around screen time and decision-making.",
+    categoryId: "trading-psychology",
+    topicGroup: "Emotions and discipline",
+    difficulty: "beginner",
+    estimatedMinutes: 5,
+    aliases: ["trading discipline", "trading routine", "screen time", "wellbeing"],
+    intro: "A routine can reduce avoidable decisions, but it cannot make an unsuitable or risky activity safe for everyone.",
+    sections: [
+      {
+        heading: "A practical routine",
+        bullets: [
+          "Prepare relevant events and define the times you will and will not monitor markets.",
+          "Use alerts and written rules rather than watching every price change.",
+          "Schedule breaks, review exposure, and stop when attention or wellbeing deteriorates.",
+        ],
+      },
+      {
+        heading: "Keep boundaries",
+        paragraphs: [
+          "Never risk money needed for essentials, and consider whether trading is compatible with your circumstances. If market activity is causing significant distress or loss of control, pause and seek appropriate support.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Attention and wellbeing are part of risk management.", "A deliberate pause is a valid part of a trading routine."],
+    commonMistakes: ["Confusing more screen time with better decisions.", "Continuing while tired, distressed, or outside personal limits."],
+    relatedLessonIds: ["psychology-losses", "psychology-journaling"],
+  },
+  {
+    id: "strategies-rules-and-hypotheses",
+    title: "Turn an idea into strategy rules",
+    shortDescription: "Define observable conditions, exits, and scope before testing.",
+    categoryId: "strategies-practice",
+    topicGroup: "Strategy design",
+    difficulty: "beginner",
+    estimatedMinutes: 7,
+    aliases: ["trading strategy", "trading system", "entry and exit rules"],
+    intro: "A strategy becomes testable when its signals and decisions can be applied consistently without hindsight.",
+    sections: [
+      {
+        heading: "Specify the method",
+        bullets: [
+          "Define eligible instruments, timeframe, data source, and trading sessions.",
+          "Describe entry trigger, order type, stop or invalidation, exit, and position-size calculation.",
+          "Write down exclusions such as scheduled events or poor liquidity.",
+          "Choose evaluation measures and a comparison baseline before looking at results.",
+        ],
+      },
+      {
+        heading: "Keep rules operational",
+        paragraphs: [
+          "Terms such as 'strong trend' or 'clean breakout' need measurable definitions. If a rule requires judgment, document the judgment process and assess whether another reviewer can apply it similarly.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Rules should be clear enough to reproduce.", "A strategy is a hypothesis to evaluate, not a guarantee of returns."],
+    commonMistakes: ["Changing entry rules after seeing historical outcomes.", "Leaving costs, unfilled orders, or exclusions unspecified."],
+    relatedLessonIds: ["strategies-backtesting-basics", "risk-trade-planning"],
+  },
+  {
+    id: "strategies-backtesting-basics",
+    title: "Backtesting without fooling yourself",
+    shortDescription: "Test historical rules with realistic costs and out-of-sample data.",
+    categoryId: "strategies-practice",
+    topicGroup: "Backtesting",
+    difficulty: "intermediate",
+    estimatedMinutes: 8,
+    aliases: ["historical testing", "overfitting", "out of sample", "backtest"],
+    intro: "A backtest estimates how fixed rules would have behaved on historical data; it cannot establish future performance.",
+    sections: [
+      {
+        heading: "Design a credible test",
+        bullets: [
+          "Use timestamped data appropriate to the instrument and avoid look-ahead or survivorship bias.",
+          "Model spread, commissions, slippage, financing, contract changes, and fills as realistically as possible.",
+          "Separate development data from an untouched test period; consider walk-forward or paper validation.",
+          "Compare with a simple baseline and report drawdown, trade count, exposure, and uncertainty, not only total return.",
+        ],
+      },
+      {
+        heading: "Interpret results modestly",
+        paragraphs: [
+          "Trying many variants and reporting only the best creates data-mining bias. A small sample can look compelling by chance; market structure and costs can change. Past test performance is not a prediction or promise.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Avoid using the same data to invent and validate a strategy.", "Include realistic execution costs and examine adverse periods."],
+    commonMistakes: ["Optimizing many parameters until historical results look ideal.", "Treating a backtest as a guarantee or as evidence of suitability."],
+    relatedLessonIds: ["strategies-rules-and-hypotheses", "risk-risk-reward", "psychology-journaling"],
+  },
+  {
+    id: "strategies-breakout-example",
+    title: "A hypothetical breakout exercise",
+    shortDescription: "Practice writing entry, failure, and risk rules for a simulated setup.",
+    categoryId: "strategies-practice",
+    topicGroup: "Simulated practice",
+    difficulty: "intermediate",
+    estimatedMinutes: 7,
+    aliases: ["breakout strategy", "paper trading exercise", "simulated example"],
+    intro: "This is a hypothetical learning exercise using invented levels, not a live market example or recommendation.",
+    sections: [
+      {
+        heading: "Simulated setup",
+        paragraphs: [
+          "Suppose a fictional asset has repeatedly traded inside a range from 48 to 52. For practice only, define a breakout trigger as a completed hourly close above 52, with no scheduled event in the exercise window. These numbers are invented and do not describe market data.",
+          "A learner might record an entry rule, an invalidation condition back inside the range, and a maximum cash risk. The exercise does not assume that a breakout will continue; a false break is an equally relevant scenario.",
+        ],
+      },
+      {
+        heading: "Review both paths",
+        bullets: [
+          "Scenario A: price gaps above the trigger; compare the planned order with possible slippage or a missed fill.",
+          "Scenario B: price closes above 52, then falls back into the range; follow the prewritten invalidation rule rather than improvising.",
+          "Do not infer an edge from one example. Collect many simulated cases and then test fixed rules on separate data.",
+        ],
+      },
+    ],
+    keyTakeaways: ["The example is fictional and intended for simulation only.", "A breakout rule must describe false breaks and execution uncertainty."],
+    commonMistakes: ["Treating an invented scenario as a current market setup.", "Counting only successful breakouts when reviewing the exercise."],
+    relatedLessonIds: ["technical-triangles-flags-wedges", "strategies-rules-and-hypotheses", "risk-trade-planning"],
+  },
+  {
+    id: "strategies-paper-practice",
+    title: "Paper trading and deliberate practice",
+    shortDescription: "Practice execution rules in simulation while recognizing its limits.",
+    categoryId: "strategies-practice",
+    topicGroup: "Simulated practice",
+    difficulty: "beginner",
+    estimatedMinutes: 6,
+    aliases: ["paper trading", "demo account", "simulation practice"],
+    intro: "Simulation can help rehearse rules, but it does not fully reproduce real execution or emotional stakes.",
+    sections: [
+      {
+        heading: "Practice the process",
+        bullets: [
+          "Use the same entry, sizing, exit, and journal rules intended for evaluation.",
+          "Record hypothetical fills using conservative assumptions for spread, partial fills, and slippage.",
+          "Include no-trade decisions, losing sequences, and event conditions.",
+        ],
+      },
+      {
+        heading: "Know the gap to live markets",
+        paragraphs: [
+          "Demo fills may be instant or unrealistically favorable; liquidity, queue position, latency, and emotions differ with real exposure. A simulation is practice evidence, not proof of future profitability or suitability.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Simulation is useful for rehearsing process, not predicting returns.", "Model execution conservatively and record deviations."],
+    commonMistakes: ["Assuming demo results will transfer unchanged to live trading.", "Changing rules whenever a simulated trade loses."],
+    relatedLessonIds: ["strategies-rules-and-hypotheses", "strategies-backtesting-basics", "psychology-journaling"],
+  },
+  {
+    id: "fundamentals-forex-pairs",
+    title: "Forex pairs: base, quote, major, and exotic",
+    shortDescription: "Read a currency pair and understand what its quoted price means.",
+    categoryId: "fundamentals",
+    topicGroup: "Markets and instruments",
+    difficulty: "beginner",
+    estimatedMinutes: 6,
+    aliases: ["forex", "currency pairs", "base currency", "quote currency", "majors", "minors", "exotics"],
+    intro: "Forex quotes compare one currency with another; a pair's price is not the price of a single currency in isolation.",
+    sections: [
+      {
+        heading: "Reading a pair",
+        paragraphs: [
+          "In EUR/USD, EUR is the base currency and USD is the quote currency. A hypothetical quote of 1.0800 means one euro is priced at 1.08 US dollars. If the quote rises, the euro has strengthened relative to the dollar under that quote convention; it does not mean every euro-related asset rose.",
+          "Major pairs commonly include the US dollar and another heavily traded currency. Crosses or minors omit USD, while exotic pairs often combine a major currency with a less-traded one. Classifications vary by provider, and the labels do not guarantee low costs or high liquidity.",
+        ],
+      },
+      {
+        heading: "Contract details matter",
+        bullets: [
+          "Check the broker's symbol, contract size, quote precision, trading hours, and financing terms; symbols and specifications can differ.",
+          "A currency's value is always relative to another currency, and multiple economic forces can move the relationship.",
+        ],
+      },
+    ],
+    keyTakeaways: ["The first currency is the base; the second is the quote.", "Major/minor/exotic are descriptive groupings, not risk ratings."],
+    commonMistakes: ["Reversing the meaning of a pair's quote.", "Assuming an exotic pair is safe because the chart looks quiet."],
+    relatedLessonIds: ["fundamentals-market-basics", "fundamentals-market-participants", "fundamentals-orders-execution"],
+  },
+  {
+    id: "fundamentals-sessions-liquidity",
+    title: "Forex sessions, liquidity, and volatility",
+    shortDescription: "Understand trading hours and why activity changes through the day.",
+    categoryId: "fundamentals",
+    topicGroup: "Markets and instruments",
+    difficulty: "beginner",
+    estimatedMinutes: 6,
+    aliases: ["forex sessions", "London session", "New York session", "Asian session", "market liquidity", "volatility"],
+    intro: "Currency trading is decentralized and activity varies as financial centers open, overlap, and close.",
+    sections: [
+      {
+        heading: "Sessions are time zones, not guarantees",
+        paragraphs: [
+          "Traders often describe Asian, London, and New York sessions. Their hours depend on daylight-saving changes and the convention being used. The London-New York overlap is often active, but activity and spreads vary by pair, day, news, and venue.",
+          "Liquidity is the ability to trade without large price impact; volatility describes the degree of price variation over a period. They are related but not identical: a market can move sharply in thin conditions, and a liquid market can still be volatile.",
+        ],
+      },
+      {
+        heading: "Plan around conditions",
+        bullets: [
+          "Check the instrument's actual trading hours and your local time zone instead of relying on a fixed UTC offset year-round.",
+          "News, holidays, rollover, and market closures can widen spreads or reduce available liquidity. A quiet chart does not prove low risk.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Forex sessions describe regional activity, not fixed performance windows.", "Liquidity and volatility are distinct concepts."],
+    commonMistakes: ["Treating an overlap as a guaranteed profitable period.", "Ignoring daylight-saving shifts or holiday conditions."],
+    relatedLessonIds: ["fundamentals-forex-pairs", "fundamentals-orders-execution", "fundamentals-events-calendar"],
+  },
+  {
+    id: "fundamentals-forex-prices-pips",
+    title: "Bid, ask, spread, pips, and lot size",
+    shortDescription: "Learn common FX price units and how trade size affects money at risk.",
+    categoryId: "fundamentals",
+    topicGroup: "Orders and execution",
+    difficulty: "beginner",
+    estimatedMinutes: 8,
+    aliases: ["bid", "ask", "spread", "pip", "pip value", "lots", "position size"],
+    intro: "Quotes, price increments, and contract size determine how price movement translates into trading cost or profit and loss.",
+    sections: [
+      {
+        heading: "Quote and measure movement",
+        paragraphs: [
+          "The bid is the price at which a participant may sell and the ask is the price at which a participant may buy; the spread is the difference. A retail platform's exact display and execution rules depend on the provider.",
+          "A pip is a conventional FX movement unit, often 0.0001 for many non-JPY pairs and 0.01 for many JPY pairs, but contract specifications and fractional pip display vary. Always confirm the symbol's tick size rather than assuming precision.",
+        ],
+      },
+      {
+        heading: "Size changes the cash effect",
+        formula: "Approximate cash risk = stop distance in pips x pip value per lot x lot size",
+        paragraphs: [
+          "For illustration only, if a contract's pip value is $10 per standard lot, a 20-pip stop on 0.10 lot implies about $20 of price risk before spread, commissions, slippage, and conversion effects. Pip value varies by pair, account currency, and contract.",
+          "A standard lot is often 100,000 base-currency units in retail FX, but mini, micro, and broker-specific contract sizes exist. Do not infer cash risk from the word 'lot' alone.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Bid/ask spread is an immediate execution cost.", "Pip value and contract size must match the actual instrument."],
+    commonMistakes: ["Using one pip value for every currency pair.", "Confusing chart decimal places with pip value or position size."],
+    relatedLessonIds: ["risk-position-sizing", "risk-risk-reward", "fundamentals-orders-execution"],
+    toolRoute: "/lot-size-calculator",
+  },
+  {
+    id: "fundamentals-order-types-and-financing",
+    title: "Order types, leverage, margin, and financing",
+    shortDescription: "Compare common orders and the risks created by leverage and overnight positions.",
+    categoryId: "fundamentals",
+    topicGroup: "Orders and execution",
+    difficulty: "intermediate",
+    estimatedMinutes: 8,
+    aliases: ["market order", "limit order", "stop order", "leverage", "margin", "swap", "overnight financing", "slippage"],
+    intro: "An order instruction is not a guarantee of its fill price, and leveraged products can magnify losses as well as gains.",
+    sections: [
+      {
+        heading: "Order instructions differ",
+        bullets: [
+          "A market order prioritizes execution at available prices; it can slip in fast or thin markets.",
+          "A limit order sets the worst acceptable price but may never fill. A stop order activates under specified conditions and can fill beyond its trigger during a gap.",
+          "Broker terminology, trigger source, partial fills, and order duration vary. Read the product and platform rules.",
+        ],
+      },
+      {
+        heading: "Leverage and holding costs",
+        paragraphs: [
+          "Leverage allows a position's notional exposure to exceed the cash margin set aside. Margin is collateral, not a maximum-loss guarantee; a margin close-out may occur during a rapid move, and local protections differ.",
+          "Holding a position overnight may incur or earn financing (often called swap or rollover). Rates, triple-charge days, holidays, and conversion rules depend on the broker and instrument. Include these costs in plans and testing.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Market, limit, and stop instructions have different execution trade-offs.", "Leverage increases exposure and can accelerate losses; financing affects held positions."],
+    commonMistakes: ["Assuming a stop guarantees the exact trigger price.", "Treating required margin as the full amount at risk."],
+    relatedLessonIds: ["fundamentals-forex-prices-pips", "risk-leverage-and-ruin", "risk-stop-and-gap-risk"],
+  },
+  {
+    id: "technical-forming-candles",
+    title: "Forming candles and completed-candle context",
+    shortDescription: "Separate a live candle's changing shape from a confirmed historical bar.",
+    categoryId: "technical-analysis",
+    topicGroup: "Candlesticks",
+    difficulty: "beginner",
+    estimatedMinutes: 5,
+    aliases: ["current candle", "still forming", "completed candle", "OHLC", "latest candle"],
+    intro: "A candle's open, high, low, and close summarize one chosen interval, but its close is final only after that interval ends.",
+    sections: [
+      {
+        heading: "A candle changes before it closes",
+        paragraphs: [
+          "While a candle is forming, its high, low, and current price can change. A green or red body may shrink, grow, or switch direction before the interval completes. A screenshot can capture a moment that does not match the candle's eventual close.",
+          "Completed candles preserve an interval's final OHLC values. On a chart's right edge, identify whether the last bar is partial, whether a separate current-price marker is visible, and which timeframe each bar represents.",
+        ],
+      },
+      {
+        heading: "Avoid reading old prices as current",
+        bullets: [
+          "Do not label a previous completed candle's close as today's current quote.",
+          "If the price scale or current marker is unclear, state that the screenshot does not provide a reliable current price rather than estimating one.",
+        ],
+      },
+    ],
+    keyTakeaways: ["A forming bar is provisional; its final close is not yet known.", "State whether a price is a screenshot observation or a live quote."],
+    commonMistakes: ["Treating a forming candle's shape as fixed.", "Using an earlier candle close as the current market price."],
+    relatedLessonIds: ["technical-candlestick-anatomy", "technical-chart-reading", "risk-trade-planning"],
+  },
+  {
+    id: "technical-classic-patterns",
+    title: "Triple tops, bottoms, wedges, and pattern failures",
+    shortDescription: "Compare repeated swing patterns and plan for false breaks.",
+    categoryId: "technical-analysis",
+    topicGroup: "Chart patterns",
+    difficulty: "intermediate",
+    estimatedMinutes: 7,
+    aliases: ["triple top", "triple bottom", "rising wedge", "falling wedge", "false breakout", "neckline"],
+    intro: "Chart patterns are names for price geometry. Their interpretations vary, and none guarantees a reversal or continuation.",
+    sections: [
+      {
+        heading: "Describe before you label",
+        paragraphs: [
+          "A triple top or bottom describes three tests of a broadly similar price area; a neckline or range boundary is often used as a reference. Peaks and troughs need not be equal, and three tests can lead to either a break or continued range trading.",
+          "A rising wedge has converging boundaries that slope upward; a falling wedge converges while sloping downward. Traders may interpret them as possible exhaustion or continuation formations, but that interpretation is not a law. Textbook tendency is not confirmation.",
+        ],
+      },
+      {
+        heading: "Define confirmation and invalidation",
+        bullets: [
+          "Choose the timeframe, swing-selection rule, and whether a close, volume condition, or retest is required before looking for a trade.",
+          "Plan for price to return inside the pattern, gap past an entry, or invalidate the idea before a fill. Test false breaks as well as clean textbook examples.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Pattern geometry does not reveal the next direction.", "Predefine a confirmation rule and invalidation point."],
+    commonMistakes: ["Calling any three nearby highs a triple top.", "Ignoring examples that fail or retesting after seeing the outcome."],
+    relatedLessonIds: ["technical-double-tops-bottoms", "technical-head-and-shoulders", "technical-triangles-flags-wedges"],
+  },
+  {
+    id: "technical-market-regimes",
+    title: "Trends, ranges, continuation, and reversals",
+    shortDescription: "Describe the market regime before choosing a chart hypothesis.",
+    categoryId: "technical-analysis",
+    topicGroup: "Market structure",
+    difficulty: "beginner",
+    estimatedMinutes: 6,
+    aliases: ["uptrend", "downtrend", "range-bound", "market regime", "breakout", "retest", "reversal", "continuation"],
+    intro: "A regime label summarizes past structure; it does not establish what price will do next.",
+    sections: [
+      {
+        heading: "Classify observable behavior",
+        paragraphs: [
+          "An uptrend is commonly described by successive higher swing highs and higher swing lows; a downtrend by lower highs and lower lows. In a range, price repeatedly trades between approximate boundaries without a sustained directional sequence. Swing rules differ among analysts.",
+          "A continuation hypothesis expects the existing move to resume after a pause. A reversal hypothesis expects a change in the prior sequence. A breakout is a move beyond a selected boundary; a retest is a later return toward it. None is confirmed by its label alone.",
+        ],
+      },
+      {
+        heading: "Keep timeframe and invalidation explicit",
+        bullets: [
+          "A short-timeframe breakout may occur inside a higher-timeframe range. State which timeframe supports each claim.",
+          "Define what would disprove the hypothesis before entry, and include false-break and gap scenarios.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Describe swing evidence and timeframe rather than relying on labels alone.", "A breakout, retest, continuation, or reversal can fail."],
+    commonMistakes: ["Calling one candle a confirmed trend reversal.", "Changing timeframes selectively after a setup fails."],
+    relatedLessonIds: ["technical-market-structure", "technical-triangles-flags-wedges", "technical-chart-reading"],
+  },
+  {
+    id: "technical-liquidity-zones",
+    title: "Buy-side and sell-side liquidity concepts",
+    shortDescription: "Understand common liquidity-zone language without claiming to see hidden orders.",
+    categoryId: "technical-analysis",
+    topicGroup: "Liquidity and SMC",
+    difficulty: "advanced",
+    estimatedMinutes: 7,
+    aliases: ["buy-side liquidity", "sell-side liquidity", "equal highs", "equal lows", "premium", "discount", "mitigation", "imbalance"],
+    intro: "Some price-action frameworks use visible swing levels to hypothesize where orders may cluster; a chart cannot confirm hidden orders or intent.",
+    sections: [
+      {
+        heading: "Common vocabulary",
+        paragraphs: [
+          "Buy-side liquidity is often used for hypothetical buy stops above visible highs; sell-side liquidity for hypothetical sell stops below visible lows. Equal highs and equal lows can make these zones salient to a chart reader, but they do not prove orders are actually there.",
+          "Some Smart Money Concepts frameworks divide a chosen range into premium and discount halves, or mark a prior impulse zone as an order block. Mitigation and imbalance rules are methodology-specific. A fair value gap is commonly defined using a three-candle non-overlap, but definitions vary.",
+        ],
+      },
+      {
+        heading: "Use as testable hypotheses",
+        bullets: [
+          "State exactly how a level is drawn and what observable event would confirm or invalidate the idea.",
+          "A wick beyond equal highs may be called a sweep in some frameworks; it can also be ordinary volatility. Price is not required to reverse or fill an imbalance.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Visible levels are observable; the presumed orders behind them are not.", "SMC labels and zone rules are not standardized."],
+    commonMistakes: ["Calling every wick a stop hunt.", "Assuming every imbalance must fill or every order block must hold."],
+    relatedLessonIds: ["technical-liquidity-smc", "technical-market-structure", "technical-forming-candles"],
+  },
+  {
+    id: "technical-volume-data",
+    title: "Volume, indicators, and data limitations",
+    shortDescription: "Ask what an indicator or volume feed measures before using it as confirmation.",
+    categoryId: "technical-analysis",
+    topicGroup: "Tools and chart reading",
+    difficulty: "intermediate",
+    estimatedMinutes: 6,
+    aliases: ["volume", "tick volume", "market data", "indicator limitations"],
+    intro: "Charts display measurements from a provider; missing, aggregated, or venue-specific data can change their meaning.",
+    sections: [
+      {
+        heading: "Know the feed",
+        paragraphs: [
+          "Exchange-traded products may report venue volume, while spot FX is decentralized and chart volume is often a provider-specific tick count rather than a consolidated count of all contracts. The same volume display can therefore differ across brokers.",
+          "Indicators such as moving averages, RSI, and MACD transform historical prices. They may lag, share inputs, or disagree across lookback settings. A second indicator derived from the same candles is not necessarily independent evidence.",
+        ],
+      },
+      {
+        heading: "Use a repeatable method",
+        bullets: [
+          "Record the source, timeframe, and settings, and avoid claims that unavailable volume is visible.",
+          "Compare indicator observations with price structure and test fixed rules on data not used to design them.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Volume quality depends on market structure and the provider's feed.", "Indicators summarize data; they do not remove uncertainty."],
+    commonMistakes: ["Treating spot-FX tick volume as total global traded volume.", "Stacking correlated indicators and calling them independent confirmation."],
+    relatedLessonIds: ["technical-indicators", "technical-chart-reading", "strategies-backtesting-basics"],
+  },
+  {
+    id: "risk-leverage-and-ruin",
+    title: "Leverage, margin, and risk of ruin",
+    shortDescription: "See how repeated losses, leverage, and recovery math affect account survival.",
+    categoryId: "risk-management",
+    topicGroup: "Protection and portfolio risk",
+    difficulty: "advanced",
+    estimatedMinutes: 7,
+    aliases: ["leverage risk", "margin call", "risk of ruin", "account ruin", "drawdown recovery"],
+    intro: "Risk controls can reduce exposure but cannot make trading safe or guarantee that an account avoids severe loss.",
+    sections: [
+      {
+        heading: "Leverage magnifies exposure",
+        paragraphs: [
+          "If an account posts $1,000 of margin for a $20,000 notional position, the notional-to-margin ratio is 20:1. This does not cap possible loss at $1,000. Price movement, gaps, liquidation rules, fees, and legal protections determine outcomes.",
+          "Risk of ruin describes the chance of reaching a defined unacceptable capital threshold under a particular model. It depends on the distribution and dependence of returns, risk size, costs, and the threshold. No simple calculator can know the true future distribution.",
+        ],
+      },
+      {
+        heading: "Losses change recovery requirements",
+        formula: "After a 20% drawdown, remaining capital is 80%; recovery requires a 25% gain on that reduced capital.",
+        bullets: [
+          "A sequence of losses can erode capital even when each planned risk seems small; reduce exposure or stop at predetermined limits rather than escalating to recover.",
+          "Stress-test gaps, correlated positions, and costs beyond the intended stop.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Margin is collateral, not the maximum possible loss.", "Risk of ruin is model-dependent; smaller risk does not eliminate loss."],
+    commonMistakes: ["Increasing leverage because a stop appears close.", "Assuming a long losing streak is impossible after several wins."],
+    relatedLessonIds: ["risk-position-sizing", "risk-portfolio-exposure", "risk-stop-and-gap-risk"],
+    toolRoute: "/risk-management",
+  },
+  {
+    id: "risk-streaks-and-loss-limits",
+    title: "Losing streaks, daily limits, and capital protection",
+    shortDescription: "Plan how to pause and reduce exposure during adverse periods.",
+    categoryId: "risk-management",
+    topicGroup: "Protection and portfolio risk",
+    difficulty: "intermediate",
+    estimatedMinutes: 6,
+    aliases: ["consecutive losses", "losing streak", "daily loss limit", "weekly loss limit", "volatile markets"],
+    intro: "A plan for an adverse sequence is more useful when written before emotions or urgency rise.",
+    sections: [
+      {
+        heading: "Plan limits in advance",
+        paragraphs: [
+          "A daily or weekly loss limit is a personal risk control, not a promise that losses stop exactly at that number. Gaps, multiple open positions, fees, conversion, or system outages can move realized loss beyond a planned threshold.",
+          "Decide when to stop opening new positions, how existing positions are handled, and when to review the plan. A limit should not be reset during the period merely to continue trading.",
+        ],
+      },
+      {
+        heading: "Volatility changes execution",
+        bullets: [
+          "When spreads widen or news creates gaps, a fixed position size may create more risk than expected. Reduce size, stand aside, or use a different pretested rule.",
+          "Smaller risk per trade can make a losing sequence more survivable, but cannot prevent losses or guarantee recovery.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Set stop-trading conditions and review rules before a losing streak.", "Risk controls can be exceeded by gaps or execution failure."],
+    commonMistakes: ["Doubling size to recover after consecutive losses.", "Treating daily limits as exact loss caps in all market conditions."],
+    relatedLessonIds: ["risk-leverage-and-ruin", "psychology-losses", "risk-trade-planning"],
+    toolRoute: "/risk-management",
+  },
+  {
+    id: "fundamental-economic-releases",
+    title: "Inflation, jobs, growth, and economic releases",
+    shortDescription: "Interpret CPI, PPI, employment, GDP, and retail-sales data in context.",
+    categoryId: "fundamental-analysis",
+    topicGroup: "Economic context",
+    difficulty: "beginner",
+    estimatedMinutes: 8,
+    aliases: ["CPI", "consumer price index", "PPI", "producer price index", "employment reports", "GDP", "retail sales", "inflation"],
+    intro: "Economic reports provide partial, revised measurements of an economy; currency reactions depend on context and expectations.",
+    sections: [
+      {
+        heading: "What common reports measure",
+        bullets: [
+          "CPI estimates changes in a consumer-price basket; PPI tracks prices received by producers under a particular methodology. Neither is a perfect measure of every household or business cost.",
+          "Employment reports measure labor-market conditions through surveys and administrative sources; definitions, revisions, and seasonal adjustments matter.",
+          "GDP estimates aggregate economic output over a period and is revised. Retail-sales reports track selected sales measures, not every part of household demand.",
+        ],
+      },
+      {
+        heading: "Read the release with care",
+        paragraphs: [
+          "Markets compare an actual release with forecasts, previous readings, revisions, and the detail underneath the headline. A higher inflation number may affect expected policy, but its significance depends on what was anticipated and on other data.",
+          "The values and example definitions in this lesson are educational, not current market figures. Check a current primary source and the time zone before drawing conclusions.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Reports are estimates with methodologies and possible revisions.", "A headline number alone does not determine a currency's direction."],
+    commonMistakes: ["Treating one data point as a complete picture of an economy.", "Confusing month-over-month, year-over-year, seasonally adjusted, and unadjusted values."],
+    relatedLessonIds: ["fundamental-economic-policy", "fundamentals-events-calendar", "fundamentals-research-sources"],
+  },
+  {
+    id: "fundamental-economic-policy",
+    title: "Central banks, interest rates, and policy language",
+    shortDescription: "Learn how policy expectations can influence currencies without assuming a fixed reaction.",
+    categoryId: "fundamental-analysis",
+    topicGroup: "Economic context",
+    difficulty: "intermediate",
+    estimatedMinutes: 7,
+    aliases: ["central bank", "monetary policy", "hawkish", "dovish", "interest rates", "recession", "geopolitical risk"],
+    intro: "Central-bank policy is one influence on currency markets, but its effect depends on relative expectations and other conditions.",
+    sections: [
+      {
+        heading: "Policy and relative rates",
+        paragraphs: [
+          "Central banks set or influence policy rates and communicate how they assess inflation, employment, and growth. A hawkish description usually suggests greater concern about inflation or tighter policy; dovish usually signals more emphasis on support or easier conditions. These are shorthand labels, not formal predictions.",
+          "A currency pair compares two economies. A rate increase can already be priced in, or traders may focus on guidance, risk sentiment, real yields, or developments in the other country. Therefore the same announcement can lead to different price reactions.",
+        ],
+      },
+      {
+        heading: "Broader conditions",
+        bullets: [
+          "Growth, recession risk, fiscal decisions, and geopolitical events can change forecasts and risk appetite; outcomes and transmission channels are uncertain.",
+          "Use dated, reputable sources and separate confirmed facts from interpretation. FXSnap's Economic Calendar and Daily Brief can help locate event information, but their current data must be checked at the time of use.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Relative expectations matter for a currency pair.", "Hawkish/dovish are interpretations; news reactions are not mechanical."],
+    commonMistakes: ["Assuming a rate rise always strengthens a currency.", "Trading a label without checking what was already expected."],
+    relatedLessonIds: ["fundamental-economic-releases", "fundamentals-events-calendar", "fundamentals-research-sources"],
+    toolRoute: "/daily-brief",
+  },
+  {
+    id: "fundamental-market-expectations",
+    title: "Actual, forecast, previous, and market expectations",
+    shortDescription: "Read economic-calendar fields and understand why surprises can still move unpredictably.",
+    categoryId: "fundamental-analysis",
+    topicGroup: "Events and research",
+    difficulty: "intermediate",
+    estimatedMinutes: 6,
+    aliases: ["actual vs forecast", "previous value", "economic calendar", "news trading", "market expectations"],
+    intro: "An economic release is interpreted against a shifting baseline of expectations, not in isolation.",
+    sections: [
+      {
+        heading: "Compare like with like",
+        paragraphs: [
+          "An economic calendar may list a new actual value, a forecast consensus, and a previous reading. Check units, reference period, revision status, and whether the values are comparable. A blank actual value usually means the release has not occurred or is not yet published by that source.",
+          "A result can beat a forecast yet still be viewed as weak relative to market positioning, prior revisions, subcomponents, or a competing release. Expectations are not directly observable as a single complete market belief.",
+        ],
+      },
+      {
+        heading: "Event risk is two-sided",
+        bullets: [
+          "Prices may move before release; spreads can widen and liquidity can change around the event.",
+          "Use the Economic Calendar to check scheduled times and the Daily Brief for context, then verify the original release. Do not treat an educational example as current data.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Actual, forecast, and previous fields require comparable units and periods.", "A surprise does not dictate a simple trade direction."],
+    commonMistakes: ["Reading a revised previous number as the original one.", "Assuming a positive surprise must strengthen the related currency."],
+    relatedLessonIds: ["fundamental-economic-releases", "fundamental-economic-policy", "risk-streaks-and-loss-limits"],
+    toolRoute: "/economic-calendar",
+  },
+  {
+    id: "psychology-biases-and-fomo",
+    title: "FOMO, confirmation bias, and overconfidence",
+    shortDescription: "Notice common thinking traps and use a pause to return to written rules.",
+    categoryId: "trading-psychology",
+    topicGroup: "Decision-making",
+    difficulty: "intermediate",
+    estimatedMinutes: 6,
+    aliases: ["FOMO", "fear of missing out", "confirmation bias", "overconfidence", "impatience", "loss aversion"],
+    intro: "Behavioral biases can influence decisions, but noticing them is a practice—not a guarantee of better outcomes.",
+    sections: [
+      {
+        heading: "Recognize the pattern",
+        bullets: [
+          "FOMO can make a trader chase a move after the planned entry has passed; impatience can turn waiting into an unplanned position.",
+          "Confirmation bias favors evidence that supports an existing view and discounts contradictory evidence. Write down what would prove the idea wrong before entry.",
+          "Overconfidence may follow a winning streak; loss aversion may encourage holding a loser or closing a winner too early. Both can conflict with a tested plan.",
+        ],
+      },
+      {
+        heading: "A practical pause",
+        paragraphs: [
+          "Before acting, name the setup rule, maximum risk, invalidation point, and one alternative explanation. If those are unclear, a no-trade decision is valid. Psychology tools do not make a strategy profitable by themselves.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Record disconfirming evidence as well as supporting evidence.", "A missed trade does not create an obligation to chase it."],
+    commonMistakes: ["Changing rules to explain away contradictory evidence.", "Treating a short winning streak as proof of skill."],
+    relatedLessonIds: ["psychology-process-over-outcome", "psychology-losses", "psychology-journaling"],
+  },
+  {
+    id: "psychology-revenge-and-overtrading",
+    title: "Revenge trading, overtrading, and discipline",
+    shortDescription: "Build practical guardrails for impulsive entries and trading after losses.",
+    categoryId: "trading-psychology",
+    topicGroup: "Emotions and discipline",
+    difficulty: "intermediate",
+    estimatedMinutes: 5,
+    aliases: ["revenge trading", "overtrading", "emotional discipline", "trading after a loss"],
+    intro: "A pause after an emotional trigger can protect a decision process, even though it cannot control market outcomes.",
+    sections: [
+      {
+        heading: "Interrupt the cycle",
+        paragraphs: [
+          "Revenge trading is an attempt to quickly recover a loss, often through a larger size or a lower-quality entry. Overtrading can arise from boredom, urgency, or treating activity as progress. The extra trade may have no tested edge and can compound costs.",
+          "Loss aversion can make accepting a small planned loss feel worse than allowing it to grow. Moving a stop farther away changes the risk plan; it does not remove the underlying exposure.",
+        ],
+      },
+      {
+        heading: "Set a routine before the session",
+        bullets: [
+          "Use written limits for trades, risk, and a cooling-off period after a rule violation or loss threshold.",
+          "Record the trigger and the action you took. Ask for qualified support if trading is causing distress or interfering with finances or wellbeing.",
+        ],
+      },
+    ],
+    keyTakeaways: ["A pause and a no-trade choice are part of a disciplined process.", "Do not increase risk to recover a previous loss."],
+    commonMistakes: ["Believing that more trades necessarily mean more learning.", "Removing a loss limit while upset or under time pressure."],
+    relatedLessonIds: ["psychology-biases-and-fomo", "psychology-routines", "risk-streaks-and-loss-limits"],
+  },
+  {
+    id: "strategies-entry-exit-and-review",
+    title: "Entry, exit, management, and performance review",
+    shortDescription: "Specify a complete trading process and evaluate decisions separately from outcomes.",
+    categoryId: "strategies-practice",
+    topicGroup: "Strategy design",
+    difficulty: "intermediate",
+    estimatedMinutes: 7,
+    aliases: ["entry conditions", "exit conditions", "trade management", "trading checklist", "process quality"],
+    intro: "A strategy needs rules for when to act, when the idea fails, how much to risk, and how to review it.",
+    sections: [
+      {
+        heading: "Write the complete rule set",
+        bullets: [
+          "Define eligible instrument, timeframe, market condition, entry trigger, and any required confirmation.",
+          "Define the stop or invalidation condition, exit or target logic, position sizing, and what happens if the market gaps.",
+          "Specify exclusions such as a missing price reference, spread threshold, or scheduled event. Include a no-trade outcome.",
+        ],
+      },
+      {
+        heading: "Review process and outcome separately",
+        paragraphs: [
+          "A trade that followed the plan can lose; an impulsive trade can win by chance. Record both process adherence and outcome, costs, and uncertainty. Evaluate groups of trades using a defined sample and do not change rules after every result.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Predefine entry, exit, invalidation, risk, and exclusions.", "One result cannot establish whether a process has an edge."],
+    commonMistakes: ["Reviewing only winning examples.", "Calling an unplanned lucky outcome a good process."],
+    relatedLessonIds: ["strategies-rules-and-hypotheses", "risk-trade-planning", "strategies-backtesting-basics"],
+  },
+];
+
+export const LEARNING_CATEGORIES: LearningCategory[] = categoryDefinitions.map((category) => ({
+  ...category,
+  groups: category.groups.map((group) => ({
+    ...group,
+    lessonIds: LEARNING_LESSONS
+      .filter((lesson) => lesson.categoryId === category.id && lesson.topicGroup === group.title)
+      .map((lesson) => lesson.id),
+  })),
+}));
+
+export function getLearningLesson(id: string): LearningLesson | undefined {
+  return LEARNING_LESSONS.find((lesson) => lesson.id === id);
+}
+
+export function getEstimatedLessonMinutes(lesson: LearningLesson): number {
+  const words = [
+    lesson.title,
+    lesson.intro,
+    ...lesson.sections.flatMap((section) => [
+      section.heading,
+      ...(section.paragraphs ?? []),
+      ...(section.bullets ?? []),
+      section.formula ?? "",
+    ]),
+    ...lesson.keyTakeaways,
+    ...lesson.commonMistakes,
+  ].join(" ").trim().split(/\s+/).filter(Boolean).length;
+
+  return Math.max(1, Math.ceil((words / 220 * 60 + 15) / 60));
+}
+
+for (const lesson of LEARNING_LESSONS) {
+  lesson.estimatedMinutes = getEstimatedLessonMinutes(lesson);
+}
+
+export function getLessonKnowledgeCheck(lesson: LearningLesson) {
+  const correctAnswer = lesson.keyTakeaways[0];
+  const commonPitfall = lesson.commonMistakes[0];
+  if (!correctAnswer || !commonPitfall) {
+    throw new Error(`Lesson "${lesson.id}" needs a takeaway and a common mistake for its knowledge check.`);
+  }
+  return {
+    question: `Which statement is the soundest takeaway from "${lesson.title}"?`,
+    options: [
+      { id: "takeaway", text: correctAnswer, isCorrect: true },
+      { id: "pitfall", text: commonPitfall, isCorrect: false },
+    ],
+  };
+}
+
+export function getLessonPracticePrompt(lesson: LearningLesson): string {
+  const prompts: Record<CategoryId, string> = {
+    fundamentals: "Choose an instrument you follow. Find its trading hours, contract terms, typical costs, and one condition that could make execution unreliable.",
+    "technical-analysis": "On a chart, mark the timeframe, current structure, and nearby invalidation. Write down what evidence would change your read; do not treat one pattern as a forecast.",
+    "risk-management": "Work through a hypothetical setup: define invalidation first, measure the distance to it, then derive position size from a fixed risk budget. Keep the exercise on paper.",
+    "fundamental-analysis": "Choose a scheduled release from a reliable calendar. Note its release time, consensus, prior value, and why expectations may already be reflected in price.",
+    "trading-psychology": "After a trading decision, journal the plan you followed, the emotion you noticed, and one process change. Review the decision process separately from the outcome.",
+    "strategies-practice": "Write a testable checklist for this idea: market, timeframe, entry, exit, invalidation, and cost assumptions. Apply the same rules to historical examples before drawing conclusions.",
+  };
+  return prompts[lesson.categoryId];
+}
+
+export function getLearningCategory(id: string): LearningCategory | undefined {
+  return LEARNING_CATEGORIES.find((category) => category.id === id);
+}

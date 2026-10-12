@@ -46,7 +46,7 @@ export function PairSelectionModal({ visible, onSelectPair, onCancel }: PairSele
         <View style={[styles.container, { backgroundColor: colors.card }]}>
           <View style={styles.header}>
             <Text style={[styles.title, { color: colors.text }]}>Select Asset</Text>
-            <TouchableOpacity style={[styles.closeBtn, { backgroundColor: colors.surface }] } onPress={onCancel}>
+            <TouchableOpacity style={[styles.closeBtn, { backgroundColor: colors.surface }]} onPress={onCancel}>
               <Feather name="x" size={22} color={colors.text} />
             </TouchableOpacity>
           </View>
@@ -59,14 +59,14 @@ export function PairSelectionModal({ visible, onSelectPair, onCancel }: PairSele
               return (
               <View key={group.key} style={styles.category}>
                 <TouchableOpacity
-                  style={styles.categoryHeader}
+                  style={[styles.categoryHeader, { backgroundColor: colors.surface }]}
                   onPress={() =>
                     setExpanded(expanded === group.key ? null : group.key)
                   }
                 >
                   <View style={styles.categoryTitleRow}>
                       <View style={[styles.categoryIcon, { backgroundColor: colors.surface }]}>
-                      <Feather name={group.icon as any} size={14} color="#00E676" />
+                      <Feather name={group.icon as any} size={14} color={colors.accent} />
                     </View>
                     <View>
                       <Text style={[styles.categoryTitle, { color: colors.text }]}>{group.title}</Text>
@@ -85,20 +85,27 @@ export function PairSelectionModal({ visible, onSelectPair, onCancel }: PairSele
                     {instruments.map((instrument) => (
                       <TouchableOpacity
                         key={instrument.id}
-                        style={[styles.pairItem, selectedPair === instrument.id && styles.pairItemSelected]}
+                        style={[
+                          styles.pairItem,
+                          { backgroundColor: colors.surface },
+                          selectedPair === instrument.id && {
+                            backgroundColor: colors.segmentBackground,
+                            borderLeftColor: colors.accent,
+                          },
+                        ]}
                         onPress={() => handleSelect(instrument.id)}
                       >
                         <View style={styles.pairInfo}>
-                          <Text style={styles.pairText}>{instrument.id}</Text>
-                          <Text style={styles.pairLabel}>{instrument.label}</Text>
+                          <Text style={[styles.pairText, { color: colors.text }]}>{instrument.id}</Text>
+                          <Text style={[styles.pairLabel, { color: colors.textSecondary }]}>{instrument.label}</Text>
                         </View>
                         {instrument.tier === 'core' && (
-                          <View style={styles.coreBadge}>
-                            <Text style={styles.coreBadgeText}>CORE</Text>
+                          <View style={[styles.coreBadge, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                            <Text style={[styles.coreBadgeText, { color: colors.gold }]}>CORE</Text>
                           </View>
                         )}
                         {selectedPair === instrument.id ? (
-                          <Feather name="check" size={16} color="#00E676" />
+                          <Feather name="check" size={16} color={colors.accent} />
                         ) : (
                           <View style={styles.emptyCheckPlaceholder} />
                         )}
@@ -111,8 +118,8 @@ export function PairSelectionModal({ visible, onSelectPair, onCancel }: PairSele
             })}
           </ScrollView>
 
-          <View style={styles.footer}>
-            <Text style={styles.footerHint}>⭐ Start with Popular for the most focused coverage</Text>
+          <View style={[styles.footer, { borderTopColor: colors.border }]}>
+            <Text style={[styles.footerHint, { color: colors.textSecondary }]}>⭐ Start with Popular for the most focused coverage</Text>
           </View>
         </View>
       </View>
@@ -127,7 +134,6 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   container: {
-    backgroundColor: '#1A1A1A',
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     maxHeight: '80%',
@@ -143,19 +149,16 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 18,
     fontFamily: 'Inter_700Bold',
-    color: '#FFFFFF',
   },
   closeBtn: {
     width: 36,
     height: 36,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#2A2A2A',
     borderRadius: 10,
   },
   subtitle: {
     fontSize: 13,
-    color: '#8E8E93',
     marginHorizontal: 20,
     marginBottom: 16,
   },
@@ -171,7 +174,6 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 12,
     paddingVertical: 10,
-    backgroundColor: '#0D0D0D',
     borderRadius: 10,
   },
   categoryTitleRow: {
@@ -183,19 +185,16 @@ const styles = StyleSheet.create({
     width: 28,
     height: 28,
     borderRadius: 8,
-    backgroundColor: '#0D1A12',
     alignItems: 'center',
     justifyContent: 'center',
   },
   categoryTitle: {
     fontSize: 14,
     fontFamily: 'Inter_600SemiBold',
-    color: '#FFFFFF',
   },
   categoryDescription: {
     fontSize: 10,
     fontFamily: 'Inter_400Regular',
-    color: '#8E8E93',
     marginTop: 2,
   },
   pairsList: {
@@ -209,14 +208,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 12,
     marginBottom: 6,
-    backgroundColor: '#0D0D0D',
     borderRadius: 8,
     borderLeftWidth: 3,
     borderLeftColor: 'transparent',
-  },
-  pairItemSelected: {
-    backgroundColor: '#0D1A12',
-    borderLeftColor: '#00E676',
   },
   pairInfo: {
     flex: 1,
@@ -225,26 +219,21 @@ const styles = StyleSheet.create({
   pairText: {
     fontSize: 15,
     fontFamily: 'Inter_700Bold',
-    color: '#FFFFFF',
   },
   pairLabel: {
     fontSize: 11,
     fontFamily: 'Inter_400Regular',
-    color: '#8E8E93',
   },
   coreBadge: {
     paddingHorizontal: 7,
     paddingVertical: 3,
     borderRadius: 5,
-    backgroundColor: '#1A1800',
     borderWidth: 1,
-    borderColor: '#3D3400',
     marginRight: 8,
   },
   coreBadgeText: {
     fontSize: 9,
     fontFamily: 'Inter_700Bold',
-    color: '#FFD60A',
     letterSpacing: 0.5,
   },
   emptyCheckPlaceholder: {
@@ -257,11 +246,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 16,
     borderTopWidth: 1,
-    borderTopColor: '#2A2A2A',
   },
   footerHint: {
     fontSize: 12,
-    color: '#8E8E93',
     textAlign: 'center',
   },
 });
