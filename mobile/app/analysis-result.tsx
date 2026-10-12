@@ -290,7 +290,7 @@ export default function AnalysisResultScreen() {
       : undefined,
   } : currentAnalysis;
   const stopDistance = currentAnalysis?.slPips ?? getPipDistance(entryLevel, stopLevel, pair);
-  const currentPrice = currentAnalysis?.latestVisiblePrice ?? currentAnalysis?.priceSeries?.at(-1);
+  const currentPrice = currentAnalysis?.latestVisiblePrice;
   const entryPrice = entryLevel.match(/-?\d+(?:\.\d+)?/g)?.map(Number).filter(Number.isFinite)[0];
   const priceChangePercent = currentPrice != null && entryPrice != null && entryPrice !== 0
     ? ((currentPrice - entryPrice) / entryPrice) * 100
@@ -320,7 +320,7 @@ export default function AnalysisResultScreen() {
     );
   const marketEntryText = currentPrice != null
     ? formatLevelPrice(currentPrice, pair)
-    : entryLevelText;
+    : 'Unreadable from screenshot';
   const chartPaths = buildSmoothChartPaths(currentAnalysis?.priceSeries);
   const confidenceLabel = confidence >= 70 ? 'High' : confidence >= 40 ? 'Medium' : 'Low';
   const reasoning = currentAnalysis ? currentAnalysis.reasoning?.length ? currentAnalysis.reasoning.slice(0, 5) : [
@@ -640,8 +640,8 @@ export default function AnalysisResultScreen() {
             </View>
           </View>
           <View style={styles.entrySummary}>
-            <Text style={[styles.entryCaption, { color: colors.textSecondary }]}>{currentPrice != null ? 'CURRENT' : 'ENTRY'}</Text>
-            <Text numberOfLines={1} adjustsFontSizeToFit style={[styles.entryPrice, { color: colors.text }]}>{currentPrice != null ? formatLevelPrice(currentPrice, pair) : entryLevelText}</Text>
+            <Text style={[styles.entryCaption, { color: colors.textSecondary }]}>{currentPrice != null ? 'LATEST VISIBLE PRICE' : 'PRICE UNREADABLE'}</Text>
+            <Text numberOfLines={1} adjustsFontSizeToFit style={[styles.entryPrice, { color: colors.text }]}>{marketEntryText}</Text>
             <View style={[styles.directionPill, { backgroundColor: `${priceChangeColor}20` }]}>
               <Feather name={priceChangePercent == null ? (isSell || marketRead === 'bearish' ? 'trending-down' : 'trending-up') : priceChangePercent >= 0 ? 'trending-up' : 'trending-down'} size={13} color={priceChangeColor} />
               <Text style={[styles.directionPillText, { color: priceChangeColor }]}>{priceChangePercent == null ? directionLabel : `${priceChangePercent > 0 ? '+' : ''}${priceChangePercent.toFixed(2)}%`}</Text>
@@ -724,7 +724,7 @@ export default function AnalysisResultScreen() {
           <>
             <Animated.View entering={FadeInUp.duration(350)} style={[styles.verdictCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
               <View style={styles.verdictTop}><Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>MARKET READ</Text><View style={[styles.verdictBadge, { backgroundColor: `${directionColor}20` }]}><View style={[styles.verdictDot, { backgroundColor: directionColor }]} /><Text style={[styles.verdictText, { color: directionColor }]}>{directionLabel}</Text></View></View>
-              <View style={styles.confidenceLine}><Text style={[styles.bodyMuted, { color: colors.textSecondary }]}>Entry (chart snapshot)</Text><Text style={[styles.confidenceText, { color: colors.text }]}>{marketEntryText}</Text></View>
+              <View style={styles.confidenceLine}><Text style={[styles.bodyMuted, { color: colors.textSecondary }]}>Latest visible price (screenshot)</Text><Text style={[styles.confidenceText, { color: colors.text }]}>{marketEntryText}</Text></View>
               <View style={styles.confidenceLine}><Text style={[styles.bodyMuted, { color: colors.textSecondary }]}>Trade readiness</Text><Text style={[styles.confidenceText, { color: colors.text }]}>{readinessText}</Text></View>
               <View style={styles.confidenceLine}><Text style={[styles.bodyMuted, { color: colors.textSecondary }]}>Evidence score</Text><Text style={[styles.confidenceText, { color: colors.text }]}>{confidenceLabel} · {confidence}%</Text></View>
               <View style={[styles.confidenceTrack, { backgroundColor: colors.surface }]}><View style={[styles.confidenceProgress, { width: `${Math.max(0, Math.min(confidence, 100))}%`, backgroundColor: directionColor }]} /></View>

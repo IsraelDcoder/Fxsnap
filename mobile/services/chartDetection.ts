@@ -232,6 +232,28 @@ export function normalizeChartTradeSetup(payload: unknown): ChartAnalysisResult[
   };
 }
 
+export function normalizeLatestVisiblePrice(payload: unknown): number | undefined {
+  if (!payload || typeof payload !== 'object') return undefined;
+  const root = payload as Record<string, unknown>;
+  const chart = root.chart && typeof root.chart === 'object'
+    ? root.chart as Record<string, unknown>
+    : {};
+  const hasReadableSource = chart.price_scale_visible === true
+    && ['visible_price_marker', 'latest_candle_scale_read'].includes(String(chart.current_price_source));
+  if (!hasReadableSource) return undefined;
+
+  const rawPrice = chart.latest_visible_price;
+  const normalizedPrice = typeof rawPrice === 'string' && /^\d{1,3}(?:,\d{3})+(?:\.\d+)?$/.test(rawPrice.trim())
+    ? rawPrice.trim().replace(/,/g, '')
+    : rawPrice;
+  const price = typeof normalizedPrice === 'number'
+    ? normalizedPrice
+    : typeof normalizedPrice === 'string' && /^\d+(?:\.\d+)?$/.test(normalizedPrice.trim())
+      ? Number(normalizedPrice.trim())
+      : Number.NaN;
+  return Number.isFinite(price) && price > 0 ? price : undefined;
+}
+
 /**
  * Send a chart image to the backend for strict, disciplined price-action
  * analysis. The server enforces the full system prompt + validation layer and
@@ -300,11 +322,7 @@ async function sendChartAnalysis(path: string, body: Record<string, unknown>): P
         return Number.NaN;
       }).filter(Number.isFinite)
       : [];
-    const latestVisiblePriceValue = payload.chart?.latest_visible_price ?? payload.latestVisiblePrice;
-    const latestVisiblePriceNumber = Number(latestVisiblePriceValue);
-    const latestVisiblePrice = Number.isFinite(latestVisiblePriceNumber) && latestVisiblePriceNumber > 0
-      ? latestVisiblePriceNumber
-      : undefined;
+    const latestVisiblePrice = normalizeLatestVisiblePrice(payload);
     const supportResistance = payload.support_resistance ?? {};
 
     return {

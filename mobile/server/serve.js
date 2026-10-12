@@ -731,7 +731,7 @@ function preserveUnverifiedCandidateLevels(result, issues) {
   const setup = result?.trade_setup || {};
   const rule = chartInstrumentRule(chart.pair || result?.detectedPair);
   const metadataOnlyIssues = issues.length > 0 && issues.every((issue) => (
-    /current price cannot be reliably read|rightmost candle could not be distinguished|timestamp is unreadable|timestamp is not a reliable/i.test(issue)
+    /current price cannot be reliably read|rightmost candle could not be distinguished|timestamp is unreadable|timestamp is not a reliable|timestamp is stale or in the future/i.test(issue)
   ));
   if (!metadataOnlyIssues
     || chart.is_chart !== true
@@ -1834,7 +1834,7 @@ You must extract and evaluate:
 Use this order for every chart:
 1. Confirm recognizable chart content, any visibly labeled instrument and timeframe, candle visibility, price-scale readability, and chart quality. Treat app-provided instrument metadata as context only; if it conflicts with the image, state the discrepancy and analyze the visible chart without guessing its identity.
 2. Start at the right edge and analyze the latest visible candles, especially the last 3-5 candles and their movement relative to nearby structure. Explicitly distinguish the rightmost still-forming candle from completed candles; return "unknown" if that distinction cannot be made.
-3. Read the current price only from a legible current-price marker or from the rightmost candle against a clearly readable price scale. Never substitute an older candle close, support/resistance value, or an assumed live quote. If no reliable current price can be read, return null and explain the limitation. If a latest candle timestamp is legible, return it in ISO-8601 with timezone; otherwise return null. A candidate trade requires a readable latest-candle timestamp so screenshot freshness can be checked; return NO TRADE if it cannot be verified.
+3. Read the latest visible price only from a legible current-price marker or from the rightmost candle against a clearly readable price scale. For a candle-scale read, use the rightmost candle's currently visible price and distinguish its still-forming state from completed candles; do not substitute an earlier candle's close. Never substitute an older candle close, support/resistance value, or an assumed live quote. If no reliable latest visible price can be read, return null and explain the limitation. If the latest candle timestamp is legible, return it in ISO-8601 with timezone; otherwise return null and state that screenshot freshness cannot be verified. Missing timestamp metadata alone does not make a readable screenshot price unreadable, but it must not be represented as a verified live quote or enough evidence for a fresh actionable setup.
 4. Describe only the visible candle sequence and scale. Distinguish observed swing points from inferred trend; do not call a move a breakout unless a candle close is visibly beyond a prior level.
 5. Assess current trend/structure, then relevant nearby support/resistance and visible momentum evidence. Mark indicators, volume, or higher-timeframe context unavailable when not shown.
 6. Decide BUY, SELL, or NO TRADE. For a trade, explain the visible reason for entry, invalidation/stop, and one target. If price has already passed the planned entry, reached TP, crossed SL, or broken the setup structure, do not present that setup as fresh.

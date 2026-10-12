@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { normalizeChartTradeSetup, type ChartAnalysisResult } from '../services/chartDetection';
+import { normalizeChartTradeSetup, normalizeLatestVisiblePrice, type ChartAnalysisResult } from '../services/chartDetection';
 import { buildAnalysisResult, formatTradeReadiness, getMissingTradeLevelsExplanation, getTradeReadinessLabel } from '../services/analysisResult';
 
 function chartResult(overrides: Partial<ChartAnalysisResult> = {}): ChartAnalysisResult {
@@ -37,6 +37,61 @@ function chartResult(overrides: Partial<ChartAnalysisResult> = {}): ChartAnalysi
     ...overrides,
   };
 }
+
+test('normalizes a latest screenshot price only when its source and scale are readable', () => {
+  assert.equal(normalizeLatestVisiblePrice({
+    chart: {
+      latest_visible_price: '1.08425',
+      current_price_source: 'visible_price_marker',
+      price_scale_visible: true,
+      latest_candle_timestamp: null,
+    },
+  }), 1.08425);
+  assert.equal(normalizeLatestVisiblePrice({
+    chart: {
+      latest_visible_price: '67,000.5',
+      current_price_source: 'latest_candle_scale_read',
+      price_scale_visible: true,
+    },
+  }), 67000.5);
+});
+
+test('does not expose a current price when the screenshot source is unreadable or missing', () => {
+  assert.equal(normalizeLatestVisiblePrice({
+    chart: {
+      latest_visible_price: 1.08425,
+      current_price_source: 'unreadable',
+      price_scale_visible: true,
+    },
+  }), undefined);
+  assert.equal(normalizeLatestVisiblePrice({
+    chart: {
+      latest_visible_price: 1.08425,
+      current_price_source: 'visible_price_marker',
+      price_scale_visible: false,
+    },
+  }), undefined);
+  assert.equal(normalizeLatestVisiblePrice({
+    latestVisiblePrice: 1.08425,
+  }), undefined);
+});
+
+test('rejects invalid numeric values even when the chart claims a readable price source', () => {
+  assert.equal(normalizeLatestVisiblePrice({
+    chart: {
+      latest_visible_price: '1.08.425',
+      current_price_source: 'visible_price_marker',
+      price_scale_visible: true,
+    },
+  }), undefined);
+  assert.equal(normalizeLatestVisiblePrice({
+    chart: {
+      latest_visible_price: 0,
+      current_price_source: 'visible_price_marker',
+      price_scale_visible: true,
+    },
+  }), undefined);
+});
 
 test('maps no-trade analysis content and every available level into the result model', () => {
   const result = buildAnalysisResult(chartResult(), 'EUR/USD', 'file:///chart.jpg');
