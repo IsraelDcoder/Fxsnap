@@ -403,7 +403,11 @@ export default function AnalysisResultScreen() {
 
       const shareUri = capturedUri.startsWith('file://') ? capturedUri : `file://${capturedUri}`;
       if (!(await Sharing.isAvailableAsync())) throw new Error('Native sharing is unavailable.');
-      await Sharing.shareAsync(shareUri, { mimeType: 'image/png', dialogTitle: 'Share FXSnap analysis' });
+      await Sharing.shareAsync(shareUri, {
+        mimeType: 'image/png',
+        UTI: 'public.png',
+        dialogTitle: 'Share FXSnap analysis',
+      });
       showToast('Share card ready to share');
     } catch (error) {
       console.error('[Share] Failed', error);
