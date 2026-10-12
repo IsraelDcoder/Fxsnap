@@ -5,9 +5,13 @@ import * as ImagePicker from 'expo-image-picker';
 import { API_BASE_URL } from '@/services/apiAuth';
 import { getFxsnapAccountApiHeaders } from '@/services/account';
 import { getSupabaseClient } from '@/services/supabase';
+import { handleCommunityPreviewRequest } from '@/services/communityPreview';
 
 export const COMMUNITY_RULES_VERSION = 'community-rules-v1';
 export const COMMUNITY_CATEGORIES = [
+  { id: 'trading', label: 'Trading' },
+  { id: 'investing', label: 'Investing' },
+  { id: 'finance', label: 'Finance' },
   { id: 'market_discussion', label: 'Market Discussion' },
   { id: 'learning', label: 'Learning' },
   { id: 'chart_analysis', label: 'Chart Analysis' },
@@ -18,10 +22,12 @@ export const COMMUNITY_CATEGORIES = [
 export type CommunityCategory = typeof COMMUNITY_CATEGORIES[number]['id'];
 export type CommunityFeed = 'global' | 'following';
 export type CommunityReaction = 'like' | 'helpful' | 'insightful' | 'interesting';
+export type CommunitySearchKind = 'posts' | 'people' | 'topics';
 
 export interface CommunityProfile {
   accountId: string;
   username: string;
+  pictureUrl?: string | null;
   status: 'active' | 'muted' | 'suspended' | 'banned';
   mutedUntil: string | null;
   joinedAt: string;
@@ -32,6 +38,7 @@ export interface CommunityProfile {
 export interface CommunityMessage {
   id: string;
   clientMessageId: string;
+  authorAccountId: string;
   authorUsername: string;
   authorPictureUrl: string | null;
   isOfficial: boolean;
@@ -67,6 +74,34 @@ export interface CommunityCommentPage {
   hasMore: boolean;
 }
 
+export interface CommunityMember {
+  accountId: string;
+  username: string;
+  pictureUrl: string | null;
+  joinedAt: string;
+  followerCount: number;
+  followingCount: number;
+  isFollowing: boolean;
+  isCurrentUser: boolean;
+  posts: CommunityMessage[];
+}
+
+export interface CommunitySearchResults {
+  posts: CommunityMessage[];
+  people: Array<Pick<CommunityMember, 'accountId' | 'username' | 'pictureUrl'>>;
+  topics: Array<{ id: CommunityCategory; label: string }>;
+}
+
+export interface CommunityNotification {
+  id: string;
+  kind: string;
+  message: string;
+  object_id: string | null;
+  post_id?: string | null;
+  read_at: string | null;
+  created_at: string;
+}
+
 export interface CommunityAnalysisSnapshot {
   source: 'fxsnap_ai';
   sourceAnalysisId: string;
@@ -92,6 +127,18 @@ function newId() {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (Platform.OS === 'web') {
+    if (__DEV__) {
+      const previewResponse = await handleCommunityPreviewRequest(path, init);
+      const previewPayload: unknown = await previewResponse.json();
+      if (!previewResponse.ok) {
+        const message = previewPayload && typeof previewPayload === 'object' && 'error' in previewPayload
+          && typeof previewPayload.error === 'string'
+          ? previewPayload.error
+          : `Community preview request failed (${previewResponse.status}).`;
+        throw new Error(message);
+      }
+      return previewPayload as T;
+    }
     throw new Error('FXSnap Community is currently available in the mobile app.');
   }
   const headers = await getFxsnapAccountApiHeaders();
@@ -154,6 +201,17 @@ export async function getCommunityMessages(options: {
   return request<CommunityPage>(`/api/community/messages?${query}`);
 }
 
+export async function searchCommunity(query: string, kind: CommunitySearchKind) {
+  const params = new URLSearchParams({ q: query.trim(), kind });
+  return request<CommunitySearchResults>(`/api/community/search?${params}`);
+}
+
+export async function getCommunityMember(username: string) {
+  return request<{ member: CommunityMember }>(
+    `/api/community/members/${encodeURIComponent(username)}`,
+  );
+}
+
 export async function getCommunityPost(postId: string) {
   return request<{ post: CommunityMessage }>(`/api/community/messages/${encodeURIComponent(postId)}`);
 }
@@ -174,7 +232,13 @@ export async function publishCommunityMessage(input: {
 
 export async function updateCommunityMessage(
   messageId: string,
-  input: { body: string; category: CommunityCategory; imageUrl?: string | null },
+  input: {
+    body: string;
+    category: CommunityCategory;
+    imageUrl?: string | null;
+    imageWidth?: number;
+    imageHeight?: number;
+  },
 ) {
   return request<{ message: CommunityMessage }>(
     `/api/community/messages/${encodeURIComponent(messageId)}`,
@@ -258,7 +322,7 @@ export async function unblockCommunityMember(accountId: string) {
 }
 
 export async function getCommunityNotifications() {
-  return request<{ notifications: Array<{ id: string; kind: string; message: string; object_id: string | null; read_at: string | null; created_at: string }> }>('/api/community/notifications');
+  return request<{ notifications: CommunityNotification[] }>('/api/community/notifications');
 }
 
 export async function markCommunityNotificationRead(id: string) {

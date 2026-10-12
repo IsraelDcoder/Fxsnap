@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   Alert,
-  FlatList,
   Image,
   KeyboardAvoidingView,
   Modal,
@@ -15,9 +14,8 @@ import {
   View,
 } from 'react-native';
 import { AnimatedTouchableOpacity as TouchableOpacity } from '@/components/AnimatedTouchableOpacity';
-import { AmbientBackdrop } from '@/components/AmbientBackdrop';
-import Animated, { FadeInDown } from 'react-native-reanimated';
 import { Feather } from '@expo/vector-icons';
+import { FlashList, type FlashListRef } from '@shopify/flash-list';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
@@ -41,7 +39,6 @@ import {
   getCommunityPost,
   getCommunityReplies,
   joinCommunity,
-  markCommunityNotificationRead,
   publishCommunityComment,
   publishCommunityMessage,
   reportCommunityMessage,
@@ -59,6 +56,7 @@ import {
   type CommunityProfile,
 } from '@/services/community';
 import CommunityPostCard from '@/components/CommunityPostCard';
+import CommunityPreviewNotice from '@/components/CommunityPreviewNotice';
 
 type ComposerKind = 'text' | 'signal' | 'analysis';
 type CommunityNotification = {
@@ -66,8 +64,17 @@ type CommunityNotification = {
   kind: string;
   message: string;
   object_id: string | null;
+  post_id?: string | null;
   read_at: string | null;
   created_at: string;
+};
+type CommunityPostActionName = 'edit' | 'delete' | 'copy' | 'share' | 'follow' | 'report' | 'block' | 'pin' | 'unpin' | 'remove';
+type CommunityPostAction = {
+  name: CommunityPostActionName;
+  label: string;
+  description: string;
+  icon: React.ComponentProps<typeof Feather>['name'];
+  destructive?: boolean;
 };
 
 function apiErrorMessage(error: unknown) {
@@ -115,9 +122,10 @@ function ageLabel(isoDate: string) {
 export default function CommunityScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const params = useLocalSearchParams<{ postId?: string; shareAnalysisId?: string }>();
+  const params = useLocalSearchParams<{ postId?: string; shareAnalysisId?: string; category?: string }>();
   const postIdParam = firstParam(params.postId);
   const shareAnalysisId = firstParam(params.shareAnalysisId);
+  const categoryParam = firstParam(params.category);
   const { currentAnalysis, savedAnalyses, isSubscribed } = useApp();
   const [account, setAccount] = useState<FxsnapAccount | null>(null);
   const [profile, setProfile] = useState<CommunityProfile | null>(null);
@@ -164,12 +172,12 @@ export default function CommunityScreen() {
   const [threadReplies, setThreadReplies] = useState<CommunityMessage[]>([]);
   const [threadLoading, setThreadLoading] = useState(false);
   const [commentSending, setCommentSending] = useState(false);
-  const [notificationsVisible, setNotificationsVisible] = useState(false);
   const [notifications, setNotifications] = useState<CommunityNotification[]>([]);
   const [blocksVisible, setBlocksVisible] = useState(false);
   const [blocks, setBlocks] = useState<Array<{ accountId: string; username: string }>>([]);
+  const [postActionsPost, setPostActionsPost] = useState<CommunityMessage | null>(null);
   const [followedNames, setFollowedNames] = useState<string[]>([]);
-  const flatListRef = useRef<FlatList<CommunityMessage>>(null);
+  const flatListRef = useRef<FlashListRef<CommunityMessage>>(null);
   const processedPostId = useRef<string | null>(null);
   const processedAnalysisId = useRef<string | null>(null);
   const publishId = useRef<string | null>(null);
@@ -235,6 +243,11 @@ export default function CommunityScreen() {
   }, []);
 
   useEffect(() => { void bootstrap(); }, [bootstrap]);
+
+  useEffect(() => {
+    const matchedCategory = COMMUNITY_CATEGORIES.find((item) => item.id === categoryParam);
+    if (matchedCategory && category !== matchedCategory.id) setCategory(matchedCategory.id);
+  }, [category, categoryParam]);
 
   useEffect(() => {
     if (stage !== 'feed' || !profile) return;
@@ -472,6 +485,11 @@ export default function CommunityScreen() {
         setComposerImageUrl(imageUrl);
         setUploadingImage(false);
       }
+      const imageWidth = composerImage?.width
+        ?? (typeof editingPost?.payload.imageWidth === 'number' ? editingPost.payload.imageWidth : undefined);
+      const imageHeight = composerImage?.height
+        ?? (typeof editingPost?.payload.imageHeight === 'number' ? editingPost.payload.imageHeight : undefined);
+      const imageDimensions = imageWidth && imageHeight ? { imageWidth, imageHeight } : {};
       const payload = composerKind === 'signal'
         ? {
           instrument: signalInstrument.trim().toUpperCase(),
@@ -482,15 +500,17 @@ export default function CommunityScreen() {
           timeframe: signalTimeframe.trim(),
           reasoning: body,
           imageUrl,
+          ...imageDimensions,
         }
         : composerKind === 'analysis'
-          ? { ...pendingAnalysis, imageUrl }
-          : { imageUrl };
+          ? { ...pendingAnalysis, imageUrl, ...imageDimensions }
+          : { imageUrl, ...imageDimensions };
       const message = editingPost
         ? (await updateCommunityMessage(editingPost.id, {
           body,
           category: composerCategory,
           imageUrl,
+          ...imageDimensions,
         })).message
         : (await publishCommunityMessage({
           kind: composerKind,
@@ -618,7 +638,10 @@ export default function CommunityScreen() {
   };
 
   const askReportReason = (post: CommunityMessage) => {
-    Alert.alert('Report this post', 'Choose the reason that best describes the issue.', [
+    Alert.alert(
+      post.replyTo ? 'Report this comment' : 'Report this post',
+      'Choose the reason that best describes the issue.',
+      [
       ...[
         ['spam', 'Spam'],
         ['scam', 'Scam or fraud'],
@@ -634,66 +657,57 @@ export default function CommunityScreen() {
         },
       })),
       { text: 'Cancel', style: 'cancel' },
-    ]);
+      ],
+    );
   };
 
-  const showPostActions = (post: CommunityMessage) => {
-    const ownPost = post.authorUsername === profile?.username;
-    Alert.alert(`@${post.authorUsername}`, undefined, [
-      ownPost && !post.replyTo && post.kind === 'text' ? {
-        text: 'Edit post',
-        onPress: () => editPost(post),
-      } : null,
-      ownPost ? {
-        text: post.replyTo ? 'Delete comment' : 'Delete post',
-        style: 'destructive' as const,
-        onPress: () => Alert.alert(
-          post.replyTo ? 'Delete this comment?' : 'Delete this post?',
-          'This cannot be undone.',
-          [
-            { text: 'Cancel', style: 'cancel' },
-            {
-              text: 'Delete',
-              style: 'destructive',
-              onPress: () => {
-                void deleteCommunityMessage(post.id).then(() => {
-                  if (post.replyTo) {
-                    setComments((previous) => previous.filter((item) => item.id !== post.id));
-                    setThreadReplies((previous) => previous.filter((item) => item.id !== post.id && item.replyTo?.id !== post.id));
-                    if (commentPost) {
-                      setPosts((previous) => previous.map((item) => item.id === commentPost.id
-                        ? { ...item, commentCount: Math.max(0, item.commentCount - 1) }
-                        : item));
-                      setCommentPost((previous) => previous?.id === commentPost.id
-                        ? { ...previous, commentCount: Math.max(0, previous.commentCount - 1) }
-                        : previous);
-                    }
-                  } else {
-                    setPosts((previous) => previous.filter((item) => item.id !== post.id));
-                    if (commentPost?.id === post.id) setCommentPost(null);
+  const runPostAction = (action: CommunityPostActionName, post: CommunityMessage) => {
+    setPostActionsPost(null);
+    if (action === 'edit') {
+      editPost(post);
+    } else if (action === 'delete') {
+      Alert.alert(
+        post.replyTo ? 'Delete this comment?' : 'Delete this post?',
+        'This cannot be undone.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Delete',
+            style: 'destructive',
+            onPress: () => {
+              void deleteCommunityMessage(post.id).then(() => {
+                if (post.replyTo) {
+                  setComments((previous) => previous.filter((item) => item.id !== post.id));
+                  setThreadReplies((previous) => previous.filter((item) => item.id !== post.id && item.replyTo?.id !== post.id));
+                  if (commentPost) {
+                    setPosts((previous) => previous.map((item) => item.id === commentPost.id
+                      ? { ...item, commentCount: Math.max(0, item.commentCount - 1) }
+                      : item));
+                    setCommentPost((previous) => previous?.id === commentPost.id
+                      ? { ...previous, commentCount: Math.max(0, previous.commentCount - 1) }
+                      : previous);
                   }
-                }).catch((error) => Alert.alert('Could not delete content', apiErrorMessage(error)));
-              },
+                } else {
+                  setPosts((previous) => previous.filter((item) => item.id !== post.id));
+                  if (commentPost?.id === post.id) setCommentPost(null);
+                }
+              }).catch((error) => Alert.alert('Could not delete content', apiErrorMessage(error)));
             },
-          ],
-        ),
-      } : null,
-      {
-        text: 'Copy post',
-        onPress: () => {
-          void Clipboard.setStringAsync(`${post.body}\n\n@${post.authorUsername} · FXSnap Community`)
-            .then(() => Alert.alert('Copied', 'Post text copied to clipboard.'));
-        },
-      },
-      !ownPost && !post.isOfficial ? {
-        text: post.isFollowed ? 'Unfollow trader' : 'Follow trader',
-        onPress: () => { void handleFollow(post); },
-      } : null,
-      !ownPost ? { text: 'Report post', style: 'destructive' as const, onPress: () => askReportReason(post) } : null,
-      !ownPost && !post.isOfficial ? {
-        text: 'Block trader',
-        style: 'destructive' as const,
-        onPress: () => Alert.alert('Block trader?', 'Their posts and interactions will be hidden from your Community feed.', [
+          },
+        ],
+      );
+    } else if (action === 'copy') {
+      void Clipboard.setStringAsync(`${post.body}\n\n@${post.authorUsername} · FXSnap Community`)
+        .then(() => Alert.alert('Copied', 'Post text copied to clipboard.'))
+        .catch((error) => Alert.alert('Could not copy post', apiErrorMessage(error)));
+    } else if (action === 'share') {
+      void sharePost(post);
+    } else if (action === 'follow') {
+      void handleFollow(post);
+    } else if (action === 'report') {
+      askReportReason(post);
+    } else if (action === 'block') {
+      Alert.alert('Block trader?', 'Their posts and interactions will be hidden from your Community feed.', [
           { text: 'Cancel', style: 'cancel' },
           {
             text: 'Block',
@@ -704,18 +718,16 @@ export default function CommunityScreen() {
               }).catch((error) => Alert.alert('Could not block trader', apiErrorMessage(error)));
             },
           },
-        ]),
-      } : null,
-      ...(profile?.isAdmin ? [{
-        text: post.pinnedAt ? 'Unpin post' : 'Pin post',
-        onPress: () => void moderate(post.pinnedAt ? 'unpin' : 'pin', post),
-      }, {
-        text: 'Remove post',
-        style: 'destructive' as const,
-        onPress: () => void moderate('remove_message', post),
-      }] : []),
-      { text: 'Cancel', style: 'cancel' as const },
-    ].filter(Boolean) as Array<{ text: string; style?: 'cancel' | 'destructive'; onPress?: () => void }>);
+        ]);
+    } else if (action === 'pin' || action === 'unpin') {
+      void moderate(action, post);
+    } else {
+      void moderate('remove_message', post);
+    }
+  };
+
+  const showPostActions = (post: CommunityMessage) => {
+    setPostActionsPost(post);
   };
 
   const moderate = async (action: 'pin' | 'unpin' | 'remove_message', post: CommunityMessage) => {
@@ -745,14 +757,17 @@ export default function CommunityScreen() {
     }
   };
 
-  const openNotifications = async () => {
-    try {
-      const result = await getCommunityNotifications();
-      setNotifications(result.notifications);
-      setNotificationsVisible(true);
-    } catch (error) {
-      Alert.alert('Notifications unavailable', apiErrorMessage(error));
-    }
+  const openNotifications = () => {
+    router.push('/community-notifications');
+  };
+
+  const openHeaderMenu = () => {
+    Alert.alert('Community', undefined, [
+      { text: 'Manage blocked traders', onPress: () => void openBlockedMembers() },
+      { text: 'Contact FXSnap support', onPress: () => router.push('/community-support') },
+      ...(profile?.isAdmin ? [{ text: 'Moderation tools', onPress: () => router.push('/community-admin') }] : []),
+      { text: 'Cancel', style: 'cancel' },
+    ]);
   };
 
   const openBlockedMembers = async () => {
@@ -765,42 +780,87 @@ export default function CommunityScreen() {
     }
   };
 
-  const markNotification = async (notification: CommunityNotification) => {
-    try {
-      await markCommunityNotificationRead(notification.id);
-      setNotifications((previous) => previous.map((item) => item.id === notification.id
-        ? { ...item, read_at: new Date().toISOString() }
-        : item));
-      if (notification.object_id) {
-        try {
-          const { post } = await getCommunityPost(notification.object_id);
-          setNotificationsVisible(false);
-          await openComments(post);
-        } catch {
-          Alert.alert('Discussion unavailable', 'The related post may have been removed.');
-        }
-      }
-    } catch (error) {
-      Alert.alert('Could not update notification', apiErrorMessage(error));
-    }
-  };
-
-  const renderPost = ({ item, index }: { item: CommunityMessage; index: number }) => (
-    <Animated.View entering={FadeInDown.delay(Math.min(index * 35, 210)).duration(330)}>
+  const renderPost = ({ item }: { item: CommunityMessage }) => (
+    <View style={styles.masonryCell}>
       <CommunityPostCard
         post={item}
+        compact
         ownAccount={item.authorUsername === profile?.username}
         onLike={() => void handleLike(item)}
         onComment={() => void openComments(item)}
         onShare={() => void sharePost(item)}
         onMore={() => showPostActions(item)}
         onFollow={() => void handleFollow(item)}
+        onAuthorPress={() => router.push({ pathname: '/community-member', params: { username: item.authorUsername } })}
       />
-    </Animated.View>
+    </View>
   );
 
   const unreadCount = notifications.filter((notification) => !notification.read_at).length;
   const visibleCategories = COMMUNITY_CATEGORIES.filter((item) => profile?.isAdmin || item.id !== 'events');
+  const postActionItems = useMemo<CommunityPostAction[]>(() => {
+    if (!postActionsPost) return [];
+    const ownPost = postActionsPost.authorUsername === profile?.username;
+    return [
+      ...(ownPost && !postActionsPost.replyTo && postActionsPost.kind === 'text'
+        ? [{ name: 'edit' as const, label: 'Edit post', description: 'Update your post content.', icon: 'edit-2' as const }]
+        : []),
+      { name: 'share', label: 'Share post', description: 'Share this discussion using your device.', icon: 'share-2' },
+      { name: 'copy', label: 'Copy post text', description: 'Copy the text and author to your clipboard.', icon: 'copy' },
+      ...(!ownPost && !postActionsPost.isOfficial
+        ? [{
+          name: 'follow' as const,
+          label: postActionsPost.isFollowed ? 'Unfollow trader' : 'Follow trader',
+          description: 'Control whether this member appears in your Following feed.',
+          icon: 'user-plus' as const,
+        }]
+        : []),
+      ...(!ownPost
+        ? [{
+          name: 'report' as const,
+          label: postActionsPost.replyTo ? 'Report comment' : 'Report post',
+          description: 'Send this content to FXSnap moderators for review.',
+          icon: 'flag' as const,
+          destructive: true,
+        }]
+        : []),
+      ...(ownPost
+        ? [{
+          name: 'delete' as const,
+          label: postActionsPost.replyTo ? 'Delete comment' : 'Delete post',
+          description: 'This content will be removed from Community.',
+          icon: 'trash-2' as const,
+          destructive: true,
+        }]
+        : []),
+      ...(!ownPost && !postActionsPost.isOfficial
+        ? [{
+          name: 'block' as const,
+          label: 'Block trader',
+          description: 'Hide this member’s posts and interactions from your feed.',
+          icon: 'slash' as const,
+          destructive: true,
+        }]
+        : []),
+      ...(profile?.isAdmin
+        ? [
+          {
+            name: postActionsPost.pinnedAt ? 'unpin' as const : 'pin' as const,
+            label: postActionsPost.pinnedAt ? 'Unpin discussion' : 'Pin discussion',
+            description: 'Change the visibility of this discussion for the community.',
+            icon: 'bookmark' as const,
+          },
+          {
+            name: 'remove' as const,
+            label: 'Remove content',
+            description: 'Remove this item through moderator controls.',
+            icon: 'shield' as const,
+            destructive: true,
+          },
+        ]
+        : []),
+    ];
+  }, [postActionsPost, profile?.isAdmin, profile?.username]);
 
   if (stage === 'loading') {
     return <CenteredMessage colors={colors} insets={insets} title="Opening FXSnap Community" body="Connecting to the global trading floor." loading />;
@@ -907,33 +967,35 @@ export default function CommunityScreen() {
 
   return (
     <View style={[styles.screen, { backgroundColor: colors.background }]}>
-      <AmbientBackdrop />
       <View style={[styles.header, { paddingTop: insets.top + 8, borderBottomColor: colors.cardBorder }]}>
         <TouchableOpacity onPress={() => router.back()} style={styles.headerIcon} accessibilityLabel="Go back">
           <Feather name="arrow-left" size={20} color={colors.text} />
         </TouchableOpacity>
         <View style={styles.headerTitleWrap}>
           <Text style={[styles.headerTitle, { color: colors.text }]}>Community</Text>
-          <Text style={[styles.headerSubtitle, { color: colors.textMuted }]}>Trading knowledge, shared</Text>
+          <Text style={[styles.headerSubtitle, { color: colors.textMuted }]}>Trade ideas. Learn together.</Text>
         </View>
+        <TouchableOpacity onPress={() => router.push('/community-search')} style={styles.headerIcon} accessibilityLabel="Search Community">
+          <Feather name="search" size={19} color={colors.text} />
+        </TouchableOpacity>
         <TouchableOpacity onPress={() => void openNotifications()} style={styles.headerIcon} accessibilityLabel="Community notifications">
           <Feather name="bell" size={19} color={colors.text} />
           {unreadCount > 0 ? <View style={[styles.notificationDot, { backgroundColor: colors.sell }]} /> : null}
         </TouchableOpacity>
-        <TouchableOpacity onPress={() => router.push('/community-support')} style={styles.headerIcon} accessibilityLabel="Contact FXSnap support">
-          <Feather name="headphones" size={19} color={colors.text} />
+        <TouchableOpacity onPress={openHeaderMenu} style={styles.headerIcon} accessibilityLabel="More Community options">
+          <Feather name="more-horizontal" size={20} color={colors.text} />
         </TouchableOpacity>
-        {profile?.isAdmin ? (
-          <TouchableOpacity onPress={() => router.push('/community-admin')} style={styles.headerIcon} accessibilityLabel="Open community moderation">
-            <Feather name="shield" size={19} color={colors.buy} />
-          </TouchableOpacity>
-        ) : null}
       </View>
-      <FlatList
+      <FlashList
         ref={flatListRef}
         data={posts}
         keyExtractor={(item) => item.id}
         renderItem={renderPost}
+        numColumns={2}
+        masonry
+        optimizeItemArrangement={false}
+        drawDistance={600}
+        extraData={profile?.username}
         contentContainerStyle={[styles.feedContent, { paddingBottom: insets.bottom + 112 }]}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
@@ -950,18 +1012,7 @@ export default function CommunityScreen() {
         onEndReachedThreshold={0.5}
         ListHeaderComponent={
           <>
-            <Animated.View entering={FadeInDown.duration(380)} style={[styles.feedHero, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
-              <View style={[styles.heroIcon, { backgroundColor: `${colors.buy}18` }]}>
-                <Feather name="trending-up" size={19} color={colors.buy} />
-              </View>
-              <View style={styles.heroCopy}>
-                <Text style={[styles.feedHeroTitle, { color: colors.text }]}>Better traders learn together.</Text>
-                <Text style={[styles.feedHeroSubtitle, { color: colors.textSecondary }]}>Ideas and education. No guaranteed outcomes.</Text>
-              </View>
-              <TouchableOpacity onPress={() => void openBlockedMembers()} accessibilityLabel="Manage blocked traders">
-                <Feather name="shield" size={17} color={colors.textMuted} />
-              </TouchableOpacity>
-            </Animated.View>
+            <CommunityPreviewNotice />
             <View style={styles.feedTabs}>
               {(['global', 'following'] as const).map((item) => (
                 <TouchableOpacity
@@ -995,9 +1046,13 @@ export default function CommunityScreen() {
               style={[styles.composePrompt, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}
               accessibilityLabel="Create a community post"
             >
-              <View style={[styles.composeAvatar, { backgroundColor: colors.buy }]}>
-                <Text style={[styles.composeAvatarText, { color: colors.primaryForeground }]}>{profile?.username.slice(0, 1).toUpperCase()}</Text>
-              </View>
+              {profile?.pictureUrl
+                ? <Image source={{ uri: profile.pictureUrl }} style={styles.composeAvatar} resizeMode="cover" accessibilityLabel="Your profile picture" />
+                : (
+                  <View style={[styles.composeAvatar, { backgroundColor: colors.buy }]}>
+                    <Text style={[styles.composeAvatarText, { color: colors.primaryForeground }]}>{profile?.username.slice(0, 1).toUpperCase()}</Text>
+                  </View>
+                )}
               <Text style={[styles.composePlaceholder, { color: colors.textMuted }]}>What are you learning in the markets?</Text>
               <Feather name="edit-3" size={17} color={colors.buy} />
             </TouchableOpacity>
@@ -1158,14 +1213,14 @@ export default function CommunityScreen() {
             {commentPost ? <CommunityPostCard post={commentPost} ownAccount={commentPost.authorUsername === profile?.username} onLike={() => void handleLike(commentPost)} onComment={() => {}} onShare={() => void sharePost(commentPost)} onMore={() => showPostActions(commentPost)} onFollow={() => void handleFollow(commentPost)} /> : null}
             <Text style={[styles.commentsHeading, { color: colors.text }]}>Trader discussion</Text>
             {commentsLoading ? <ActivityIndicator color={colors.buy} /> : comments.length ? comments.map((comment) => (
-              <CommentCard key={comment.id} comment={comment} colors={colors} onReply={() => void startReply(comment)} onMore={() => showPostActions(comment)} />
+              <CommentCard key={comment.id} comment={comment} colors={colors} onReply={() => void startReply(comment)} onMore={() => showPostActions(comment)} onAuthorPress={() => router.push({ pathname: '/community-member', params: { username: comment.authorUsername } })} />
             )) : (
               <View style={styles.noComments}>
                 <Text style={[styles.emptyBody, { color: colors.textSecondary }]}>No replies yet. Add a constructive thought or ask a follow-up question.</Text>
               </View>
             )}
             {threadLoading ? <ActivityIndicator color={colors.buy} /> : threadReplies.map((reply) => (
-              <CommentCard key={reply.id} comment={reply} colors={colors} nested onReply={() => void startReply(reply)} onMore={() => showPostActions(reply)} />
+              <CommentCard key={reply.id} comment={reply} colors={colors} nested onReply={() => void startReply(reply)} onMore={() => showPostActions(reply)} onAuthorPress={() => router.push({ pathname: '/community-member', params: { username: reply.authorUsername } })} />
             ))}
           </ScrollView>
           {replyTarget ? (
@@ -1191,21 +1246,51 @@ export default function CommunityScreen() {
         </KeyboardAvoidingView>
       </Modal>
 
-      <Modal visible={notificationsVisible} transparent animationType="fade" onRequestClose={() => setNotificationsVisible(false)}>
-        <View style={styles.modalScrim}>
-          <View style={[styles.smallModal, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
-            <ModalTitle title="Notifications" colors={colors} onClose={() => setNotificationsVisible(false)} />
-            <ScrollView style={{ maxHeight: 420 }}>
-              {notifications.length ? notifications.map((notification) => (
-                <TouchableOpacity key={notification.id} onPress={() => void markNotification(notification)} style={[styles.notificationRow, { borderBottomColor: colors.cardBorder }]}>
-                  <View style={[styles.notificationDot, { backgroundColor: notification.read_at ? colors.cardBorder : colors.buy }]} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.notificationText, { color: colors.text }]}>{notification.message}</Text>
-                    <Text style={[styles.metaText, { color: colors.textMuted }]}>{ageLabel(notification.created_at)}</Text>
-                  </View>
-                </TouchableOpacity>
-              )) : <Text style={[styles.emptyBody, { color: colors.textSecondary }]}>You are all caught up.</Text>}
-            </ScrollView>
+      <Modal
+        visible={Boolean(postActionsPost)}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setPostActionsPost(null)}
+      >
+        <View style={styles.actionSheetOverlay}>
+          <TouchableOpacity
+            style={StyleSheet.absoluteFill}
+            onPress={() => setPostActionsPost(null)}
+            accessibilityLabel="Close post actions"
+          />
+          <View style={[styles.actionSheet, { backgroundColor: colors.card, borderColor: colors.cardBorder, paddingBottom: Math.max(insets.bottom, 16) }]}>
+            <View style={[styles.actionSheetHandle, { backgroundColor: colors.textMuted }]} />
+            <View style={styles.actionSheetHeading}>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.actionSheetTitle, { color: colors.text }]}>
+                  {postActionsPost?.replyTo ? 'Comment actions' : 'Post actions'}
+                </Text>
+                {postActionsPost ? (
+                  <Text style={[styles.actionSheetSubtitle, { color: colors.textMuted }]} numberOfLines={1}>
+                    @{postActionsPost.authorUsername}
+                  </Text>
+                ) : null}
+              </View>
+              <TouchableOpacity onPress={() => setPostActionsPost(null)} style={styles.headerIcon} accessibilityLabel="Close">
+                <Feather name="x" size={20} color={colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+            {postActionsPost ? postActionItems.map((item) => (
+              <TouchableOpacity
+                key={item.name}
+                onPress={() => runPostAction(item.name, postActionsPost)}
+                style={styles.actionSheetRow}
+                accessibilityRole="button"
+              >
+                <View style={[styles.actionSheetIcon, { backgroundColor: item.destructive ? `${colors.sell}12` : colors.surface }]}>
+                  <Feather name={item.icon} size={17} color={item.destructive ? colors.sell : colors.textSecondary} />
+                </View>
+                <View style={styles.actionSheetCopy}>
+                  <Text style={[styles.actionSheetLabel, { color: item.destructive ? colors.sell : colors.text }]}>{item.label}</Text>
+                  <Text style={[styles.actionSheetDescription, { color: colors.textMuted }]}>{item.description}</Text>
+                </View>
+              </TouchableOpacity>
+            )) : null}
           </View>
         </View>
       </Modal>
@@ -1292,12 +1377,14 @@ function CommentCard({
   nested = false,
   onReply,
   onMore,
+  onAuthorPress,
 }: {
   comment: CommunityMessage;
   colors: ReturnType<typeof useColors>;
   nested?: boolean;
   onReply: () => void;
   onMore: () => void;
+  onAuthorPress: () => void;
 }) {
   return (
     <View style={[styles.commentCard, { marginLeft: nested ? 25 : 0, backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
@@ -1309,10 +1396,10 @@ function CommentCard({
             <Text style={[styles.composeAvatarText, { color: comment.isOfficial ? colors.primaryForeground : colors.text }]}>{comment.authorUsername.slice(0, 1).toUpperCase()}</Text>
           </View>
         )}
-        <View style={{ flex: 1 }}>
+        <TouchableOpacity onPress={onAuthorPress} style={{ flex: 1 }}>
           <Text style={[styles.username, { color: colors.text }]}>@{comment.authorUsername}{comment.isOfficial ? ' · FXSnap' : ''}</Text>
           <Text style={[styles.metaText, { color: colors.textMuted }]}>{ageLabel(comment.createdAt)}</Text>
-        </View>
+        </TouchableOpacity>
         <TouchableOpacity onPress={onMore} accessibilityLabel="Comment actions"><Feather name="more-horizontal" size={18} color={colors.textMuted} /></TouchableOpacity>
       </View>
       {comment.replyTo ? <Text style={[styles.metaText, { color: colors.buy }]}>Replying to @{comment.replyTo.author_username}</Text> : null}
@@ -1342,31 +1429,27 @@ function BottomItem({ icon, label, active, colors, onPress }: { icon: React.Comp
 
 const styles = StyleSheet.create({
   screen: { flex: 1 },
-  header: { minHeight: 62, flexDirection: 'row', alignItems: 'center', gap: 3, paddingHorizontal: 12, borderBottomWidth: StyleSheet.hairlineWidth },
+  header: { minHeight: 68, flexDirection: 'row', alignItems: 'center', gap: 2, paddingHorizontal: 10, borderBottomWidth: StyleSheet.hairlineWidth },
   onboardingHeader: { minHeight: 56, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14 },
   headerIcon: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center', position: 'relative' },
   headerTitleWrap: { flex: 1, paddingLeft: 5 },
-  headerTitle: { fontSize: 16, fontFamily: 'Inter_700Bold' },
+  headerTitle: { fontSize: 19, fontFamily: 'Inter_700Bold' },
   username: { fontSize: 12, fontFamily: 'Inter_700Bold' },
   headerSubtitle: { fontSize: 10, fontFamily: 'Inter_400Regular', marginTop: 2 },
   notificationDot: { width: 8, height: 8, borderRadius: 4, position: 'absolute', right: 8, top: 7 },
-  feedContent: { paddingHorizontal: 13, paddingTop: 12 },
-  feedHero: { flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 1, borderRadius: 16, padding: 12 },
-  heroIcon: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 12 },
-  heroCopy: { flex: 1, gap: 3 },
-  feedHeroTitle: { fontSize: 12, fontFamily: 'Inter_700Bold' },
-  feedHeroSubtitle: { fontSize: 10, fontFamily: 'Inter_400Regular' },
-  feedTabs: { flexDirection: 'row', gap: 8, marginTop: 13, marginBottom: 8 },
+  feedContent: { paddingHorizontal: 7, paddingTop: 6 },
+  masonryCell: { paddingHorizontal: 4, paddingVertical: 4 },
+  feedTabs: { flexDirection: 'row', gap: 7, marginTop: 8, marginBottom: 3 },
   feedTab: { minHeight: 34, justifyContent: 'center', borderWidth: 1, borderRadius: 17, paddingHorizontal: 15 },
   feedTabText: { fontSize: 11, fontFamily: 'Inter_600SemiBold' },
-  categories: { alignItems: 'center', gap: 7, paddingVertical: 7, paddingRight: 8 },
-  categoryChip: { minHeight: 32, justifyContent: 'center', borderWidth: 1, borderRadius: 17, paddingHorizontal: 12 },
+  categories: { alignItems: 'center', gap: 7, paddingVertical: 6, paddingRight: 8 },
+  categoryChip: { minHeight: 31, justifyContent: 'center', borderWidth: 1, borderRadius: 17, paddingHorizontal: 12 },
   categoryText: { fontSize: 10, fontFamily: 'Inter_600SemiBold' },
-  composePrompt: { minHeight: 54, flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 1, borderRadius: 15, paddingHorizontal: 12, marginTop: 7 },
+  composePrompt: { minHeight: 49, flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 1, borderRadius: 15, paddingHorizontal: 12, marginTop: 3 },
   composeAvatar: { width: 31, height: 31, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
   composeAvatarText: { fontSize: 12, fontFamily: 'Inter_700Bold' },
   composePlaceholder: { flex: 1, fontSize: 11, fontFamily: 'Inter_400Regular' },
-  quickPostActions: { flexDirection: 'row', gap: 7, marginTop: 8, marginBottom: 15 },
+  quickPostActions: { flexDirection: 'row', gap: 7, marginTop: 6, marginBottom: 8 },
   quickAction: { minHeight: 33, flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1, borderRadius: 12, paddingHorizontal: 9 },
   quickActionText: { fontSize: 9, fontFamily: 'Inter_600SemiBold' },
   feedLoading: { minHeight: 100, alignItems: 'center', justifyContent: 'center', gap: 9 },
@@ -1378,6 +1461,17 @@ const styles = StyleSheet.create({
   primaryButton: { minHeight: 48, alignItems: 'center', justifyContent: 'center', borderRadius: 13, marginTop: 8, paddingHorizontal: 16 },
   primaryButtonText: { fontSize: 12, fontFamily: 'Inter_700Bold' },
   inlineError: { borderRadius: 12, padding: 10, marginBottom: 11, gap: 8 },
+  actionSheetOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.38)' },
+  actionSheet: { borderTopLeftRadius: 24, borderTopRightRadius: 24, borderWidth: 1, borderBottomWidth: 0, paddingTop: 10, paddingHorizontal: 18, maxHeight: '78%' },
+  actionSheetHandle: { alignSelf: 'center', width: 36, height: 4, borderRadius: 3, opacity: 0.4, marginBottom: 10 },
+  actionSheetHeading: { flexDirection: 'row', alignItems: 'center', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#80808030', paddingBottom: 7, marginBottom: 4 },
+  actionSheetTitle: { fontSize: 15, fontFamily: 'Inter_700Bold' },
+  actionSheetSubtitle: { marginTop: 3, fontSize: 10, fontFamily: 'Inter_400Regular' },
+  actionSheetRow: { minHeight: 58, flexDirection: 'row', alignItems: 'center', gap: 12 },
+  actionSheetIcon: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: 12 },
+  actionSheetCopy: { flex: 1, gap: 3 },
+  actionSheetLabel: { fontSize: 12, fontFamily: 'Inter_600SemiBold' },
+  actionSheetDescription: { fontSize: 10, fontFamily: 'Inter_400Regular' },
   errorText: { fontSize: 11, lineHeight: 16, fontFamily: 'Inter_500Medium' },
   retryText: { fontSize: 11, fontFamily: 'Inter_700Bold' },
   loadMoreButton: { alignSelf: 'center', paddingVertical: 13 },

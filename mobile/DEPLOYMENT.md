@@ -61,13 +61,17 @@ Run `server/supabase-kv.sql` once in the Supabase SQL editor. This creates the s
 
 Community is disabled until its schema is present. Before enabling it:
 
-1. Apply `server/community.sql` to the production Supabase project. It creates the Community tables and comment-count function, enables RLS with client access restricted, configures realtime, provisions the public Community image bucket, and hides the old static starter posts.
+1. Apply the latest `server/community.sql` to the production Supabase project. It creates/updates the Community tables, profile-photo and comment-count support, member-count function, and validated topic categories; enables RLS with client access restricted; configures realtime; provisions the public Community image bucket; and hides the old static starter posts.
 2. Confirm the Vercel Production environment already has `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`. The privileged key must remain server-only.
 3. Set `FXSNAP_COMMUNITY_ENABLED=true` in Vercel and redeploy. The public rollout permits all authenticated Google-linked FXSnap accounts to join; there is no beta allowlist.
 4. Set `FXSNAP_COMMUNITY_ADMIN_SUPABASE_USER_IDS` to the approved moderator Supabase user IDs only. Leave it empty if no additional moderators are approved.
 5. Check the authenticated feed, posts, reactions, comments/replies, report flow, account deletion, and image upload with at least two distinct accounts. Confirm the resulting Vercel deployment and Supabase project are the same ones targeted by the production app.
 
-Keep the flag false until the migration is applied and verified. The mobile app also needs a new Android build to expose profile photos, persisted comment counts, and own-post edit/delete actions; backend activation alone does not publish those client changes.
+The app now includes backend-backed post/member/topic search, member profiles, and a dedicated in-app notification screen. These use the existing authenticated API and Community tables; no member-to-member private messaging is added.
+
+Keep the flag false until the migration is applied and verified. Publish a new Android build after deploying the backend to expose these UI changes, profile photos, persisted comment counts, and own-post edit/delete actions; backend activation alone does not publish client changes.
+
+For UI work, opening `/community` in the Expo web development server uses a clearly labeled local preview identity and in-memory demo posts. Create, react, follow, and comment interactions stay in that browser session and reset on reload; this preview does not authenticate against or write to production. It is gated to web development builds only and is not a substitute for testing the authenticated mobile app or backend.
 
 ```bash
 cd mobile

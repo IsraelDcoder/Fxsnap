@@ -93,6 +93,9 @@ function RootLayoutNav({ fontsReady }: { fontsReady: boolean }) {
       <Stack.Screen name="auth/callback" options={{ headerShown: false, animation: 'none' }} />
       <Stack.Screen name="support-chat" options={{ headerShown: false, animation: 'slide_from_right' }} />
       <Stack.Screen name="community" options={{ headerShown: false, animation: 'slide_from_right' }} />
+      <Stack.Screen name="community-search" options={{ headerShown: false, animation: 'slide_from_right' }} />
+      <Stack.Screen name="community-member" options={{ headerShown: false, animation: 'slide_from_right' }} />
+      <Stack.Screen name="community-notifications" options={{ headerShown: false, animation: 'slide_from_right' }} />
       <Stack.Screen name="community-support" options={{ headerShown: false, animation: 'slide_from_right' }} />
       <Stack.Screen name="community-admin" options={{ headerShown: false, animation: 'slide_from_right' }} />
       <Stack.Screen name="profile" options={{ headerShown: false, animation: 'slide_from_right' }} />

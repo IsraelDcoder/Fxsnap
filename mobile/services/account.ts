@@ -4,6 +4,7 @@ import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
 import { getApiHeaders, resolveApiBaseUrl } from '@/services/apiAuth';
 import { getSupabaseClient, hasSupabaseConfiguration } from '@/services/supabase';
+import { createCommunityPreviewAccount } from '@/services/communityPreview';
 
 const ACCOUNT_TOKEN_KEY = 'fxsnapaccountSessionv1';
 const API_URL = resolveApiBaseUrl();
@@ -61,6 +62,7 @@ async function getCurrentSupabaseAccessToken() {
 }
 
 export async function getAuthenticatedAccount(): Promise<FxsnapAccount | null> {
+  if (Platform.OS === 'web' && __DEV__) return createCommunityPreviewAccount();
   ensureNativeSecureStorage();
   const token = await SecureStore.getItemAsync(ACCOUNT_TOKEN_KEY);
   if (!token) {

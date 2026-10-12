@@ -5,12 +5,16 @@ const persistentStore = require('./persistentStore');
 const RULES_VERSION = 'community-rules-v1';
 const MEMBER_LIMIT = 40;
 const MAX_MESSAGE_IMAGE_BYTES = 3 * 1024 * 1024;
+const IMAGE_DIMENSIONS = {
+  imageWidth: z.number().int().min(1).max(8000).optional(),
+  imageHeight: z.number().int().min(1).max(8000).optional(),
+};
 const ALLOWED_MESSAGE_IMAGES = new Map([
   ['image/jpeg', 'jpg'],
   ['image/png', 'png'],
   ['image/webp', 'webp'],
 ]);
-const COMMUNITY_CATEGORIES = ['market_discussion', 'learning', 'chart_analysis', 'questions', 'events'];
+const COMMUNITY_CATEGORIES = ['trading', 'investing', 'finance', 'market_discussion', 'learning', 'chart_analysis', 'questions', 'events'];
 const MESSAGE_REACTIONS = ['like', 'helpful', 'insightful', 'interesting'];
 const USERNAME_PATTERN = /^[a-z0-9_]{3,24}$/;
 const RESERVED_USERNAMES = new Set(['admin', 'administrator', 'fxsnap', 'fxsnap_official', 'moderator', 'support', 'system']);
@@ -430,6 +434,7 @@ function createCommunityApi({ getActor, sendJson, readJsonBody, saveCommunityUse
         timeframe: z.string().trim().min(1).max(20),
         reasoning: z.string().trim().max(1200).default(''),
         imageUrl: z.string().url().max(2048).nullable().optional(),
+        ...IMAGE_DIMENSIONS,
       }).safeParse(payload);
       if (!signal.success) return sendJson(res, 400, { error: 'Complete the signal instrument, direction, entry, stop, target, and timeframe.' });
       safePayload = signal.data;
@@ -448,12 +453,14 @@ function createCommunityApi({ getActor, sendJson, readJsonBody, saveCommunityUse
         marketBias: z.string().max(40).nullable().optional(),
         reasoning: z.array(z.string().max(500)).max(8).default([]),
         imageUrl: z.string().url().max(2048).nullable().optional(),
+        ...IMAGE_DIMENSIONS,
       }).safeParse(payload);
       if (!snapshot.success) return sendJson(res, 400, { error: 'The FXSnap analysis snapshot is incomplete or invalid.' });
       safePayload = snapshot.data;
     } else if (kind === 'text' || kind === 'announcement') {
       const textPayload = z.object({
         imageUrl: z.string().url().max(2048).nullable().optional(),
+        ...IMAGE_DIMENSIONS,
       }).safeParse(payload);
       if (!textPayload.success) return sendJson(res, 400, { error: 'Invalid chart image attachment.' });
       if (textPayload.data.imageUrl) {
@@ -534,7 +541,7 @@ function createCommunityApi({ getActor, sendJson, readJsonBody, saveCommunityUse
     if (!USERNAME_PATTERN.test(normalized)) return null;
     return parseRows(await getRows(
       'fxsnap_community_profiles',
-      `username=eq.${encodeURIComponent(normalized)}&select=account_id,supabase_user_id,username,status,muted_until&limit=1`,
+      `username=eq.${encodeURIComponent(normalized)}&select=account_id,supabase_user_id,username,picture_url,status,muted_until,joined_at&limit=1`,
     ))[0] || null;
   }
 
@@ -641,6 +648,122 @@ function createCommunityApi({ getActor, sendJson, readJsonBody, saveCommunityUse
         }
       }
 
+      if (pathname === '/api/community/search' && req.method === 'GET') {
+        const rawQuery = String(url.searchParams.get('q') || '').trim();
+        const query = rawQuery.replace(/[,*%()]/g, '').slice(0, 80);
+        const kind = url.searchParams.get('kind');
+        if (query.length < 2 || !['posts', 'people', 'topics'].includes(kind)) {
+          return sendJson(res, 400, { error: 'Enter at least two characters and choose a valid search category.' });
+        }
+        const result = { posts: [], people: [], topics: [] };
+        if (kind === 'topics') {
+          result.topics = COMMUNITY_CATEGORIES
+            .map((id) => ({ id, label: ({
+              trading: 'Trading',
+              investing: 'Investing',
+              finance: 'Finance',
+              market_discussion: 'Market Discussion',
+              learning: 'Learning',
+              chart_analysis: 'Chart Analysis',
+              questions: 'Questions',
+              events: 'Events & Announcements',
+            })[id] }))
+            .filter((topic) => actor.isAdmin || topic.id !== 'events')
+            .filter((topic) => `${topic.id} ${topic.label}`.toLowerCase().includes(query.toLowerCase()));
+          return sendJson(res, 200, result);
+        }
+        if (kind === 'people') {
+          const people = parseRows(await getRows(
+            'fxsnap_community_profiles',
+            `username=ilike.${encodeURIComponent(`*${query}*`)}&status=eq.active&select=account_id,username,picture_url&order=username.asc&limit=30`,
+          ));
+          const [blocked, blockedBy] = await Promise.all([
+            getRows('fxsnap_community_blocks',
+              `blocker_account_id=eq.${encodeURIComponent(actor.accountId)}&select=blocked_account_id`),
+            getRows('fxsnap_community_blocks',
+              `blocked_account_id=eq.${encodeURIComponent(actor.accountId)}&select=blocker_account_id`),
+          ]);
+          const hidden = [...parseRows(blocked), ...parseRows(blockedBy)];
+          const hiddenIds = new Set(hidden.flatMap((item) => [
+            item.blocker_account_id === actor.accountId ? item.blocked_account_id : null,
+            item.blocked_account_id === actor.accountId ? item.blocker_account_id : null,
+          ]).filter(Boolean));
+          result.people = people
+            .filter((person) => !hiddenIds.has(person.account_id))
+            .map((person) => ({
+              accountId: person.account_id,
+              username: person.username,
+              pictureUrl: person.picture_url || null,
+            }));
+          return sendJson(res, 200, result);
+        }
+        const [blocks, blockedBy] = await Promise.all([
+          getRows('fxsnap_community_blocks',
+            `blocker_account_id=eq.${encodeURIComponent(actor.accountId)}&select=blocked_account_id`),
+          getRows('fxsnap_community_blocks',
+            `blocked_account_id=eq.${encodeURIComponent(actor.accountId)}&select=blocker_account_id`),
+        ]);
+        const excluded = [...new Set([
+          ...parseRows(blocks).map((row) => row.blocked_account_id),
+          ...parseRows(blockedBy).map((row) => row.blocker_account_id),
+        ])];
+        const params = new URLSearchParams({
+          select: 'id,account_id,author_username,is_official,kind,category,body,payload,reply_to_id,pinned_at,removed_at,created_at,client_message_id',
+          body: `ilike.*${query}*`,
+          removed_at: 'is.null',
+          reply_to_id: 'is.null',
+          order: 'created_at.desc,id.desc',
+          limit: '30',
+        });
+        if (excluded.length) {
+          params.set('account_id', `not.in.(${excluded.map((id) => `"${String(id).replace(/"/g, '')}"`).join(',')})`);
+        }
+        const rows = parseRows(await getRows('fxsnap_community_messages', params.toString()));
+        result.posts = await serializeMessages(rows, actor);
+        return sendJson(res, 200, result);
+      }
+
+      const memberMatch = pathname.match(/^\/api\/community\/members\/([a-z0-9_]{3,24})$/i);
+      if (memberMatch && req.method === 'GET') {
+        const member = await memberProfile(actor, memberMatch[1]);
+        if (!member || member.status !== 'active') return sendJson(res, 404, { error: 'Community member not found.' });
+        const [blockedByActor, blockedActor] = await Promise.all([
+          getRows('fxsnap_community_blocks',
+            `blocker_account_id=eq.${encodeURIComponent(actor.accountId)}&blocked_account_id=eq.${encodeURIComponent(member.account_id)}&select=blocker_account_id&limit=1`),
+          getRows('fxsnap_community_blocks',
+            `blocker_account_id=eq.${encodeURIComponent(member.account_id)}&blocked_account_id=eq.${encodeURIComponent(actor.accountId)}&select=blocker_account_id&limit=1`),
+        ]);
+        if (parseRows(blockedByActor).length || parseRows(blockedActor).length) {
+          return sendJson(res, 404, { error: 'Community member not found.' });
+        }
+        const own = member.account_id === actor.accountId;
+        const [posts, follows, counts] = await Promise.all([
+          getRows('fxsnap_community_messages',
+            `account_id=eq.${encodeURIComponent(member.account_id)}&reply_to_id=is.null&removed_at=is.null&select=id,account_id,author_username,is_official,kind,category,body,payload,reply_to_id,pinned_at,removed_at,created_at,client_message_id&order=created_at.desc,id.desc&limit=30`),
+          own ? Promise.resolve([]) : getRows('fxsnap_community_follows',
+            `follower_account_id=eq.${encodeURIComponent(actor.accountId)}&followed_account_id=eq.${encodeURIComponent(member.account_id)}&select=followed_account_id&limit=1`),
+          database('rpc/fxsnap_community_member_counts', {
+            method: 'POST',
+            body: JSON.stringify({ p_account_id: member.account_id }),
+          }),
+        ]);
+        const memberPosts = await serializeMessages(parseRows(posts), actor);
+        const totals = parseRows(counts)[0] || { follower_count: 0, following_count: 0 };
+        return sendJson(res, 200, {
+          member: {
+            accountId: member.account_id,
+            username: member.username,
+            pictureUrl: member.picture_url || null,
+            joinedAt: member.joined_at,
+            followerCount: Number(totals.follower_count) || 0,
+            followingCount: Number(totals.following_count) || 0,
+            isFollowing: parseRows(follows).length > 0,
+            isCurrentUser: own,
+            posts: memberPosts,
+          },
+        });
+      }
+
       if (pathname === '/api/community/messages' && req.method === 'GET') {
         return listMessages(actor, url, res);
       }
@@ -702,6 +825,7 @@ function createCommunityApi({ getActor, sendJson, readJsonBody, saveCommunityUse
           body: z.string().trim().max(2000),
           category: z.enum(COMMUNITY_CATEGORIES).optional(),
           imageUrl: z.string().url().max(2048).nullable().optional(),
+          ...IMAGE_DIMENSIONS,
         }).strict().safeParse(await readJsonBody(req));
         if (!input.success) return sendJson(res, 400, { error: 'Invalid Community post update.' });
         const imageUrl = input.data.imageUrl === undefined
@@ -730,7 +854,12 @@ function createCommunityApi({ getActor, sendJson, readJsonBody, saveCommunityUse
           {
             body: input.data.body,
             category,
-            payload: { ...(message.payload || {}), imageUrl },
+            payload: {
+              ...(message.payload || {}),
+              imageUrl,
+              ...(input.data.imageWidth === undefined ? {} : { imageWidth: input.data.imageWidth }),
+              ...(input.data.imageHeight === undefined ? {} : { imageHeight: input.data.imageHeight }),
+            },
           },
         ));
         if (!rows.length) return sendJson(res, 404, { error: 'Community message not found.' });
@@ -946,7 +1075,42 @@ function createCommunityApi({ getActor, sendJson, readJsonBody, saveCommunityUse
           'fxsnap_community_notifications',
           `recipient_account_id=eq.${encodeURIComponent(actor.accountId)}&select=id,kind,message,object_id,read_at,created_at&order=created_at.desc&limit=50`,
         ));
-        return sendJson(res, 200, { notifications: rows });
+        const messageIds = [...new Set(rows
+          .filter((row) => row.kind !== 'support_reply' && /^[0-9a-f-]{36}$/i.test(String(row.object_id || '')))
+          .map((row) => row.object_id))];
+        const messageRows = messageIds.length
+          ? parseRows(await getRows(
+            'fxsnap_community_messages',
+            `id=in.(${encodeURIComponent(messageIds.map((id) => `"${id}"`).join(','))})&select=id,reply_to_id`,
+          ))
+          : [];
+        const messageById = new Map(messageRows.map((row) => [row.id, row]));
+        for (let depth = 0; depth < 4; depth += 1) {
+          const parentIds = [...new Set([...messageById.values()]
+            .map((row) => row.reply_to_id)
+            .filter((id) => id && !messageById.has(id)))];
+          if (!parentIds.length) break;
+          const parents = parseRows(await getRows(
+            'fxsnap_community_messages',
+            `id=in.(${encodeURIComponent(parentIds.map((id) => `"${id}"`).join(','))})&select=id,reply_to_id`,
+          ));
+          for (const parent of parents) messageById.set(parent.id, parent);
+        }
+        const rootIdFor = (id) => {
+          let current = messageById.get(id);
+          let depth = 0;
+          while (current?.reply_to_id && messageById.has(current.reply_to_id) && depth < 3) {
+            current = messageById.get(current.reply_to_id);
+            depth += 1;
+          }
+          return current ? current.id : null;
+        };
+        return sendJson(res, 200, {
+          notifications: rows.map((row) => ({
+            ...row,
+            post_id: row.kind === 'support_reply' || !row.object_id ? null : rootIdFor(row.object_id),
+          })),
+        });
       }
       const notificationMatch = pathname.match(/^\/api\/community\/notifications\/([0-9a-f-]+)\/read$/i);
       if (notificationMatch && req.method === 'POST') {

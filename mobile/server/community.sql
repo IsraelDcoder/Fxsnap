@@ -24,7 +24,7 @@ create table if not exists public.fxsnap_community_messages (
   author_username text not null,
   is_official boolean not null default false,
   kind text not null check (kind in ('text', 'signal', 'analysis', 'announcement')),
-  category text check (category in ('market_discussion', 'learning', 'chart_analysis', 'questions', 'events')),
+  category text check (category in ('trading', 'investing', 'finance', 'market_discussion', 'learning', 'chart_analysis', 'questions', 'events')),
   body text not null default '',
   payload jsonb not null default '{}'::jsonb,
   reply_to_id uuid references public.fxsnap_community_messages(id) on delete set null,
@@ -38,6 +38,14 @@ create table if not exists public.fxsnap_community_messages (
     length(body) <= 2000 and octet_length(body) <= 8000
   )
 );
+alter table public.fxsnap_community_messages
+  drop constraint if exists fxsnap_community_messages_category_check;
+alter table public.fxsnap_community_messages
+  add constraint fxsnap_community_messages_category_check
+  check (category is null or category in (
+    'trading', 'investing', 'finance', 'market_discussion', 'learning',
+    'chart_analysis', 'questions', 'events'
+  ));
 create index if not exists fxsnap_community_messages_created_idx
   on public.fxsnap_community_messages (created_at desc, id desc);
 create index if not exists fxsnap_community_messages_author_idx
@@ -77,6 +85,19 @@ create table if not exists public.fxsnap_community_follows (
 );
 create index if not exists fxsnap_community_follows_followed_idx
   on public.fxsnap_community_follows (followed_account_id, follower_account_id);
+
+create or replace function public.fxsnap_community_member_counts(p_account_id text)
+returns table(follower_count bigint, following_count bigint)
+language sql
+security definer
+set search_path = public
+as $$
+  select
+    (select count(*) from public.fxsnap_community_follows where followed_account_id = p_account_id),
+    (select count(*) from public.fxsnap_community_follows where follower_account_id = p_account_id);
+$$;
+revoke all on function public.fxsnap_community_member_counts(text) from public, anon, authenticated;
+grant execute on function public.fxsnap_community_member_counts(text) to service_role;
 
 create table if not exists public.fxsnap_community_blocks (
   blocker_account_id text not null,

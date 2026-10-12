@@ -36,12 +36,13 @@ function makeHarness({
     const parsed = new URL(String(url));
     const table = parsed.pathname.split('/').pop();
     const method = options.method || 'GET';
-    requests.push({ table, method, query: parsed.searchParams, body: options.body ? JSON.parse(options.body) : null });
+    requests.push({ table, method, query: parsed.search, body: options.body ? JSON.parse(options.body) : null });
 
     if (table === 'fxsnap_community_profiles' && method === 'GET') {
       const accountId = parsed.searchParams.get('account_id')?.replace(/^eq\./, '');
-      const username = parsed.searchParams.get('username')?.replace(/^eq\./, '');
-      const usernamePattern = parsed.searchParams.get('username')?.replace(/^ilike\./, '');
+      const rawUsername = parsed.searchParams.get('username');
+      const username = rawUsername?.startsWith('eq.') ? rawUsername.slice(3) : null;
+      const usernamePattern = rawUsername?.startsWith('ilike.') ? rawUsername.slice(6) : null;
       return makeResponse(200, profiles.filter((profile) => (
         (!accountId || profile.account_id === accountId)
         && (!username || profile.username === username)
@@ -179,6 +180,62 @@ test('unauthenticated accounts cannot make protected Community requests', async 
   assert.equal(storageRequests, 0);
 });
 
+test('Community topic search returns matching real category definitions', async () => {
+  const harness = makeHarness({
+    initialProfiles: [{
+      account_id: ACCOUNT_ID,
+      supabase_user_id: MEMBER_ID,
+      username: 'chartpro',
+      picture_url: null,
+      accepted_rules_version: RULES_VERSION,
+      status: 'active',
+      muted_until: null,
+      joined_at: new Date().toISOString(),
+    }],
+  });
+  const response = await harness.call('/api/community/search?q=trad&kind=topics');
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(response.body.topics, [{ id: 'trading', label: 'Trading' }]);
+});
+
+test('Community search rejects short queries and unsupported result types', async () => {
+  const harness = makeHarness({
+    initialProfiles: [{
+      account_id: ACCOUNT_ID,
+      supabase_user_id: MEMBER_ID,
+      username: 'chartpro',
+      picture_url: null,
+      accepted_rules_version: RULES_VERSION,
+      status: 'active',
+      muted_until: null,
+      joined_at: new Date().toISOString(),
+    }],
+  });
+  const response = await harness.call('/api/community/search?q=x&kind=posts');
+  assert.equal(response.statusCode, 400);
+});
+
+test('Community member profile returns authenticated member identity and persisted counts', async () => {
+  const profile = {
+    account_id: ACCOUNT_ID,
+    supabase_user_id: MEMBER_ID,
+    username: 'chartpro',
+    picture_url: 'https://example.com/chartpro.png',
+    accepted_rules_version: RULES_VERSION,
+    status: 'active',
+    muted_until: null,
+    joined_at: new Date().toISOString(),
+  };
+  const harness = makeHarness({ initialProfiles: [profile] });
+  const response = await harness.call('/api/community/members/chartpro');
+  assert.equal(response.statusCode, 200, JSON.stringify({ body: response.body, requests: harness.requests }));
+  assert.equal(response.body.member.accountId, ACCOUNT_ID);
+  assert.equal(response.body.member.pictureUrl, profile.picture_url);
+  assert.equal(response.body.member.isCurrentUser, true);
+  assert.equal(response.body.member.followerCount, 0);
+  assert.equal(response.body.member.followingCount, 0);
+});
+
 test('members can edit and remove only their own text content', async () => {
   const otherAccountId = 'usr_community-test-other';
   const otherUserId = '00000000-0000-4000-8000-000000000011';
@@ -274,11 +331,22 @@ test('members can edit and remove only their own text content', async () => {
   const edited = await call(ownerApi, 'PATCH', {
     body: 'Edited post',
     category: 'market_discussion',
+    imageWidth: 1200,
+    imageHeight: 800,
   });
   assert.equal(edited.statusCode, 200, JSON.stringify(edited.body));
   assert.equal(edited.body.message.body, 'Edited post');
   assert.equal(edited.body.message.authorPictureUrl, 'https://example.com/chartpro.png');
   assert.equal(edited.body.message.commentCount, 2);
+  assert.equal(edited.body.message.payload.imageWidth, 1200);
+  assert.equal(edited.body.message.payload.imageHeight, 800);
+  const invalidImageDimensions = await call(ownerApi, 'PATCH', {
+    body: 'Invalid image dimensions',
+    imageWidth: 0,
+    imageHeight: 800,
+  });
+  assert.equal(invalidImageDimensions.statusCode, 400);
+  assert.equal(messages[0].body, 'Edited post');
 
   const otherApi = apiFor({ accountId: otherAccountId, supabaseUserId: otherUserId });
   const rejectedEdit = await call(otherApi, 'PATCH', { body: 'Unauthorized edit' });

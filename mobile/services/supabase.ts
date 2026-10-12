@@ -1,5 +1,5 @@
 import 'react-native-url-polyfill/auto';
-import { AppState } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import * as ExpoCrypto from 'expo-crypto';
 import * as SecureStore from 'expo-secure-store';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
@@ -91,10 +91,26 @@ function secureStoreKey(key: string) {
 }
 
 const secureStorage = {
-  getItem: (key: string) => SecureStore.getItemAsync(secureStoreKey(key)),
-  setItem: (key: string, value: string) => SecureStore.setItemAsync(secureStoreKey(key), value),
-  removeItem: (key: string) => SecureStore.deleteItemAsync(secureStoreKey(key)),
+  getItem: (key: string) => {
+    if (Platform.OS === 'web' && __DEV__) return Promise.resolve(webPreviewAuthStorage.get(key) || null);
+    return SecureStore.getItemAsync(secureStoreKey(key));
+  },
+  setItem: (key: string, value: string) => {
+    if (Platform.OS === 'web' && __DEV__) {
+      webPreviewAuthStorage.set(key, value);
+      return Promise.resolve();
+    }
+    return SecureStore.setItemAsync(secureStoreKey(key), value);
+  },
+  removeItem: (key: string) => {
+    if (Platform.OS === 'web' && __DEV__) {
+      webPreviewAuthStorage.delete(key);
+      return Promise.resolve();
+    }
+    return SecureStore.deleteItemAsync(secureStoreKey(key));
+  },
 };
+const webPreviewAuthStorage = new Map<string, string>();
 
 export function getSupabaseClient() {
   if (client) return client;

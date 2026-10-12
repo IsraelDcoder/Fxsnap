@@ -199,13 +199,13 @@ It still needs:
 
 Community uses the existing Supabase project for durable posts, reactions, comments, reports, realtime feed events, and chart-image storage. It remains disabled until its database schema is deployed and the server-side rollout flag is enabled:
 
-1. Apply [`mobile/server/community.sql`](./mobile/server/community.sql) to the intended Supabase project. This migration includes the Community tables, RLS restrictions, realtime setup, public image bucket, profile-photo field, and comment-count function.
+1. Apply [`mobile/server/community.sql`](./mobile/server/community.sql) to the intended Supabase project. This migration includes the Community tables, RLS restrictions, realtime setup, public image bucket, profile-photo field, persisted comment/member counts, and validated topic categories.
 2. Confirm the server uses its existing `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` configuration. Never expose the service-role key in the mobile app or an `EXPO_PUBLIC_*` variable.
 3. Set `FXSNAP_COMMUNITY_ENABLED=true` in the backend deployment environment only after the migration succeeds. With the public rollout, any authenticated Google-linked FXSnap account can join; the beta allowlist is not used.
 4. Set `FXSNAP_COMMUNITY_ADMIN_SUPABASE_USER_IDS` only for separately approved moderators. Do not grant administrator access to ordinary members.
 5. Test signup, cross-account feed visibility, ownership checks, reports, account deletion, and media upload with internal accounts before announcing the feature.
 
-The feature flag remains the server-side kill switch. Chart images are public Community content; Community reports and member-to-FXSnap support conversations remain server-restricted. The migration removes its previous static starter posts from the visible feed so production content comes from users. Support replies generate in-app notifications; push notifications are not part of this initial rollout.
+The feature flag remains the server-side kill switch. Chart images are public Community content; Community reports and member-to-FXSnap support conversations remain server-restricted. The migration removes its previous static starter posts from the visible feed so production content comes from users. The mobile client provides backend-backed post/member/topic search, member profiles, and in-app notifications; this does not add member-to-member private messaging. Support replies generate in-app notifications; push notifications are not part of this initial rollout.
 
 ---
 
