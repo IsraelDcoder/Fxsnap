@@ -59,11 +59,15 @@ export default function CommunityPostCard({
         </View>
       ) : null}
       <View style={styles.authorRow}>
-        <View style={[styles.avatar, { backgroundColor: post.isOfficial ? colors.buy : colors.surface }]}>
-          <Text style={[styles.avatarText, { color: post.isOfficial ? colors.primaryForeground : colors.text }]}>
-            {post.authorUsername.slice(0, 1).toUpperCase()}
-          </Text>
-        </View>
+        {post.authorPictureUrl ? (
+          <Image source={{ uri: post.authorPictureUrl }} style={styles.avatar} accessibilityLabel={`${post.authorUsername}'s profile picture`} />
+        ) : (
+          <View style={[styles.avatar, { backgroundColor: post.isOfficial ? colors.buy : colors.surface }]}>
+            <Text style={[styles.avatarText, { color: post.isOfficial ? colors.primaryForeground : colors.text }]}>
+              {post.authorUsername.slice(0, 1).toUpperCase()}
+            </Text>
+          </View>
+        )}
         <View style={styles.authorCopy}>
           <View style={styles.nameLine}>
             <Text style={[styles.username, { color: colors.text }]} numberOfLines={1}>@{post.authorUsername}</Text>
@@ -185,7 +189,9 @@ export default function CommunityPostCard({
         </TouchableOpacity>
         <TouchableOpacity onPress={onComment} style={styles.action} accessibilityRole="button" accessibilityLabel="Comment on post">
           <Feather name="message-circle" size={18} color={colors.textSecondary} />
-          <Text style={[styles.actionLabel, { color: colors.textSecondary }]}>Discuss</Text>
+          <Text style={[styles.actionLabel, { color: colors.textSecondary }]}>
+            Discuss{post.commentCount ? ` · ${post.commentCount}` : ''}
+          </Text>
         </TouchableOpacity>
         <TouchableOpacity onPress={onShare} style={styles.action} accessibilityRole="button" accessibilityLabel="Share post">
           <Feather name="send" size={17} color={colors.textSecondary} />

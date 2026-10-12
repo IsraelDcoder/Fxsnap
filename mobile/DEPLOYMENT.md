@@ -57,6 +57,18 @@ The mobile app targets `https://fxsnap.vercel.app` for all API requests. Deploy 
 
 Run `server/supabase-kv.sql` once in the Supabase SQL editor. This creates the shared key-value table and the per-device `fxsnap_push_devices` table used for Expo tokens and notification preferences. Set `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` in the Vercel Production environment. Push token registration and campaign dispatch require these Supabase credentials; Redis is not used for push notifications. Keep the service-role key server-side only.
 
+### Community production setup
+
+Community is disabled until its schema is present. Before enabling it:
+
+1. Apply `server/community.sql` to the production Supabase project. It creates the Community tables and comment-count function, enables RLS with client access restricted, configures realtime, provisions the public Community image bucket, and hides the old static starter posts.
+2. Confirm the Vercel Production environment already has `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`. The privileged key must remain server-only.
+3. Set `FXSNAP_COMMUNITY_ENABLED=true` in Vercel and redeploy. The public rollout permits all authenticated Google-linked FXSnap accounts to join; there is no beta allowlist.
+4. Set `FXSNAP_COMMUNITY_ADMIN_SUPABASE_USER_IDS` to the approved moderator Supabase user IDs only. Leave it empty if no additional moderators are approved.
+5. Check the authenticated feed, posts, reactions, comments/replies, report flow, account deletion, and image upload with at least two distinct accounts. Confirm the resulting Vercel deployment and Supabase project are the same ones targeted by the production app.
+
+Keep the flag false until the migration is applied and verified. The mobile app also needs a new Android build to expose profile photos, persisted comment counts, and own-post edit/delete actions; backend activation alone does not publish those client changes.
+
 ```bash
 cd mobile
 npm install -g vercel

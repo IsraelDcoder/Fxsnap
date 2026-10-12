@@ -30,8 +30,6 @@ function getServerConfig() {
     serviceKey,
     ready: Boolean(supabaseUrl && serviceKey && persistentStore.supabaseEnabled),
     enabled: process.env.FXSNAP_COMMUNITY_ENABLED === 'true',
-    betaUserIds: new Set((process.env.FXSNAP_COMMUNITY_BETA_SUPABASE_USER_IDS || '')
-      .split(',').map((id) => id.trim()).filter(Boolean)),
     adminUserIds: new Set((process.env.FXSNAP_COMMUNITY_ADMIN_SUPABASE_USER_IDS || '')
       .split(',').map((id) => id.trim()).filter(Boolean)),
   };
@@ -41,10 +39,11 @@ function isUsernameReserved(username, isAdmin) {
   return RESERVED_USERNAMES.has(username) && !(isAdmin && username === 'fxsnap_official');
 }
 
-function profileForClient(row, isAdmin) {
+function profileForClient(row, isAdmin, pictureUrl = null) {
   return {
     accountId: row.account_id,
     username: row.username,
+    pictureUrl: row.picture_url || pictureUrl,
     status: row.status,
     mutedUntil: row.muted_until,
     joinedAt: row.joined_at,
@@ -108,26 +107,22 @@ function createCommunityApi({ getActor, sendJson, readJsonBody, saveCommunityUse
       sendJson(res, 503, { error: 'Community is not enabled yet.' });
       return null;
     }
-    if (!config.ready || config.betaUserIds.size === 0) {
-      sendJson(res, 503, { error: 'Community internal rollout is not configured.' });
+    if (!config.ready) {
+      sendJson(res, 503, { error: 'Community storage is not configured. Apply the migration and configure server-side Supabase storage first.' });
       return null;
     }
     const actor = await getActor(req, res);
     if (!actor) return null;
-    const isAdmin = config.adminUserIds.has(actor.supabaseUserId);
-    if (!config.betaUserIds.has(actor.supabaseUserId) && !isAdmin) {
-      sendJson(res, 403, { error: 'Community is currently available to invited members only.' });
-      return null;
-    }
     if (typeof actor.supabaseUserId !== 'string' || !actor.supabaseUserId) {
       sendJson(res, 403, { error: 'Sign in with your linked Google account to join Community.' });
       return null;
     }
+    const isAdmin = config.adminUserIds.has(actor.supabaseUserId);
     const result = { ...actor, isAdmin };
     if (!joined) return result;
     const profiles = parseRows(await getRows(
       'fxsnap_community_profiles',
-      `account_id=eq.${encodeURIComponent(actor.accountId)}&select=account_id,supabase_user_id,username,status,muted_until,accepted_rules_version,joined_at&limit=1`,
+      `account_id=eq.${encodeURIComponent(actor.accountId)}&select=account_id,supabase_user_id,username,picture_url,status,muted_until,accepted_rules_version,joined_at&limit=1`,
     ));
     if (!profiles.length) {
       sendJson(res, 409, { error: 'Complete Community onboarding before continuing.', onboardingRequired: true });
@@ -138,6 +133,13 @@ function createCommunityApi({ getActor, sendJson, readJsonBody, saveCommunityUse
       return null;
     }
     result.profile = profiles[0];
+    if (actor.pictureUrl && actor.pictureUrl !== result.profile.picture_url) {
+      await patchRows('fxsnap_community_profiles', `account_id=eq.${encodeURIComponent(actor.accountId)}`, {
+        picture_url: actor.pictureUrl,
+        updated_at: new Date().toISOString(),
+      });
+      result.profile.picture_url = actor.pictureUrl;
+    }
     if (['suspended', 'banned'].includes(result.profile.status)) {
       sendJson(res, 403, { error: 'This Community account is currently unavailable.' });
       return null;
@@ -191,14 +193,33 @@ function createCommunityApi({ getActor, sendJson, readJsonBody, saveCommunityUse
   }
 
   async function serializeMessages(rows, actor) {
-    const ids = rows.map((row) => row.id);
-    const reactions = await queryReactions(ids);
-    const followed = parseRows(await getRows(
-      'fxsnap_community_follows',
-      `follower_account_id=eq.${encodeURIComponent(actor.accountId)}&select=followed_account_id&limit=500`,
-    ));
-    const followedIds = new Set(followed.map((row) => row.followed_account_id));
-    const replies = rows.map((row) => row.reply_to_id).filter(Boolean);
+      if (!rows.length) return [];
+      const ids = rows.map((row) => row.id);
+      const accountIds = [...new Set(rows.map((row) => row.account_id))];
+      const accountExpression = encodeURIComponent(accountIds.map((id) => `"${id}"`).join(','));
+      const [reactionRows, followedRows, profileRows, commentCountRows] = await Promise.all([
+        queryReactions(ids),
+        getRows(
+          'fxsnap_community_follows',
+          `follower_account_id=eq.${encodeURIComponent(actor.accountId)}&select=followed_account_id&limit=500`,
+        ),
+        getRows(
+          'fxsnap_community_profiles',
+          `account_id=in.(${accountExpression})&select=account_id,picture_url`,
+        ),
+        database('rpc/fxsnap_community_comment_counts', {
+          method: 'POST',
+          body: JSON.stringify({ p_message_ids: ids }),
+        }),
+      ]);
+      const reactions = parseRows(reactionRows);
+      const followed = parseRows(followedRows);
+      const profiles = parseRows(profileRows);
+      const commentCounts = parseRows(commentCountRows);
+      const followedIds = new Set(followed.map((row) => row.followed_account_id));
+      const picturesByAccount = new Map(profiles.map((row) => [row.account_id, row.picture_url]));
+      const commentCountByMessage = new Map(commentCounts.map((row) => [row.message_id, Number(row.comment_count)]));
+      const replies = rows.map((row) => row.reply_to_id).filter(Boolean);
     const replyRows = replies.length
       ? parseRows(await getRows(
         'fxsnap_community_messages',
@@ -211,6 +232,7 @@ function createCommunityApi({ getActor, sendJson, readJsonBody, saveCommunityUse
       clientMessageId: row.client_message_id,
       authorAccountId: row.account_id,
       authorUsername: row.author_username,
+      authorPictureUrl: picturesByAccount.get(row.account_id) || null,
       isOfficial: row.is_official === true,
       isFollowed: followedIds.has(row.account_id),
       kind: row.kind,
@@ -220,6 +242,7 @@ function createCommunityApi({ getActor, sendJson, readJsonBody, saveCommunityUse
       replyTo: row.reply_to_id ? (replyMap.get(row.reply_to_id) || null) : null,
       pinnedAt: row.pinned_at,
       createdAt: row.created_at,
+      commentCount: commentCountByMessage.get(row.id) || 0,
       removed: Boolean(row.removed_at),
       reactions: groupReactions(reactions.filter((reaction) => reaction.message_id === row.id), actor.accountId),
     }));
@@ -527,13 +550,20 @@ function createCommunityApi({ getActor, sendJson, readJsonBody, saveCommunityUse
       const profileQuery = (accountId) => `account_id=eq.${encodeURIComponent(accountId)}`;
 
       if (pathname === '/api/community/me' && req.method === 'GET') {
-        const rows = actor.profile ? [actor.profile] : parseRows(await getRows(
+        let rows = actor.profile ? [actor.profile] : parseRows(await getRows(
           'fxsnap_community_profiles',
-          `${profileQuery(actor.accountId)}&select=account_id,supabase_user_id,username,status,muted_until,accepted_rules_version,joined_at&limit=1`,
+          `${profileQuery(actor.accountId)}&select=account_id,supabase_user_id,username,picture_url,status,muted_until,accepted_rules_version,joined_at&limit=1`,
         ));
+        if (rows[0] && actor.pictureUrl && rows[0].picture_url !== actor.pictureUrl) {
+          const updated = parseRows(await patchRows('fxsnap_community_profiles', profileQuery(actor.accountId), {
+            picture_url: actor.pictureUrl,
+            updated_at: new Date().toISOString(),
+          }));
+          if (updated[0]) rows = updated;
+        }
         return sendJson(res, 200, {
           rulesVersion: RULES_VERSION,
-          profile: rows[0] ? profileForClient(rows[0], actor.isAdmin) : null,
+          profile: rows[0] ? profileForClient(rows[0], actor.isAdmin, actor.pictureUrl) : null,
         });
       }
 
@@ -554,7 +584,7 @@ function createCommunityApi({ getActor, sendJson, readJsonBody, saveCommunityUse
       if (pathname === '/api/community/join' && req.method === 'POST') {
         const existingProfiles = parseRows(await getRows(
           'fxsnap_community_profiles',
-          `${profileQuery(actor.accountId)}&select=account_id,supabase_user_id,username,status,muted_until,accepted_rules_version,joined_at&limit=1`,
+          `${profileQuery(actor.accountId)}&select=account_id,supabase_user_id,username,picture_url,status,muted_until,accepted_rules_version,joined_at&limit=1`,
         ));
         if (existingProfiles.length) {
           if (existingProfiles[0].supabase_user_id !== actor.supabaseUserId) {
@@ -575,6 +605,7 @@ function createCommunityApi({ getActor, sendJson, readJsonBody, saveCommunityUse
             account_id: actor.accountId,
             supabase_user_id: actor.supabaseUserId,
             username,
+            picture_url: actor.pictureUrl || null,
             accepted_rules_version: RULES_VERSION,
           }));
           if (!rows.length) throw new CommunityError('The Community profile could not be confirmed.', 502);
@@ -657,6 +688,69 @@ function createCommunityApi({ getActor, sendJson, readJsonBody, saveCommunityUse
         if (blocked.length) return sendJson(res, 404, { error: 'Community post not found.' });
         const [serialized] = await serializeMessages([message], actor);
         return sendJson(res, 200, { post: serialized });
+      }
+      if (messageMatch && req.method === 'PATCH') {
+        const message = await resolveMessage(req, res, messageMatch[1]);
+        if (!message) return true;
+        if (message.account_id !== actor.accountId) {
+          return sendJson(res, 403, { error: 'You can only edit your own Community posts.' });
+        }
+        if (message.kind !== 'text') {
+          return sendJson(res, 400, { error: 'Only text posts and comments can be edited.' });
+        }
+        const input = z.object({
+          body: z.string().trim().max(2000),
+          category: z.enum(COMMUNITY_CATEGORIES).optional(),
+          imageUrl: z.string().url().max(2048).nullable().optional(),
+        }).strict().safeParse(await readJsonBody(req));
+        if (!input.success) return sendJson(res, 400, { error: 'Invalid Community post update.' });
+        const imageUrl = input.data.imageUrl === undefined
+          ? message.payload?.imageUrl || null
+          : input.data.imageUrl;
+        if (!input.data.body && !imageUrl) {
+          return sendJson(res, 400, { error: 'A post must contain text or an image.' });
+        }
+        if (imageUrl) {
+          const config = getServerConfig();
+          const prefix = `${config.supabaseUrl}/storage/v1/object/public/fxsnap-community-media/${actor.accountId}/`;
+          if (!imageUrl.startsWith(prefix)) {
+            return sendJson(res, 400, { error: 'Upload chart images through FXSnap Community before sharing.' });
+          }
+        }
+        const category = message.reply_to_id
+          ? null
+          : input.data.category || message.category || 'market_discussion';
+        if (category === 'events' && !actor.isAdmin) {
+          return sendJson(res, 403, { error: 'Only FXSnap and approved hosts can publish Events & Announcements.' });
+        }
+        await rateLimit(actor.accountId, 'message_updates', 20, 60);
+        const rows = parseRows(await patchRows(
+          'fxsnap_community_messages',
+          `id=eq.${encodeURIComponent(message.id)}&account_id=eq.${encodeURIComponent(actor.accountId)}&removed_at=is.null`,
+          {
+            body: input.data.body,
+            category,
+            payload: { ...(message.payload || {}), imageUrl },
+          },
+        ));
+        if (!rows.length) return sendJson(res, 404, { error: 'Community message not found.' });
+        const [post] = await serializeMessages(rows, actor);
+        return sendJson(res, 200, { message: post });
+      }
+      if (messageMatch && req.method === 'DELETE') {
+        const message = await resolveMessage(req, res, messageMatch[1]);
+        if (!message) return true;
+        if (message.account_id !== actor.accountId) {
+          return sendJson(res, 403, { error: 'You can only delete your own Community posts.' });
+        }
+        await rateLimit(actor.accountId, 'message_deletions', 20, 60);
+        const rows = parseRows(await patchRows(
+          'fxsnap_community_messages',
+          `id=eq.${encodeURIComponent(message.id)}&account_id=eq.${encodeURIComponent(actor.accountId)}&removed_at=is.null`,
+          { removed_at: new Date().toISOString() },
+        ));
+        if (!rows.length) return sendJson(res, 404, { error: 'Community message not found.' });
+        return sendJson(res, 200, { removed: true });
       }
 
       if (pathname === '/api/community/follows' && req.method === 'GET') {

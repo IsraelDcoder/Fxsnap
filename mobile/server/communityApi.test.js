@@ -4,7 +4,6 @@ const assert = require('node:assert/strict');
 process.env.SUPABASE_URL = 'https://community-test.supabase.co';
 process.env.SUPABASE_SERVICE_ROLE_KEY = 'community-test-service-role-key';
 process.env.FXSNAP_COMMUNITY_ENABLED = 'true';
-process.env.FXSNAP_COMMUNITY_BETA_SUPABASE_USER_IDS = '00000000-0000-4000-8000-000000000010';
 process.env.FXSNAP_COMMUNITY_ADMIN_SUPABASE_USER_IDS = '';
 
 const { createCommunityApi } = require('./communityApi');
@@ -18,6 +17,7 @@ function makeResponse(status, body) {
     ok: status >= 200 && status < 300,
     status,
     text: async () => body === null ? '' : JSON.stringify(body),
+    json: async () => body,
   };
 }
 
@@ -134,6 +134,166 @@ test('Community rollout gate rejects requests before identity lookup', async () 
   }
 });
 
+test('public Community allows linked accounts without a beta allowlist', async () => {
+  const previousEnabled = process.env.FXSNAP_COMMUNITY_ENABLED;
+  const previousBetaIds = process.env.FXSNAP_COMMUNITY_BETA_SUPABASE_USER_IDS;
+  process.env.FXSNAP_COMMUNITY_ENABLED = 'true';
+  delete process.env.FXSNAP_COMMUNITY_BETA_SUPABASE_USER_IDS;
+  const harness = makeHarness();
+  try {
+    const response = await harness.call('/api/community/me');
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.body.profile, null);
+  } finally {
+    process.env.FXSNAP_COMMUNITY_ENABLED = previousEnabled;
+    if (previousBetaIds === undefined) delete process.env.FXSNAP_COMMUNITY_BETA_SUPABASE_USER_IDS;
+    else process.env.FXSNAP_COMMUNITY_BETA_SUPABASE_USER_IDS = previousBetaIds;
+  }
+});
+
+test('unauthenticated accounts cannot make protected Community requests', async () => {
+  let storageRequests = 0;
+  global.fetch = async () => {
+    storageRequests += 1;
+    return makeResponse(200, []);
+  };
+  const api = createCommunityApi({
+    getActor: async (_request, response) => {
+      response.statusCode = 401;
+      response.body = { error: 'Sign in with Google.' };
+      return null;
+    },
+    sendJson: (response, status, body) => {
+      response.statusCode = status;
+      response.body = body;
+    },
+    readJsonBody: async (request) => request.body || {},
+  });
+  const response = {};
+  await api(
+    { method: 'POST', body: { kind: 'text', body: 'Not signed in.' } },
+    response,
+    new URL('/api/community/messages', 'https://fxsnap.test'),
+  );
+  assert.equal(response.statusCode, 401);
+  assert.equal(storageRequests, 0);
+});
+
+test('members can edit and remove only their own text content', async () => {
+  const otherAccountId = 'usr_community-test-other';
+  const otherUserId = '00000000-0000-4000-8000-000000000011';
+  const messageId = '00000000-0000-4000-8000-000000000041';
+  const profiles = [{
+    account_id: ACCOUNT_ID,
+    supabase_user_id: MEMBER_ID,
+    username: 'chartpro',
+    picture_url: 'https://example.com/chartpro.png',
+    accepted_rules_version: RULES_VERSION,
+    status: 'active',
+    muted_until: null,
+    joined_at: new Date().toISOString(),
+  }, {
+    account_id: otherAccountId,
+    supabase_user_id: otherUserId,
+    username: 'marketmentor',
+    picture_url: null,
+    accepted_rules_version: RULES_VERSION,
+    status: 'active',
+    muted_until: null,
+    joined_at: new Date().toISOString(),
+  }];
+  const messages = [{
+    id: messageId,
+    account_id: ACCOUNT_ID,
+    author_username: 'chartpro',
+    is_official: false,
+    kind: 'text',
+    category: 'market_discussion',
+    body: 'Original post',
+    payload: {},
+    reply_to_id: null,
+    pinned_at: null,
+    removed_at: null,
+    created_at: new Date().toISOString(),
+    client_message_id: '00000000-0000-4000-8000-000000000042',
+  }];
+  global.fetch = async (url, options = {}) => {
+    const parsed = new URL(String(url));
+    const table = parsed.pathname.split('/').pop();
+    const method = options.method || 'GET';
+    if (table === 'fxsnap_community_profiles' && method === 'GET') {
+      const accountFilter = parsed.searchParams.get('account_id') || '';
+      const exact = accountFilter.startsWith('eq.') ? accountFilter.slice(3) : null;
+      const inFilter = accountFilter.startsWith('in.') ? accountFilter.slice(3) : null;
+      const accountIds = inFilter ? [...inFilter.matchAll(/"([^"]+)"/g)].map((match) => match[1]) : null;
+      return makeResponse(200, profiles.filter((profile) => (
+        (!exact || profile.account_id === exact)
+        && (!accountIds || accountIds.includes(profile.account_id))
+      )));
+    }
+    if (table === 'fxsnap_community_messages' && method === 'GET') {
+      const id = parsed.searchParams.get('id')?.replace(/^eq\./, '');
+      return makeResponse(200, messages.filter((message) => message.id === id && !message.removed_at));
+    }
+    if (table === 'fxsnap_community_messages' && method === 'PATCH') {
+      const id = parsed.searchParams.get('id')?.replace(/^eq\./, '');
+      const accountId = parsed.searchParams.get('account_id')?.replace(/^eq\./, '');
+      const message = messages.find((item) => item.id === id && item.account_id === accountId && !item.removed_at);
+      if (!message) return makeResponse(200, []);
+      Object.assign(message, JSON.parse(options.body));
+      return makeResponse(200, [message]);
+    }
+    if (table === 'fxsnap_community_comment_counts') {
+      return makeResponse(200, [{ message_id: messageId, comment_count: 2 }]);
+    }
+    return makeResponse(200, []);
+  };
+
+  function apiFor(actor) {
+    return createCommunityApi({
+      getActor: async () => actor,
+      sendJson: (response, status, body) => {
+        response.statusCode = status;
+        response.body = body;
+      },
+      readJsonBody: async (request) => request.body || {},
+    });
+  }
+
+  async function call(api, method, body) {
+    const response = {};
+    await api(
+      { method, body },
+      response,
+      new URL(`/api/community/messages/${messageId}`, 'https://fxsnap.test'),
+    );
+    return response;
+  }
+
+  const ownerApi = apiFor({ accountId: ACCOUNT_ID, supabaseUserId: MEMBER_ID, pictureUrl: null });
+  const edited = await call(ownerApi, 'PATCH', {
+    body: 'Edited post',
+    category: 'market_discussion',
+  });
+  assert.equal(edited.statusCode, 200, JSON.stringify(edited.body));
+  assert.equal(edited.body.message.body, 'Edited post');
+  assert.equal(edited.body.message.authorPictureUrl, 'https://example.com/chartpro.png');
+  assert.equal(edited.body.message.commentCount, 2);
+
+  const otherApi = apiFor({ accountId: otherAccountId, supabaseUserId: otherUserId });
+  const rejectedEdit = await call(otherApi, 'PATCH', { body: 'Unauthorized edit' });
+  const rejectedDelete = await call(otherApi, 'DELETE');
+  assert.equal(rejectedEdit.statusCode, 403);
+  assert.equal(rejectedDelete.statusCode, 403);
+  assert.equal(messages[0].body, 'Edited post');
+  assert.equal(messages[0].removed_at, null);
+
+  const deleted = await call(ownerApi, 'DELETE');
+  assert.equal(deleted.statusCode, 200);
+  assert.equal(deleted.body.removed, true);
+  assert.ok(messages[0].removed_at);
+});
+
 test('reserved official username cannot be claimed by a member', async () => {
   const harness = makeHarness();
   const response = await harness.call('/api/community/username?value=fxsnap_official');
@@ -239,7 +399,7 @@ test('community username updates are validated, unique, and synchronized to the 
   assert.equal(harness.profiles[0].username, 'new_trader');
 });
 
-test('a non-admin beta member cannot access admin reports', async () => {
+test('a non-admin member cannot access admin reports', async () => {
   const harness = makeHarness();
   harness.profiles.push({
     account_id: ACCOUNT_ID,
@@ -287,37 +447,31 @@ test('a member can load only their own private support history', async () => {
   assert.equal(result.body.messages[0].body, 'Private test message.');
 });
 
-test('a signed-in beta member cannot access another member’s private support thread', async () => {
+test('a signed-in member cannot access another member’s private support thread', async () => {
   const otherAccountId = 'usr_another-member';
   const otherUserId = '00000000-0000-4000-8000-000000000011';
-  const previous = process.env.FXSNAP_COMMUNITY_BETA_SUPABASE_USER_IDS;
-  process.env.FXSNAP_COMMUNITY_BETA_SUPABASE_USER_IDS = `${previous},${otherUserId}`;
-  try {
-    const harness = makeHarness({
-      actor: { accountId: otherAccountId, supabaseUserId: otherUserId },
-      initialProfiles: [{
-        account_id: otherAccountId,
-        supabase_user_id: otherUserId,
-        username: 'anothermember',
-        accepted_rules_version: RULES_VERSION,
-        status: 'active',
-        muted_until: null,
-        joined_at: new Date().toISOString(),
-      }],
-      initialConversations: [{
-        id: '00000000-0000-4000-8000-000000000032',
-        account_id: ACCOUNT_ID,
-        status: 'open',
-      }],
-    });
-    const result = await harness.call('/api/community/support');
-    assert.equal(result.statusCode, 200);
-    assert.equal(result.body.conversation, null);
-    assert.deepEqual(result.body.messages, []);
-    assert.equal(harness.requests.some((request) => request.table === 'fxsnap_support_messages'), false);
-  } finally {
-    process.env.FXSNAP_COMMUNITY_BETA_SUPABASE_USER_IDS = previous;
-  }
+  const harness = makeHarness({
+    actor: { accountId: otherAccountId, supabaseUserId: otherUserId },
+    initialProfiles: [{
+      account_id: otherAccountId,
+      supabase_user_id: otherUserId,
+      username: 'anothermember',
+      accepted_rules_version: RULES_VERSION,
+      status: 'active',
+      muted_until: null,
+      joined_at: new Date().toISOString(),
+    }],
+    initialConversations: [{
+      id: '00000000-0000-4000-8000-000000000032',
+      account_id: ACCOUNT_ID,
+      status: 'open',
+    }],
+  });
+  const result = await harness.call('/api/community/support');
+  assert.equal(result.statusCode, 200);
+  assert.equal(result.body.conversation, null);
+  assert.deepEqual(result.body.messages, []);
+  assert.equal(harness.requests.some((request) => request.table === 'fxsnap_support_messages'), false);
 });
 
 test('admin may claim the reserved official username when no account owns it', async () => {

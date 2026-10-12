@@ -5,6 +5,7 @@ create table if not exists public.fxsnap_community_profiles (
   account_id text primary key,
   supabase_user_id uuid not null unique,
   username text not null,
+  picture_url text,
   accepted_rules_version text not null,
   status text not null default 'active' check (status in ('active', 'muted', 'suspended', 'banned')),
   muted_until timestamptz,
@@ -12,6 +13,8 @@ create table if not exists public.fxsnap_community_profiles (
   updated_at timestamptz not null default now(),
   constraint fxsnap_community_username_format check (username ~ '^[a-z0-9_]{3,24}$')
 );
+alter table public.fxsnap_community_profiles
+  add column if not exists picture_url text;
 create unique index if not exists fxsnap_community_username_lower_unique
   on public.fxsnap_community_profiles (lower(username));
 
@@ -39,6 +42,23 @@ create index if not exists fxsnap_community_messages_created_idx
   on public.fxsnap_community_messages (created_at desc, id desc);
 create index if not exists fxsnap_community_messages_author_idx
   on public.fxsnap_community_messages (account_id, created_at desc);
+
+create or replace function public.fxsnap_community_comment_counts(p_message_ids uuid[])
+returns table(message_id uuid, comment_count bigint)
+language sql
+security definer
+set search_path = public
+as $$
+  select requested.id, count(distinct comment.id) + count(distinct reply.id)
+  from unnest(p_message_ids) as requested(id)
+  left join public.fxsnap_community_messages comment
+    on comment.reply_to_id = requested.id and comment.removed_at is null
+  left join public.fxsnap_community_messages reply
+    on reply.reply_to_id = comment.id and reply.removed_at is null
+  group by requested.id;
+$$;
+revoke all on function public.fxsnap_community_comment_counts(uuid[]) from public, anon, authenticated;
+grant execute on function public.fxsnap_community_comment_counts(uuid[]) to service_role;
 
 create table if not exists public.fxsnap_community_reactions (
   message_id uuid not null references public.fxsnap_community_messages(id) on delete cascade,
@@ -174,6 +194,11 @@ begin
     elsif new.pinned_at is distinct from old.pinned_at then
       insert into public.fxsnap_community_events (event_type, object_id)
         values ('message_pinned', new.id);
+    elsif new.body is distinct from old.body
+      or new.payload is distinct from old.payload
+      or new.category is distinct from old.category then
+      insert into public.fxsnap_community_events (event_type, object_id)
+        values ('message', new.id);
     end if;
   elsif tg_table_name = 'fxsnap_community_reactions' and tg_op = 'INSERT' then
     insert into public.fxsnap_community_events (event_type, object_id)
@@ -209,7 +234,7 @@ revoke all on function public.fxsnap_community_publish_event() from public, anon
 
 drop trigger if exists fxsnap_community_message_event on public.fxsnap_community_messages;
 create trigger fxsnap_community_message_event
-  after insert or update of removed_at, pinned_at on public.fxsnap_community_messages
+  after insert or update of body, payload, category, removed_at, pinned_at on public.fxsnap_community_messages
   for each row execute function public.fxsnap_community_publish_event();
 drop trigger if exists fxsnap_community_reaction_event on public.fxsnap_community_reactions;
 create trigger fxsnap_community_reaction_event
@@ -332,16 +357,11 @@ on conflict (id) do update
       file_size_limit = excluded.file_size_limit,
       allowed_mime_types = excluded.allowed_mime_types;
 
-insert into public.fxsnap_community_messages (
-  id, account_id, author_username, is_official, kind, category, body, client_message_id, created_at
-) values
-  ('00000000-0000-4000-8000-000000000011', 'fxsnap_official_system', 'fxsnap_official', true, 'text', 'learning',
-   'Welcome to FXSnap Community. Share what you are learning, explain your chart ideas, and ask thoughtful questions. Trading involves risk; posts are educational discussion, not financial advice.',
-   '00000000-0000-4000-8000-000000000021', now() - interval '3 minutes'),
-  ('00000000-0000-4000-8000-000000000012', 'fxsnap_official_system', 'fxsnap_official', true, 'text', 'questions',
-   'Starter discussion: What is one risk-management concept you wish you had understood earlier in your trading journey?',
-   '00000000-0000-4000-8000-000000000022', now() - interval '2 minutes'),
-  ('00000000-0000-4000-8000-000000000013', 'fxsnap_official_system', 'fxsnap_official', true, 'text', 'chart_analysis',
-   'When sharing a chart, include the instrument and timeframe, then describe the evidence and what would invalidate your idea. Invite discussion rather than presenting a setup as a guarantee.',
-   '00000000-0000-4000-8000-000000000023', now() - interval '1 minute')
-on conflict (id) do nothing;
+update public.fxsnap_community_messages
+  set removed_at = coalesce(removed_at, now())
+  where account_id = 'fxsnap_official_system'
+    and (
+      (id = '00000000-0000-4000-8000-000000000011' and client_message_id = '00000000-0000-4000-8000-000000000021')
+      or (id = '00000000-0000-4000-8000-000000000012' and client_message_id = '00000000-0000-4000-8000-000000000022')
+      or (id = '00000000-0000-4000-8000-000000000013' and client_message_id = '00000000-0000-4000-8000-000000000023')
+    );

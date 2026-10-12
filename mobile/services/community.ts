@@ -33,6 +33,7 @@ export interface CommunityMessage {
   id: string;
   clientMessageId: string;
   authorUsername: string;
+  authorPictureUrl: string | null;
   isOfficial: boolean;
   isFollowed: boolean;
   kind: 'text' | 'signal' | 'analysis' | 'announcement';
@@ -48,6 +49,7 @@ export interface CommunityMessage {
   } | null;
   pinnedAt: string | null;
   createdAt: string;
+  commentCount: number;
   removed: boolean;
   reactions: Array<{ reaction: CommunityReaction; count: number; reacted: boolean }>;
 }
@@ -168,6 +170,23 @@ export async function publishCommunityMessage(input: {
     ...input,
     clientMessageId: input.clientMessageId || newId(),
   }));
+}
+
+export async function updateCommunityMessage(
+  messageId: string,
+  input: { body: string; category: CommunityCategory; imageUrl?: string | null },
+) {
+  return request<{ message: CommunityMessage }>(
+    `/api/community/messages/${encodeURIComponent(messageId)}`,
+    { method: 'PATCH', body: JSON.stringify(input) },
+  );
+}
+
+export async function deleteCommunityMessage(messageId: string) {
+  return request<{ removed: boolean }>(
+    `/api/community/messages/${encodeURIComponent(messageId)}`,
+    { method: 'DELETE' },
+  );
 }
 
 export async function getCommunityComments(postId: string, before?: string | null) {

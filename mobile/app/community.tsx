@@ -31,6 +31,7 @@ import {
   blockCommunityMember,
   checkCommunityUsername,
   createCommunityClientId,
+  deleteCommunityMessage,
   followCommunityMember,
   getCommunityComments,
   getCommunityFollows,
@@ -47,6 +48,7 @@ import {
   shareCommunityPost,
   subscribeToCommunityChanges,
   toggleCommunityReaction,
+  updateCommunityMessage,
   unblockCommunityMember,
   unfollowCommunityMember,
   uploadCommunityImage,
@@ -138,6 +140,7 @@ export default function CommunityScreen() {
   const [joining, setJoining] = useState(false);
   const [signingIn, setSigningIn] = useState(false);
   const [composerVisible, setComposerVisible] = useState(false);
+  const [editingPost, setEditingPost] = useState<CommunityMessage | null>(null);
   const [composerKind, setComposerKind] = useState<ComposerKind>('text');
   const [composerCategory, setComposerCategory] = useState<CommunityCategory>('market_discussion');
   const [composerBody, setComposerBody] = useState('');
@@ -312,6 +315,7 @@ export default function CommunityScreen() {
   }, [currentAnalysis, isSubscribed, savedAnalyses, shareAnalysisId]);
 
   const openComposer = useCallback((kind: ComposerKind = 'text', initialCategory?: CommunityCategory) => {
+    setEditingPost(null);
     setComposerKind(kind);
     setComposerCategory(initialCategory || (kind === 'analysis' ? 'chart_analysis' : 'market_discussion'));
     setComposerBody('');
@@ -327,6 +331,18 @@ export default function CommunityScreen() {
     setSignalTimeframe('');
     setComposerVisible(true);
   }, []);
+
+  const editPost = (post: CommunityMessage) => {
+    setEditingPost(post);
+    setComposerKind('text');
+    setComposerCategory(post.category || 'market_discussion');
+    setComposerBody(post.body);
+    setComposerImage(null);
+    setComposerImageUrl(typeof post.payload.imageUrl === 'string' ? post.payload.imageUrl : null);
+    setComposerError('');
+    publishId.current = null;
+    setComposerVisible(true);
+  };
 
   useEffect(() => {
     if (stage !== 'feed' || !shareAnalysisId || processedAnalysisId.current === shareAnalysisId) return;
@@ -421,6 +437,7 @@ export default function CommunityScreen() {
         setComposerError('Choose an image under 3 MB.');
         return;
       }
+      setComposerImageUrl(null);
       setComposerImage(asset);
     } catch (error) {
       setComposerError(apiErrorMessage(error));
@@ -430,7 +447,7 @@ export default function CommunityScreen() {
   const submitPost = async () => {
     if (publishing || uploadingImage) return;
     const body = composerBody.trim();
-    if (composerKind === 'text' && !body && !composerImage) {
+    if (composerKind === 'text' && !body && !composerImage && !composerImageUrl) {
       setComposerError('Add some trading discussion or attach a chart.');
       return;
     }
@@ -469,15 +486,25 @@ export default function CommunityScreen() {
         : composerKind === 'analysis'
           ? { ...pendingAnalysis, imageUrl }
           : { imageUrl };
-      const { message } = await publishCommunityMessage({
-        kind: composerKind,
-        category: composerCategory,
-        body,
-        payload,
-        clientMessageId: publishId.current || (publishId.current = createCommunityClientId()),
-      });
-      setPosts((previous) => [message, ...previous.filter((post) => post.id !== message.id)]);
+      const message = editingPost
+        ? (await updateCommunityMessage(editingPost.id, {
+          body,
+          category: composerCategory,
+          imageUrl,
+        })).message
+        : (await publishCommunityMessage({
+          kind: composerKind,
+          category: composerCategory,
+          body,
+          payload,
+          clientMessageId: publishId.current || (publishId.current = createCommunityClientId()),
+        })).message;
+      setPosts((previous) => editingPost
+        ? previous.map((post) => post.id === message.id ? message : post)
+        : [message, ...previous.filter((post) => post.id !== message.id)]);
+      setCommentPost((previous) => previous?.id === message.id ? message : previous);
       setComposerVisible(false);
+      setEditingPost(null);
       setPendingAnalysis(null);
       setComposerBody('');
       setComposerImage(null);
@@ -545,8 +572,11 @@ export default function CommunityScreen() {
       setCommentDraft('');
       commentId.current = null;
       setPosts((previous) => previous.map((post) => post.id === commentPost.id
-        ? { ...post, payload: { ...post.payload, commentCount: Number(post.payload.commentCount || 0) + 1 } }
+        ? { ...post, commentCount: post.commentCount + 1 }
         : post));
+      setCommentPost((previous) => previous?.id === commentPost.id
+        ? { ...previous, commentCount: previous.commentCount + 1 }
+        : previous);
     } catch (error) {
       Alert.alert('Could not send reply', apiErrorMessage(error));
     } finally {
@@ -610,6 +640,44 @@ export default function CommunityScreen() {
   const showPostActions = (post: CommunityMessage) => {
     const ownPost = post.authorUsername === profile?.username;
     Alert.alert(`@${post.authorUsername}`, undefined, [
+      ownPost && !post.replyTo && post.kind === 'text' ? {
+        text: 'Edit post',
+        onPress: () => editPost(post),
+      } : null,
+      ownPost ? {
+        text: post.replyTo ? 'Delete comment' : 'Delete post',
+        style: 'destructive' as const,
+        onPress: () => Alert.alert(
+          post.replyTo ? 'Delete this comment?' : 'Delete this post?',
+          'This cannot be undone.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'Delete',
+              style: 'destructive',
+              onPress: () => {
+                void deleteCommunityMessage(post.id).then(() => {
+                  if (post.replyTo) {
+                    setComments((previous) => previous.filter((item) => item.id !== post.id));
+                    setThreadReplies((previous) => previous.filter((item) => item.id !== post.id && item.replyTo?.id !== post.id));
+                    if (commentPost) {
+                      setPosts((previous) => previous.map((item) => item.id === commentPost.id
+                        ? { ...item, commentCount: Math.max(0, item.commentCount - 1) }
+                        : item));
+                      setCommentPost((previous) => previous?.id === commentPost.id
+                        ? { ...previous, commentCount: Math.max(0, previous.commentCount - 1) }
+                        : previous);
+                    }
+                  } else {
+                    setPosts((previous) => previous.filter((item) => item.id !== post.id));
+                    if (commentPost?.id === post.id) setCommentPost(null);
+                  }
+                }).catch((error) => Alert.alert('Could not delete content', apiErrorMessage(error)));
+              },
+            },
+          ],
+        ),
+      } : null,
       {
         text: 'Copy post',
         onPress: () => {
@@ -1000,9 +1068,9 @@ export default function CommunityScreen() {
         <KeyboardAvoidingView style={[styles.modalScreen, { backgroundColor: colors.background, paddingTop: insets.top }]} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <View style={[styles.modalHeader, { borderBottomColor: colors.cardBorder }]}>
             <TouchableOpacity onPress={() => setComposerVisible(false)} style={styles.headerIcon} accessibilityLabel="Close composer"><Feather name="x" size={21} color={colors.text} /></TouchableOpacity>
-            <Text style={[styles.modalTitle, { color: colors.text }]}>{composerKind === 'signal' ? 'Share a trading signal' : composerKind === 'analysis' ? 'Share FXSnap analysis' : 'Create a post'}</Text>
+            <Text style={[styles.modalTitle, { color: colors.text }]}>{editingPost ? 'Edit post' : composerKind === 'signal' ? 'Share a trading signal' : composerKind === 'analysis' ? 'Share FXSnap analysis' : 'Create a post'}</Text>
             <TouchableOpacity onPress={() => void submitPost()} disabled={publishing} style={[styles.publishButton, { backgroundColor: colors.buy }]}>
-              {publishing ? <ActivityIndicator size="small" color={colors.primaryForeground} /> : <Text style={[styles.publishText, { color: colors.primaryForeground }]}>Post</Text>}
+              {publishing ? <ActivityIndicator size="small" color={colors.primaryForeground} /> : <Text style={[styles.publishText, { color: colors.primaryForeground }]}>{editingPost ? 'Save' : 'Post'}</Text>}
             </TouchableOpacity>
           </View>
           <ScrollView contentContainerStyle={styles.composerContent} keyboardShouldPersistTaps="handled">
@@ -1052,9 +1120,9 @@ export default function CommunityScreen() {
               textAlignVertical="top"
               style={[styles.composerInput, { color: colors.text, backgroundColor: colors.card, borderColor: colors.cardBorder }]}
             />
-            {composerImage ? (
+            {composerImage || composerImageUrl ? (
               <View style={styles.attachmentPreview}>
-                <Image source={{ uri: composerImage.uri }} style={styles.previewImage} />
+                <Image source={{ uri: composerImage?.uri || composerImageUrl || undefined }} style={styles.previewImage} />
                 <TouchableOpacity onPress={() => { setComposerImage(null); setComposerImageUrl(null); }} style={[styles.removeAttachment, { backgroundColor: colors.card }]}>
                   <Feather name="x" size={16} color={colors.text} />
                 </TouchableOpacity>
@@ -1234,9 +1302,13 @@ function CommentCard({
   return (
     <View style={[styles.commentCard, { marginLeft: nested ? 25 : 0, backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
       <View style={styles.commentHeader}>
-        <View style={[styles.commentAvatar, { backgroundColor: comment.isOfficial ? colors.buy : colors.surface }]}>
-          <Text style={[styles.composeAvatarText, { color: comment.isOfficial ? colors.primaryForeground : colors.text }]}>{comment.authorUsername.slice(0, 1).toUpperCase()}</Text>
-        </View>
+        {comment.authorPictureUrl ? (
+          <Image source={{ uri: comment.authorPictureUrl }} style={styles.commentAvatar} accessibilityLabel={`${comment.authorUsername}'s profile picture`} />
+        ) : (
+          <View style={[styles.commentAvatar, { backgroundColor: comment.isOfficial ? colors.buy : colors.surface }]}>
+            <Text style={[styles.composeAvatarText, { color: comment.isOfficial ? colors.primaryForeground : colors.text }]}>{comment.authorUsername.slice(0, 1).toUpperCase()}</Text>
+          </View>
+        )}
         <View style={{ flex: 1 }}>
           <Text style={[styles.username, { color: colors.text }]}>@{comment.authorUsername}{comment.isOfficial ? ' · FXSnap' : ''}</Text>
           <Text style={[styles.metaText, { color: colors.textMuted }]}>{ageLabel(comment.createdAt)}</Text>

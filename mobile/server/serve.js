@@ -2431,6 +2431,11 @@ async function getCommunityActor(req, res) {
   return {
     accountId: session.sub,
     supabaseUserId: account.supabaseUserId || null,
+    pictureUrl: typeof account.pictureUrl === 'string'
+      && account.pictureUrl.startsWith('https://')
+      && account.pictureUrl.length <= 2048
+      ? account.pictureUrl
+      : null,
   };
 }
 

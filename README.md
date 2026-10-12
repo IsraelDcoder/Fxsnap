@@ -195,16 +195,17 @@ It still needs:
 - Compliance polish
 - Final product validation before public launch
 
-## Community beta setup
+## Community production setup
 
-Community is disabled until its database schema and a server-side internal allowlist are configured. Before enabling an internal beta:
+Community uses the existing Supabase project for durable posts, reactions, comments, reports, realtime feed events, and chart-image storage. It remains disabled until its database schema is deployed and the server-side rollout flag is enabled:
 
-1. Apply [`mobile/server/community.sql`](./mobile/server/community.sql) to the intended Supabase project.
+1. Apply [`mobile/server/community.sql`](./mobile/server/community.sql) to the intended Supabase project. This migration includes the Community tables, RLS restrictions, realtime setup, public image bucket, profile-photo field, and comment-count function.
 2. Confirm the server uses its existing `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` configuration. Never expose the service-role key in the mobile app or an `EXPO_PUBLIC_*` variable.
-3. Set `FXSNAP_COMMUNITY_ENABLED=true`, `FXSNAP_COMMUNITY_BETA_SUPABASE_USER_IDS` to the invited Supabase user IDs, and `FXSNAP_COMMUNITY_ADMIN_SUPABASE_USER_IDS` to the separately approved administrator IDs.
-4. Test signup, feed permissions, reports, private support access, account deletion, and media upload with internal accounts before inviting a larger group.
+3. Set `FXSNAP_COMMUNITY_ENABLED=true` in the backend deployment environment only after the migration succeeds. With the public rollout, any authenticated Google-linked FXSnap account can join; the beta allowlist is not used.
+4. Set `FXSNAP_COMMUNITY_ADMIN_SUPABASE_USER_IDS` only for separately approved moderators. Do not grant administrator access to ordinary members.
+5. Test signup, cross-account feed visibility, ownership checks, reports, account deletion, and media upload with internal accounts before announcing the feature.
 
-The current Community backend uses the existing Supabase project for durable data, realtime feed events, and chart-image storage. Review project storage, database, and realtime usage against the Supabase plan before expanding the beta. Chart images are public community content; private support messages and report details remain server-restricted. Support replies generate in-app notifications; push notifications are not part of this initial rollout.
+The feature flag remains the server-side kill switch. Chart images are public Community content; Community reports and member-to-FXSnap support conversations remain server-restricted. The migration removes its previous static starter posts from the visible feed so production content comes from users. Support replies generate in-app notifications; push notifications are not part of this initial rollout.
 
 ---
 
