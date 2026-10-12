@@ -28,6 +28,7 @@ const {
   getPriceConsistencyIssues,
   holdSetupForPriceValidation,
   buildPriceConsistencyRetryMessages,
+  retryPriceConsistencyOnce,
 } = require('./serve');
 
 const directionalChartWithoutLevels = {
@@ -79,6 +80,16 @@ test('one conditional follow-up is requested only for readable directional chart
     ...directionalChartWithoutLevels,
     status: 'ai_unavailable',
   }), false);
+  assert.equal(shouldRequestCandidateLevelFollowup({
+    ...directionalChartWithoutLevels,
+    chart: {
+      ...directionalChartWithoutLevels.chart,
+      latest_visible_price: null,
+      current_price_source: 'unreadable',
+      current_candle_status: 'unknown',
+      latest_candle_timestamp: null,
+    },
+  }), true);
 });
 
 const consistentPriceSetup = {
@@ -288,9 +299,53 @@ test('valid follow-up levels fill missing fields but remain a non-actionable no-
   assert.equal(result.trade_setup.stop_loss, '1.0900');
   assert.deepEqual(result.trade_setup.take_profit_levels, ['1.1200', '1.1300']);
   assert.equal(result.trade_setup.risk_reward, 2);
-  assert.equal(result.tradeDecision, 'NONE');
+  assert.equal(result.tradeDecision, 'WAIT');
+  assert.equal(result.tradeStatus, 'waiting_for_confirmation');
   assert.equal(result.entryReadiness, 0);
   assert.equal(result.levelFollowupStatus, 'completed');
+});
+
+test('unclear current-price freshness does not hide chart-supported follow-up levels', () => {
+  const unverifiedChart = {
+    ...directionalChartWithoutLevels,
+    chart: {
+      ...directionalChartWithoutLevels.chart,
+      latest_visible_price: null,
+      current_price_source: 'unreadable',
+      current_candle_status: 'unknown',
+      latest_candle_timestamp: null,
+    },
+  };
+  const result = applyCandidateLevelFollowup(unverifiedChart, {
+    status: 'candidate',
+    direction: 'buy',
+    entry_zone: '1.1000',
+    stop_loss: '1.0900',
+    take_profit_levels: ['1.1200'],
+    setup_status: 'unclear',
+    reason: 'Entry at visible support, stop below the swing low, and target at visible resistance. Current price could not be verified.',
+  });
+
+  assert.equal(result.status, 'no_trade');
+  assert.equal(result.trade_setup.type, 'buy');
+  assert.equal(result.trade_setup.entry_zone, '1.1000');
+  assert.equal(result.trade_setup.stop_loss, '1.0900');
+  assert.equal(result.trade_setup.take_profit, '1.1200');
+  assert.equal(result.trade_setup.risk_reward, 2);
+  assert.equal(result.tradeDecision, 'NONE');
+  assert.equal(result.tradeStatus, 'no_setup');
+  assert.equal(result.entryReadiness, 0);
+  assert.match(result.dataLimitations.join(' '), /could not be verified/i);
+
+  const checked = retryPriceConsistencyOnce(result, 'EURUSD', () => {
+    throw new Error('Candidate review must not trigger another paid model call.');
+  });
+  return checked.then((finalResult) => {
+    assert.equal(finalResult.trade_setup.entry_zone, '1.1000');
+    assert.equal(finalResult.trade_setup.stop_loss, '1.0900');
+    assert.equal(finalResult.trade_setup.take_profit, '1.1200');
+    assert.equal(finalResult.candidateValidationStatus, 'unverified');
+  });
 });
 
 test('follow-up cannot overwrite supported first-pass levels or add contradictory levels', () => {
@@ -826,6 +881,7 @@ test('authenticated chart upload returns normalized candidate levels through the
           authorization: `Bearer ${token}`,
           'content-type': 'application/json',
           'content-length': Buffer.byteLength(body),
+          connection: 'close',
         },
       }, (response) => {
         let responseText = '';
@@ -873,7 +929,52 @@ test('authenticated chart upload returns normalized candidate levels through the
     assert.equal(recoveredResponse.body.trade_setup.stop_loss, '1.09900');
     assert.deepEqual(recoveredResponse.body.trade_setup.take_profit_levels, ['1.10200']);
     assert.ok(Math.abs(recoveredResponse.body.trade_setup.risk_reward - 2) < 1e-8);
-    assert.equal(recoveredResponse.body.tradeDecision, 'NONE');
+    assert.equal(recoveredResponse.body.tradeDecision, 'WAIT');
+
+    const missingLevelsAndFreshness = {
+      ...providerAnalysis,
+      status: 'no_trade',
+      chart: {
+        ...providerAnalysis.chart,
+        latest_visible_price: null,
+        current_price_source: 'unreadable',
+        current_candle_status: 'unknown',
+        latest_candle_timestamp: null,
+      },
+      trade_setup: {
+        type: 'none',
+        entry_zone: 'none',
+        stop_loss: 'none',
+        take_profit: 'none',
+        take_profit_levels: [],
+        risk_reward: null,
+        setup_status: 'unclear',
+      },
+    };
+    providerResponses = [
+      missingLevelsAndFreshness,
+      {
+        status: 'candidate',
+        direction: 'buy',
+        entry_zone: '1.10000',
+        stop_loss: '1.09900',
+        take_profit_levels: ['1.10200'],
+        setup_status: 'unclear',
+        reason: 'Entry at visible support, stop below the latest swing low, target at visible resistance. Current price and screenshot freshness are unclear.',
+      },
+    ];
+    providerCalls = 0;
+    const unverifiedLevelsResponse = await postAnalysis();
+    assert.equal(unverifiedLevelsResponse.statusCode, 200);
+    assert.equal(providerCalls, 2);
+    assert.equal(unverifiedLevelsResponse.body.status, 'no_trade');
+    assert.equal(unverifiedLevelsResponse.body.trade_setup.type, 'buy');
+    assert.equal(unverifiedLevelsResponse.body.trade_setup.entry_zone, '1.10000');
+    assert.equal(unverifiedLevelsResponse.body.trade_setup.stop_loss, '1.09900');
+    assert.equal(unverifiedLevelsResponse.body.trade_setup.take_profit, '1.10200');
+    assert.ok(Math.abs(unverifiedLevelsResponse.body.trade_setup.risk_reward - 2) < 1e-8);
+    assert.equal(unverifiedLevelsResponse.body.tradeDecision, 'NONE');
+    assert.equal(unverifiedLevelsResponse.body.candidateValidationStatus, 'unverified');
 
     const movedPriceCandidate = {
       ...providerAnalysis,
@@ -917,6 +1018,7 @@ test('authenticated chart upload returns normalized candidate levels through the
     assert.equal(rejectedRetryResponse.body.trade_setup.entry_zone, 'none');
     assert.ok(rejectedRetryResponse.body.reasons.some((item) => /maximum 200 ticks/i.test(item)));
   } finally {
+    server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));
     global.fetch = previousFetch;
     persistentStore.increment = previousIncrement;
