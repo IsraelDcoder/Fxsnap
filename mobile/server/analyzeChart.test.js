@@ -414,9 +414,11 @@ test('two-sided follow-up prompt sends the same chart and evaluates both directi
   const messages = buildCandidateLevelFollowupMessages('image-data', 'image/jpeg', 'BTCUSD', directionalChartWithoutLevels);
 
   assert.equal(messages.length, 2);
-  assert.ok(messages[0].content.length < 2600, `Expected a compact follow-up prompt, got ${messages[0].content.length} characters`);
+  assert.ok(messages[0].content.length < 3200, `Expected a compact follow-up prompt, got ${messages[0].content.length} characters`);
   assert.match(messages[0].content, /Evaluate BUY and SELL separately/i);
-  assert.match(messages[0].content, /conditional candidates, not actionable trades/i);
+  assert.match(messages[0].content, /Do not return unsupported just because trend, consolidation or entry trigger is unclear/i);
+  assert.match(messages[0].content, /mark setup_status=unclear.*entry_status=waiting_for_trigger/i);
+  assert.match(messages[0].content, /A candidate is conditional, not an actionable trade/i);
   assert.match(messages[1].content[0].text, /BTCUSD/);
   assert.equal(messages[1].content[1].image_url.url, 'data:image/jpeg;base64,image-data');
 });
@@ -442,6 +444,31 @@ test('valid follow-up levels fill missing fields but remain a non-actionable no-
   assert.equal(result.tradeStatus, 'waiting_for_confirmation');
   assert.equal(result.entryReadiness, 0);
   assert.equal(result.levelFollowupStatus, 'completed');
+});
+
+test('unclear trend retains complete support/resistance levels and returns WAIT for confirmation', () => {
+  const result = applyCandidateLevelFollowup(directionalChartWithoutLevels, {
+    status: 'candidate',
+    direction: 'sell',
+    entry_zone: '1.1100',
+    stop_loss: '1.1150',
+    take_profit_levels: ['1.0950'],
+    setup_status: 'unclear',
+    entry_status: 'waiting_for_trigger',
+    entry_type: 'rejection',
+    reason: 'Price is near resistance, but consolidation/rejection is not confirmed.',
+  });
+
+  assert.equal(result.status, 'no_trade');
+  assert.equal(result.trade_setup.type, 'sell');
+  assert.equal(result.trade_setup.entry_zone, '1.1100');
+  assert.equal(result.trade_setup.stop_loss, '1.1150');
+  assert.equal(result.trade_setup.take_profit, '1.0950');
+  assert.ok(result.trade_setup.risk_reward > 0);
+  assert.equal(result.trade_setup.setup_status, 'unclear');
+  assert.equal(result.tradeDecision, 'WAIT');
+  assert.equal(result.tradeStatus, 'waiting_for_confirmation');
+  assert.equal(result.entryStatus, 'waiting_for_trigger');
 });
 
 test('partial follow-up preserves supported stop loss without requiring a target or RR', () => {
@@ -521,8 +548,8 @@ test('unclear current-price freshness does not hide chart-supported follow-up le
   assert.equal(result.trade_setup.stop_loss, '1.0900');
   assert.equal(result.trade_setup.take_profit, '1.1200');
   assert.equal(result.trade_setup.risk_reward, 2);
-  assert.equal(result.tradeDecision, 'NONE');
-  assert.equal(result.tradeStatus, 'no_setup');
+  assert.equal(result.tradeDecision, 'WAIT');
+  assert.equal(result.tradeStatus, 'waiting_for_confirmation');
   assert.equal(result.entryReadiness, 0);
   assert.match(result.dataLimitations.join(' '), /could not be verified/i);
 
@@ -862,10 +889,13 @@ test('vision instructions reserve invalid_image for clearly non-chart or unrecog
   assert.match(prompt, /invalid_image only for a clearly non-chart/i);
   assert.match(prompt, /chart_quality=poor and no_trade/i);
   assert.match(prompt, /status=no_trade/i);
-  assert.match(prompt, /Use support\/resistance as the primary setup method/i);
-  assert.match(prompt, /buy from\/near support with SL beyond support and TP1 at resistance/i);
-  assert.match(prompt, /sell from\/near resistance with SL beyond resistance and TP1 at support/i);
-  assert.match(prompt, /If price is between levels, provide the nearest sensible boundary setup as conditional/i);
+  assert.match(prompt, /Support and resistance define the setup; confirmation defines whether to trade now/i);
+  assert.match(prompt, /buy entry at\/near support, SL beyond the visible support-side swing, TP1 at resistance/i);
+  assert.match(prompt, /sell entry at\/near resistance, SL beyond the visible resistance-side swing, TP1 at support/i);
+  assert.match(prompt, /If current price is between boundaries, plan from the nearer boundary/i);
+  assert.match(prompt, /Do not require consolidation or a confirmed trend to describe a candidate/i);
+  assert.match(prompt, /Only signal BUY\/SELL after price action confirms/i);
+  assert.match(prompt, /Compute R:R from these exact entry\/SL\/TP1 levels/i);
   assert.match(prompt, /candidate levels/i);
   assert.match(prompt, /entry, SL and TP1/i);
   assert.match(prompt, /Calculate risk_reward from the same entry, SL and TP1/i);
