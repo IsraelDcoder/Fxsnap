@@ -862,6 +862,10 @@ test('vision instructions reserve invalid_image for clearly non-chart or unrecog
   assert.match(prompt, /invalid_image only for a clearly non-chart/i);
   assert.match(prompt, /chart_quality=poor and no_trade/i);
   assert.match(prompt, /status=no_trade/i);
+  assert.match(prompt, /Use support\/resistance as the primary setup method/i);
+  assert.match(prompt, /buy from\/near support with SL beyond support and TP1 at resistance/i);
+  assert.match(prompt, /sell from\/near resistance with SL beyond resistance and TP1 at support/i);
+  assert.match(prompt, /If price is between levels, provide the nearest sensible boundary setup as conditional/i);
   assert.match(prompt, /candidate levels/i);
   assert.match(prompt, /entry, SL and TP1/i);
   assert.match(prompt, /Calculate risk_reward from the same entry, SL and TP1/i);
@@ -1603,6 +1607,49 @@ test('numeric levels without AI-provided RR are preserved with RR calculated fro
   assert.equal(result.trade_setup.risk_reward, 2);
   assert.ok(result.confidence > 0);
   assert.ok(result.breakdown.trend > 0);
+});
+
+test('support and resistance candidate returns entry, opposing target, and server-calculated RR', () => {
+  const canonical = canonicalizeRawAnalysis({
+    status: 'no_trade',
+    chart: {
+      is_chart: true,
+      chart_quality: 'good',
+      price_scale_visible: true,
+      candles_visible: true,
+      has_enough_candles: true,
+      latest_visible_price: '1.1050',
+      current_price_source: 'visible_price_marker',
+      current_candle_status: 'completed',
+    },
+    analysis: {
+      trend: 'neutral',
+      structure: 'Price is ranging between visible support and resistance.',
+      notes: 'Wait for price to return to support before entering.',
+    },
+    zones: { support: '1.0950', resistance: '1.1200' },
+    trade_setup: {
+      type: 'buy',
+      entry_zone: '1.0950',
+      stop_loss: '1.0900',
+      take_profit: '1.1200',
+      take_profit_levels: ['1.1200'],
+      risk_reward: null,
+      setup_status: 'valid',
+    },
+    confidence: 60,
+    reasoning: ['Support 1.0950 is the conditional entry.', 'Resistance 1.1200 is TP1.'],
+  });
+  const parsed = TradeAnalysisSchema.safeParse(canonical);
+  assert.equal(parsed.success, true);
+
+  const result = applyMentorStrategy(normalizeAnalysis(parsed.data));
+  assert.equal(result.trade_setup.type, 'buy');
+  assert.equal(result.trade_setup.entry_zone, '1.0950');
+  assert.equal(result.trade_setup.stop_loss, '1.0900');
+  assert.equal(result.trade_setup.take_profit, '1.1200');
+  assert.ok(Math.abs(result.trade_setup.risk_reward - 5) < 1e-8);
+  assert.equal(result.trade_setup.setup_status, 'valid');
 });
 
 test('validated candidate levels survive status downgrade and retain both take-profit targets', () => {
