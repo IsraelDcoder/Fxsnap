@@ -9,12 +9,20 @@ create table if not exists public.fxsnap_kv (
 
 create table if not exists public.fxsnap_push_devices (
   device_id text primary key,
+  account_id text,
+  supabase_user_id uuid,
   expo_token text not null unique,
   platform text not null check (platform in ('ios', 'android')),
   preferences jsonb not null default '{"dailyBrief": true, "inactivity": true, "weekly": true, "community": true}'::jsonb,
   registered_at timestamptz not null default now(),
   last_notification_at timestamptz
 );
+alter table public.fxsnap_push_devices
+  add column if not exists account_id text,
+  add column if not exists supabase_user_id uuid;
+create index if not exists fxsnap_push_devices_user_idx
+  on public.fxsnap_push_devices (supabase_user_id, device_id)
+  where supabase_user_id is not null;
 alter table public.fxsnap_push_devices
   alter column preferences set default '{"dailyBrief": true, "inactivity": true, "weekly": true, "community": true}'::jsonb;
 
@@ -24,6 +32,18 @@ revoke all on table public.fxsnap_kv from anon, authenticated;
 revoke all on table public.fxsnap_push_devices from anon, authenticated;
 grant all on table public.fxsnap_kv to service_role;
 grant all on table public.fxsnap_push_devices to service_role;
+
+create table if not exists public.fxsnap_push_receipts (
+  receipt_id text primary key,
+  device_id text not null,
+  event_id bigint not null,
+  created_at timestamptz not null default now()
+);
+create index if not exists fxsnap_push_receipts_created_idx
+  on public.fxsnap_push_receipts (created_at, receipt_id);
+alter table public.fxsnap_push_receipts enable row level security;
+revoke all on table public.fxsnap_push_receipts from public, anon, authenticated;
+grant all on table public.fxsnap_push_receipts to service_role;
 
 create or replace function public.fxsnap_kv_increment(p_key text, p_ttl_seconds integer)
 returns integer

@@ -4111,19 +4111,33 @@ function createRequestHandler() {
       const deviceId = requireAuth(req, res);
       if (!deviceId) return;
       if (!persistentStore.supabaseEnabled) return sendJson(res, 503, { error: 'Push notifications require Supabase storage.' });
-      const notifications = require('./notificationService');
-      if (req.method === 'DELETE') {
-        return notifications.unregisterPushToken(deviceId)
-          .then(() => sendJson(res, 200, { registered: false }))
-          .catch((error) => sendJson(res, 500, { error: error.message }));
-      }
-      return readJsonBody(req).then(async (body) => {
-        if (typeof body.token !== 'string' || typeof body.platform !== 'string') {
-          return sendJson(res, 400, { error: 'A push token and platform are required.' });
+      const accountSession = accountSessionFromRequest(req, res, deviceId);
+      if (!accountSession) return;
+      return persistentStore.getJson(accountStorageKey(accountSession.sub)).then((account) => {
+        if (!account || account.status !== 'active'
+          || !account.linkedDeviceIds?.includes(deviceId)
+          || !account.sessionIds?.includes(accountSession.sid)
+          || !account.supabaseUserId) {
+          return sendJson(res, 401, { error: 'A valid signed-in FXSnap account is required to register notifications.' });
         }
-        await notifications.registerPushToken(deviceId, body);
-        return sendJson(res, 200, { registered: true });
-      }).catch((error) => sendJson(res, 400, { error: error.message }));
+        const notifications = require('./notificationService');
+        if (req.method === 'DELETE') {
+          return notifications.unregisterPushToken(deviceId, accountSession.sub)
+            .then(() => sendJson(res, 200, { registered: false }))
+            .catch((error) => sendJson(res, 500, { error: error.message }));
+        }
+        return readJsonBody(req).then(async (body) => {
+          if (typeof body.token !== 'string' || typeof body.platform !== 'string') {
+            return sendJson(res, 400, { error: 'A push token and platform are required.' });
+          }
+          await notifications.registerPushToken(deviceId, {
+            ...body,
+            accountId: accountSession.sub,
+            supabaseUserId: account.supabaseUserId,
+          });
+          return sendJson(res, 200, { registered: true });
+        }).catch((error) => sendJson(res, 400, { error: error.message }));
+      }).catch((error) => sendJson(res, 500, { error: error.message }));
     }
     if (pathname === '/api/notifications/dispatch' && req.method === 'POST') {
       if (!persistentStore.supabaseEnabled) return sendJson(res, 503, { error: 'Push notifications require Supabase storage.' });

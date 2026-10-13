@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-const { buildCampaign, getRegisteredTokens, registerPushToken, unregisterPushToken } = require('../server/notificationService.js') as {
+const {
+  buildCampaign,
+  dispatchCommunityPushNotifications,
+  getRegisteredTokens,
+  registerPushToken,
+  unregisterPushToken,
+} = require('../server/notificationService.js') as {
   buildCampaign: (
     entry: Record<string, unknown>,
     events: Array<Record<string, unknown>>,
@@ -9,8 +15,9 @@ const { buildCampaign, getRegisteredTokens, registerPushToken, unregisterPushTok
     isSubscribed: boolean,
   ) => { type: string; route: string } | null;
   getRegisteredTokens: () => Promise<Array<Record<string, unknown>>>;
+  dispatchCommunityPushNotifications: (objectId?: string | null, limit?: number) => Promise<Record<string, unknown>>;
   registerPushToken: (deviceId: string, payload: Record<string, unknown>) => Promise<boolean>;
-  unregisterPushToken: (deviceId: string) => Promise<boolean>;
+  unregisterPushToken: (deviceId: string, accountId: string) => Promise<boolean>;
 };
 
 const now = new Date('2026-10-14T09:00:00.000Z');
@@ -78,13 +85,16 @@ test('push tokens are bound to the authenticated device and can be removed', asy
     }
     if (method === 'DELETE') {
       const target = new URL(url).searchParams.get('device_id')?.replace(/^eq\./, '');
+      const accountId = new URL(url).searchParams.get('account_id')?.replace(/^eq\./, '');
       for (let index = rows.length - 1; index >= 0; index--) {
-        if (rows[index].device_id === target) rows.splice(index, 1);
+        if (rows[index].device_id === target && rows[index].account_id === accountId) rows.splice(index, 1);
       }
       return new Response(null, { status: 204 });
     }
     return Response.json(rows.map((row) => ({
       device_id: row.device_id,
+      account_id: row.account_id,
+      supabase_user_id: row.supabase_user_id,
       expo_token: row.expo_token,
       platform: row.platform,
       preferences: row.preferences,
@@ -97,13 +107,26 @@ test('push tokens are bound to the authenticated device and can be removed', asy
     await registerPushToken(deviceId, {
       token: 'ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]',
       platform: 'android',
+      accountId: 'usr_push-test-member',
+      supabaseUserId: '00000000-0000-4000-8000-000000000010',
       preferences: { enabled: true, dailyBrief: true, inactivity: false, weekly: true, community: false },
     });
     const registration = (await getRegisteredTokens()).find((entry) => entry.deviceId === deviceId);
     assert.equal(registration?.platform, 'android');
+    assert.equal(registration?.accountId, 'usr_push-test-member');
+    assert.equal(registration?.supabaseUserId, '00000000-0000-4000-8000-000000000010');
     assert.deepEqual(registration?.preferences, { dailyBrief: true, inactivity: false, weekly: true, community: false });
-    await unregisterPushToken(deviceId);
+    await registerPushToken('device-push-test-234567', {
+      token: 'ExponentPushToken[yyyyyyyyyyyyyyyyyyyyyy]',
+      platform: 'android',
+      accountId: 'usr_push-test-member',
+      supabaseUserId: '00000000-0000-4000-8000-000000000010',
+      preferences: { enabled: true, dailyBrief: true, inactivity: false, weekly: true, community: false },
+    });
+    assert.equal((await getRegisteredTokens()).filter((entry) => entry.accountId === 'usr_push-test-member').length, 2);
+    await unregisterPushToken(deviceId, 'usr_push-test-member');
     assert.equal((await getRegisteredTokens()).some((entry) => entry.deviceId === deviceId), false);
+    assert.equal((await getRegisteredTokens()).some((entry) => entry.deviceId === 'device-push-test-234567'), true);
     assert.ok(calls.some((call) => call.includes('fxsnap_push_devices')));
     assert.ok(calls.every((call) => call.includes('unit-test.supabase.co')));
   } finally {
@@ -119,6 +142,41 @@ test('push-token registration rejects unapproved or malformed registrations', as
   await assert.rejects(registerPushToken('device-push-test-123456', {
     token: 'not-an-expo-token',
     platform: 'web',
+    accountId: 'usr_push-test-member',
+    supabaseUserId: '00000000-0000-4000-8000-000000000010',
     preferences: { enabled: false },
   }));
+  await assert.rejects(registerPushToken('device-push-test-123456', {
+    token: 'ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]',
+    platform: 'android',
+    preferences: { enabled: true },
+  }), /signed-in account/i);
+});
+
+test('Community dispatch invokes the Supabase Edge Function with the queued object selector', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalUrl = process.env.SUPABASE_URL;
+  const originalKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  let requestUrl = '';
+  let requestBody: Record<string, unknown> | null = null;
+  process.env.SUPABASE_URL = 'https://unit-test.supabase.co';
+  process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-service-role';
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    requestUrl = String(input);
+    requestBody = JSON.parse(String(init?.body));
+    return Response.json({ processed: 1, sent: 2, failed: 0, receiptsProcessed: 0 });
+  }) as typeof fetch;
+
+  try {
+    const result = await dispatchCommunityPushNotifications('community-post-id', 5);
+    assert.equal(requestUrl, 'https://unit-test.supabase.co/functions/v1/community-push');
+    assert.deepEqual(requestBody, { objectId: 'community-post-id', limit: 5 });
+    assert.equal(result.sent, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalUrl === undefined) delete process.env.SUPABASE_URL;
+    else process.env.SUPABASE_URL = originalUrl;
+    if (originalKey === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    else process.env.SUPABASE_SERVICE_ROLE_KEY = originalKey;
+  }
 });

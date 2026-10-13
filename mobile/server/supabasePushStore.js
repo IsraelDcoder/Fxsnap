@@ -31,13 +31,15 @@ async function request(path, options = {}) {
   return text ? JSON.parse(text) : null;
 }
 
-async function register(deviceId, token, platform, preferences) {
+async function register(deviceId, token, platform, preferences, accountId, supabaseUserId) {
   const now = new Date().toISOString();
   await request(`${TABLE}?on_conflict=device_id`, {
     method: 'POST',
     headers: { prefer: 'resolution=merge-duplicates,return=minimal' },
     body: JSON.stringify({
       device_id: deviceId,
+      account_id: accountId,
+      supabase_user_id: supabaseUserId,
       expo_token: token,
       platform,
       preferences,
@@ -46,8 +48,8 @@ async function register(deviceId, token, platform, preferences) {
   });
 }
 
-async function remove(deviceId) {
-  await request(`${TABLE}?device_id=eq.${encodeURIComponent(deviceId)}`, { method: 'DELETE' });
+async function remove(deviceId, accountId) {
+  await request(`${TABLE}?device_id=eq.${encodeURIComponent(deviceId)}&account_id=eq.${encodeURIComponent(accountId)}`, { method: 'DELETE' });
 }
 
 async function list() {
@@ -55,11 +57,13 @@ async function list() {
   const pageSize = 1000;
   for (let offset = 0; ; offset += pageSize) {
     const rows = await request(
-      `${TABLE}?select=device_id,expo_token,platform,preferences,registered_at,last_notification_at&order=device_id.asc`,
+      `${TABLE}?select=device_id,account_id,supabase_user_id,expo_token,platform,preferences,registered_at,last_notification_at&account_id=not.is.null&supabase_user_id=not.is.null&order=device_id.asc`,
       { headers: { range: `${offset}-${offset + pageSize - 1}` } },
     );
     entries.push(...(rows || []).map((row) => ({
       deviceId: row.device_id,
+      accountId: row.account_id,
+      supabaseUserId: row.supabase_user_id,
       token: row.expo_token,
       platform: row.platform,
       preferences: row.preferences,

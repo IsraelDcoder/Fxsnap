@@ -9,6 +9,21 @@ test('notification errors distinguish network failures from backend registration
 });
 
 test('notification errors explain Expo token setup and missing project configuration', () => {
-  assert.match(getNotificationEnableErrorMessage(new Error('Expo push-token request failed: Firebase credentials missing')), /push credentials/i);
+  assert.match(getNotificationEnableErrorMessage(new Error('Expo push-token request failed: Firebase credentials missing')), /push token/i);
   assert.match(getNotificationEnableErrorMessage(new Error('Expo project ID is missing from app configuration.')), /not configured/i);
+});
+
+test('production Expo token errors include safe native diagnostic fields', async () => {
+  const { formatExpoPushTokenError } = await import('../services/notificationErrors');
+  const detail = formatExpoPushTokenError({
+    name: 'FirebaseError',
+    message: 'FCM registration failed with API_KEY=private-value',
+    code: 'MismatchSenderId',
+    details: 'ExponentPushToken[private-token]',
+  });
+
+  assert.match(detail, /FirebaseError/);
+  assert.match(detail, /MismatchSenderId/);
+  assert.match(detail, /API_KEY=\[redacted\]/);
+  assert.doesNotMatch(detail, /private-value|private-token/);
 });

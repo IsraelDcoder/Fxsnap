@@ -27,6 +27,11 @@ async function registerPushToken(deviceId, payload) {
   const { Expo } = await getExpoClient();
   if (!Expo.isExpoPushToken(payload.token)) throw new Error('Invalid Expo push token.');
   if (!['ios', 'android'].includes(payload.platform)) throw new Error('Unsupported push platform.');
+  if (typeof payload.accountId !== 'string' || !payload.accountId
+    || typeof payload.supabaseUserId !== 'string'
+    || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(payload.supabaseUserId)) {
+    throw new Error('A valid signed-in account is required to register a push token.');
+  }
   const preferences = payload.preferences;
   if (!preferences || preferences.enabled !== true) throw new Error('Push notifications are not enabled.');
   const normalizedPreferences = {
@@ -35,12 +40,19 @@ async function registerPushToken(deviceId, payload) {
     weekly: preferences.weekly !== false,
     community: preferences.community !== false,
   };
-  await supabasePushStore.register(deviceId, payload.token, payload.platform, normalizedPreferences);
+  await supabasePushStore.register(
+    deviceId,
+    payload.token,
+    payload.platform,
+    normalizedPreferences,
+    payload.accountId,
+    payload.supabaseUserId,
+  );
   return true;
 }
 
-async function unregisterPushToken(deviceId) {
-  await supabasePushStore.remove(deviceId);
+async function unregisterPushToken(deviceId, accountId) {
+  await supabasePushStore.remove(deviceId, accountId);
   return true;
 }
 
@@ -115,47 +127,25 @@ async function sendScheduledCampaigns(now = new Date(), isPremium = async () => 
 }
 
 async function dispatchCommunityPushNotifications(objectId = null, limit = 100) {
-  if (!process.env.EXPO_ACCESS_TOKEN) throw new Error('EXPO_ACCESS_TOKEN is not configured.');
-  const events = await supabasePushStore.claimCommunityEvents(limit, objectId);
-  if (!events?.length) return { processed: 0, sent: 0, failed: 0 };
+  const supabaseUrl = (process.env.SUPABASE_URL || process.env.SUPABASE_PROJECT_URL || '').replace(/\/+$/, '');
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+  if (!supabaseUrl || !serviceKey) throw new Error('Supabase Community push storage is not configured.');
 
-  const entries = (await getRegisteredTokens())
-    .filter((entry) => entry.preferences?.community !== false);
-  const { expo } = await getExpoClient();
-  let sent = 0;
-  let failed = 0;
-
-  for (const event of events) {
-    try {
-      const activity = event.event_type === 'reply'
-        ? { title: 'New Community reply', body: 'There is a new reply in the FXSnap Community.' }
-        : event.event_type === 'reaction'
-          ? { title: 'New Community reaction', body: 'There is new reaction activity in the FXSnap Community.' }
-          : { title: 'New Community post', body: 'A new post is waiting in the FXSnap Community.' };
-      const messages = entries.map((entry) => ({
-        to: entry.token,
-        ...activity,
-        data: { type: 'community_activity', route: '/community', eventType: event.event_type },
-        channelId: 'fxsnap-community',
-        sound: 'default',
-        priority: 'default',
-      }));
-      for (const chunk of expo.chunkPushNotifications(messages)) {
-        await expo.sendPushNotificationsAsync(chunk);
-      }
-      await supabasePushStore.finishCommunityEvent(event.id);
-      sent += entries.length;
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : 'Unknown push delivery error.';
-      await supabasePushStore.finishCommunityEvent(event.id, detail);
-      console.error('[Notifications] Community activity push delivery failed.', {
-        eventId: event.id,
-        error: detail,
-      });
-      failed += 1;
-    }
+  const response = await fetch(`${supabaseUrl}/functions/v1/community-push`, {
+    method: 'POST',
+    headers: {
+      apikey: serviceKey,
+      authorization: `******`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ objectId, limit }),
+  });
+  const result = await response.json().catch(() => null);
+  if (!response.ok) {
+    console.error('[Notifications] Community Edge Function request failed.', { status: response.status });
+    throw new Error(`Community push delivery failed (${response.status}).`);
   }
-  return { processed: events.length, sent, failed };
+  return result;
 }
 
 module.exports = {

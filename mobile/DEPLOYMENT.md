@@ -49,13 +49,22 @@ The mobile app targets `https://fxsnap.vercel.app` for all API requests. Deploy 
 
 ### Push notifications
 
-1. In Firebase, create an Android app with package name `com.fxsnap.mobile` and download its `google-services.json`.
-2. Provide that file to EAS as a **file-type** environment variable named `GOOGLE_SERVICES_JSON` for each build environment. `app.config.js` adds the file to the Android build without storing it in source control. For local Android builds, set `GOOGLE_SERVICES_JSON` to the local file path; `google-services.json` is ignored by Git.
-3. In EAS project credentials, configure Firebase Cloud Messaging V1 with a service-account JSON from the same Firebase project. The Android app's Firebase configuration file and FCM V1 service account are separate required build credentials.
+1. In Firebase, create an Android app with package name `com.fxsnap.mobile` and download its `google-services.json`. Enable the Firebase Installations API and Firebase Cloud Messaging Registration API in that Firebase project. If the API key is restricted, allow the Play app signing SHA-1 and the APIs required by Firebase.
+2. Provide that file to EAS as a **file-type** Production environment variable named `GOOGLE_SERVICES_JSON`. The app config validates that it contains a Firebase Android client for `com.fxsnap.mobile`, then adds it to the native Android build without storing its contents in source control. A production EAS build now fails early if the file is missing. For local Android builds, set `GOOGLE_SERVICES_JSON` to the local file path; `google-services.json` is ignored by Git.
+3. In EAS Android credentials, configure Firebase Cloud Messaging V1 with a service-account JSON from the same Firebase project as `google-services.json`. The app package, Firebase project/sender ID, and FCM V1 service account must match. These are separate from the Expo project ID in `extra.eas.projectId`.
 4. Build and distribute a new development or production app after configuring credentials, then install that build and test there. Expo Go uses Expo's own native app configuration and does not verify this app's Firebase credentials. Remote pushes on Android require an EAS development or production build.
-5. Set `EXPO_ACCESS_TOKEN` and `NOTIFICATION_CRON_SECRET` in the backend's production environment. Do not add either value to an `EXPO_PUBLIC_*` variable.
+5. Store `EXPO_ACCESS_TOKEN` as a Supabase Edge Function secret for Community delivery. Set `EXPO_ACCESS_TOKEN` and `NOTIFICATION_CRON_SECRET` in the backend's production environment for scheduled campaigns and authenticated dispatch. Do not add any of these values to an `EXPO_PUBLIC_*` variable.
 6. Configure an external cron service to send a `POST` request to `/api/notifications/dispatch` at least once per minute with the `x-notification-secret` header set to `NOTIFICATION_CRON_SECRET`. This retries queued Community activity notifications; scheduled retention campaigns remain limited to one per device in each seven-day period.
-7. Users opt in from Settings and must grant OS notification permission. Community activity notifications are enabled by default for push-enabled devices and can be disabled separately; each new post, reply, and reaction is sent to every registered device that has Community notifications enabled.
+7. Users opt in from Settings and must grant OS notification permission. Push tokens are registered server-side against the signed-in FXSnap/Supabase identity and installation ID; multiple installations remain independently registered. Community activity notifications are enabled by default for push-enabled devices and can be disabled separately; existing Community triggers and their current recipient fan-out are preserved.
+
+### Supabase Edge delivery for Community pushes
+
+The database triggers continue to enqueue Community posts, replies, and reactions in `fxsnap_community_push_queue`. The backend invokes the `community-push` Edge Function to claim that existing queue, deliver through Expo Push Service, store Expo receipt IDs, log ticket/receipt error codes without logging tokens, and remove devices that return `DeviceNotRegistered`.
+
+1. Run `server/supabase-kv.sql` in the production Supabase SQL Editor to add user ownership columns and the receipt table. Existing device rows have no user association and are ignored until each device re-registers from the signed-in app.
+2. Set `EXPO_ACCESS_TOKEN` in Supabase Dashboard → Edge Functions → Secrets. The function uses Supabase's server-provided `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`; never put either key in the mobile app.
+3. From the repository root, link the Supabase CLI to the production project and deploy `supabase/functions/community-push` with `supabase functions deploy community-push`. Keep JWT verification enabled; only the trusted backend service-role request is accepted.
+4. Deploy the Vercel backend after the function is live. The existing notification dispatch cron and immediate post/reply/reaction path will invoke the Edge Function; retention campaigns remain on the existing backend.
 
 ### Supabase storage setup
 

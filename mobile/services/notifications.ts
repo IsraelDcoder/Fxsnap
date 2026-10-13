@@ -1,9 +1,12 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as SecureStore from 'expo-secure-store';
 import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
-import { API_BASE_URL, getApiHeaders, getDeviceId } from './apiAuth';
+import { API_BASE_URL, getDeviceId } from './apiAuth';
 import { notifyAccountDataChanged } from './accountDataEvents';
+import { getFxsnapAccountApiHeaders } from './account';
+import { formatExpoPushTokenError } from './notificationErrors';
 import type { EventSubscription, NotificationResponse } from 'expo-notifications';
 
 export type NotificationRoute = '/daily-brief' | '/analysis' | '/saved' | '/community';
@@ -97,17 +100,17 @@ export async function requestAndRegisterPushNotifications(preferences?: Notifica
   try {
     token = (await Notifications.getExpoPushTokenAsync({ projectId })).data;
   } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
+    const detail = formatExpoPushTokenError(error);
+    if (__DEV__) console.error('[Notifications] Expo push-token request failed.', detail);
     throw new Error(`Expo push-token request failed: ${detail}`);
   }
   const deviceId = await getDeviceId();
-  await AsyncStorage.setItem(PUSH_TOKEN_KEY, token);
 
   let response: Response;
   try {
     response = await fetch(`${API_BASE_URL}/api/push-token`, {
       method: 'POST',
-      headers: { ...(await getApiHeaders()), 'content-type': 'application/json' },
+      headers: { ...(await getFxsnapAccountApiHeaders()), 'content-type': 'application/json' },
       body: JSON.stringify({
         token,
         platform: Platform.OS,
@@ -126,6 +129,8 @@ export async function requestAndRegisterPushNotifications(preferences?: Notifica
     throw new Error(`Push token registration failed (${response.status})${detail ? `: ${detail}` : ''}`);
   }
 
+  await SecureStore.setItemAsync(PUSH_TOKEN_KEY, token);
+  await AsyncStorage.removeItem(PUSH_TOKEN_KEY);
   return { granted: true, token };
 }
 
@@ -158,7 +163,7 @@ export function getNotificationRoute(data: Record<string, unknown> | undefined):
 export async function registerPushToken(cluster: { token: string; platform: string; deviceId: string }) {
   const response = await fetch(`${API_BASE_URL}/api/push-token`, {
     method: 'POST',
-    headers: { ...(await getApiHeaders()), 'content-type': 'application/json' },
+    headers: { ...(await getFxsnapAccountApiHeaders()), 'content-type': 'application/json' },
     body: JSON.stringify(cluster),
   });
   if (!response.ok) throw new Error('Unable to register push token');
@@ -167,12 +172,13 @@ export async function registerPushToken(cluster: { token: string; platform: stri
 export async function unregisterPushToken() {
   const response = await fetch(`${API_BASE_URL}/api/push-token`, {
     method: 'DELETE',
-    headers: await getApiHeaders(),
+    headers: await getFxsnapAccountApiHeaders(),
   });
   if (!response.ok) throw new Error('Unable to unregister push token');
-  await AsyncStorage.removeItem(PUSH_TOKEN_KEY);
+  await SecureStore.deleteItemAsync(PUSH_TOKEN_KEY);
 }
 
 export async function clearNotificationPreferences() {
-  await AsyncStorage.multiRemove([NOTIFICATION_SETTINGS_KEY, PUSH_TOKEN_KEY]);
+  await AsyncStorage.removeItem(NOTIFICATION_SETTINGS_KEY);
+  await SecureStore.deleteItemAsync(PUSH_TOKEN_KEY);
 }

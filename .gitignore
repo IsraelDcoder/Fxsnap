@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+*-firebase-adminsdk-*.json
 
 # Editor and OS files
 .vscode/
