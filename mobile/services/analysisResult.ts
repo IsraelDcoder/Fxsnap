@@ -149,20 +149,19 @@ export function getTradeReadinessLabel(
   direction?: string,
   riskReward?: number | string,
 ): string {
-  const isIdentified = (value: string) => isValidPrice(value);
-  const riskRewardRatio = getRiskRewardRatio(riskReward);
-  if (isIdentified(entry) && isIdentified(stopLoss) && isIdentified(takeProfit)
-    && riskRewardRatio != null) {
-    if (tradeStatus === 'actionable') return 'Ready';
-    if (tradeStatus?.startsWith('waiting')) return 'Waiting for confirmation';
-    const side = direction === 'BUY' || direction === 'SELL' ? `${direction} ` : '';
-    return `${side}candidate setup · awaiting validation`;
+  const normalizedDirection = direction?.trim().toUpperCase();
+  const hasCompleteSetup = isValidPrice(entry)
+    && isValidPrice(stopLoss)
+    && isValidPrice(takeProfit)
+    && getRiskRewardRatio(riskReward) != null;
+  if (tradeStatus === 'actionable' && hasCompleteSetup && (normalizedDirection === 'BUY' || normalizedDirection === 'SELL')) {
+    return normalizedDirection;
   }
-  return 'Not ready — the setup is incomplete or its risk/reward cannot be calculated.';
+  return 'WAIT FOR CONFIRMATION';
 }
 
 export function formatTradeReadiness(
-  readiness: number,
+  _readiness: number,
   tradeStatus: string | undefined,
   entry: string,
   stopLoss: string,
@@ -170,9 +169,7 @@ export function formatTradeReadiness(
   direction?: string,
   riskReward?: number | string,
 ): string {
-  const label = getTradeReadinessLabel(tradeStatus, entry, stopLoss, takeProfit, direction, riskReward);
-  const score = Math.round(Math.max(0, Math.min(100, readiness)));
-  return score > 0 ? `${score}% · ${label}` : label;
+  return getTradeReadinessLabel(tradeStatus, entry, stopLoss, takeProfit, direction, riskReward);
 }
 
 export function buildAnalysisResult(chart: ChartAnalysisResult, pair: string, imageUri?: string): AnalysisResult {

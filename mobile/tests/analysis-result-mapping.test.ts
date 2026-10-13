@@ -472,35 +472,39 @@ test('waiting setups remain on hold and explain the confirmation trigger', () =>
     '1.1100',
     'BUY',
     2,
-  ), 'Waiting for confirmation');
+  ), 'WAIT FOR CONFIRMATION');
 });
 
-test('trade readiness describes a hold while levels are incomplete', () => {
+test('trade signal is limited to buy, sell, or wait for confirmation', () => {
   assert.equal(
     getTradeReadinessLabel('no_setup', '158.23000', '158.15500', '158.29000', 'BUY', 0.8),
-    'BUY candidate setup · awaiting validation',
+    'WAIT FOR CONFIRMATION',
   );
   assert.equal(
     getTradeReadinessLabel(undefined, '1.10000', 'Not established', 'Not established'),
-    'Not ready — the setup is incomplete or its risk/reward cannot be calculated.',
+    'WAIT FOR CONFIRMATION',
   );
   assert.equal(
     getTradeReadinessLabel(undefined, 'Not established', 'Not established', 'Not established'),
-    'Not ready — the setup is incomplete or its risk/reward cannot be calculated.',
+    'WAIT FOR CONFIRMATION',
   );
-  assert.equal(getTradeReadinessLabel('actionable', '1.10', '1.09', '1.12', 'BUY', 2), 'Ready');
-  assert.equal(getTradeReadinessLabel('actionable', '1.10', '1.09', '1.12'), 'Not ready — the setup is incomplete or its risk/reward cannot be calculated.');
-  assert.equal(getTradeReadinessLabel('waiting_for_confirmation', '1.10', '1.09', '1.12', 'BUY', 2), 'Waiting for confirmation');
-  assert.equal(getTradeReadinessLabel('waiting_for_confirmation', '1.10', '1.09', '1.12'), 'Not ready — the setup is incomplete or its risk/reward cannot be calculated.');
+  assert.equal(getTradeReadinessLabel('actionable', '1.10', '1.09', '1.12', 'BUY', 2), 'BUY');
+  assert.equal(getTradeReadinessLabel('actionable', '1.10', '1.09', '1.12', 'SELL', 2), 'SELL');
+  assert.equal(getTradeReadinessLabel('actionable', '1.10', '1.09', '1.12'), 'WAIT FOR CONFIRMATION');
+  assert.equal(getTradeReadinessLabel('waiting_for_confirmation', '1.10', '1.09', '1.12', 'BUY', 2), 'WAIT FOR CONFIRMATION');
 });
 
-test('readiness status stays visible without showing a zero-percent score', () => {
+test('trade signal is not obscured by readiness percentages', () => {
   assert.equal(
     formatTradeReadiness(0, 'no_setup', '158.23000', '158.15500', '158.29000', 'BUY', 0.8),
-    'BUY candidate setup · awaiting validation',
+    'WAIT FOR CONFIRMATION',
   );
   assert.equal(
     formatTradeReadiness(64, 'waiting_for_confirmation', '1.10', '1.09', '1.12', 'BUY', 2),
-    '64% · Waiting for confirmation',
+    'WAIT FOR CONFIRMATION',
+  );
+  assert.equal(
+    formatTradeReadiness(100, 'actionable', '1.10', '1.09', '1.12', 'SELL', 2),
+    'SELL',
   );
 });
