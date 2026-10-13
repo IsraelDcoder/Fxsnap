@@ -150,14 +150,14 @@ export default function AnalysisScreen() {
       void checkFeatureAccess('AI_ANALYSIS', '/analysis').then((decision) => {
         if (!active) return;
         if (decision.error) {
-          setAccessVerified(true);
+          router.replace({ pathname: '/paywall', params: { source: 'subscription-required' } });
           return;
         }
         if (decision.allowed) setAccessVerified(true);
       }).catch((error: unknown) => {
         if (!active) return;
-        console.warn('[ACCESS] Analysis route check failed; the analysis API will enforce free-analysis limits.', error);
-        setAccessVerified(true);
+        console.warn('[ACCESS] Subscription check failed; analysis requests remain blocked until access is verified.', error);
+        router.replace({ pathname: '/paywall', params: { source: 'subscription-required' } });
       });
       return () => {
         active = false;
@@ -298,7 +298,7 @@ export default function AnalysisScreen() {
     if (chart.status === 'premium_required') {
       setAnalysisError(chart.message || 'A Premium subscription is required for chart analysis.');
       returnToInput();
-      router.replace({ pathname: '/paywall', params: { source: 'analysis-limit', used: '1', limit: '1' } });
+      router.replace({ pathname: '/paywall', params: { source: 'subscription-required' } });
       return;
     }
 
@@ -373,7 +373,7 @@ export default function AnalysisScreen() {
 
     try {
       console.log('[ANALYSIS] Preparing request');
-      const chart = await analyzeChartImage(imageBase64, imageMimeType, pair, isSubscribed);
+      const chart = await analyzeChartImage(imageBase64, imageMimeType, pair);
       await finishAnalysis(chart, pair, sourceImageUri, analysisStartedAt);
       console.log('[ANALYSIS] Result received', {
         pair,
@@ -402,7 +402,6 @@ export default function AnalysisScreen() {
         { imageBase64: timeframeCharts.h4.imageBase64, mimeType: timeframeCharts.h4.mimeType },
         { imageBase64: timeframeCharts.m15.imageBase64, mimeType: timeframeCharts.m15.mimeType },
         selectedPair,
-        isSubscribed,
       );
       await finishAnalysis(chart, selectedPair, timeframeCharts.h4.uri, analysisStartedAt);
     } catch (error) {

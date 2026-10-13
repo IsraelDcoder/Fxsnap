@@ -204,9 +204,9 @@ export default function AnalysisResultScreen() {
       (currentAnalysis?.status === 'no_trade'
         || (currentAnalysis?.status === 'success'
           && (!hasValidatedTradeSetup(currentAnalysis) || currentAnalysis.tradeStatus !== 'actionable')))
-      && canViewFullAnalysis(isSubscribed, currentAnalysis.freeAnalysisUsed === true),
+      && canViewFullAnalysis(isSubscribed),
     );
-  }, [currentAnalysis?.id, currentAnalysis?.status, currentAnalysis?.freeAnalysisUsed, isSubscribed]);
+  }, [currentAnalysis?.id, currentAnalysis?.status, isSubscribed]);
 
   useEffect(() => {
     let active = true;
@@ -256,7 +256,7 @@ export default function AnalysisResultScreen() {
   );
   const isBuy = marketReadDirection === 'BUY';
   const isSell = marketReadDirection === 'SELL';
-  const hasFullAnalysisAccess = canViewFullAnalysis(isSubscribed, currentAnalysis?.freeAnalysisUsed === true);
+  const hasFullAnalysisAccess = canViewFullAnalysis(isSubscribed);
   const directionColor = isBuy || (!isSell && marketRead === 'bullish') ? '#00E676'
     : isSell || marketRead === 'bearish' ? '#FF5252' : '#8E8E93';
   const alreadySaved = savedAnalyses.some((a) => a.id === currentAnalysis?.id);

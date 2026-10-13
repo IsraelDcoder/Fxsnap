@@ -18,8 +18,8 @@ function decodePayload(secret, token) {
   } catch { return null; }
 }
 
-function createAuth(secret, deviceId, ttlMs = 30 * 24 * 60 * 60 * 1000, freeAnalysisId = deviceId) {
-  return signPayload(secret, { sub: deviceId, freeSub: freeAnalysisId, exp: Date.now() + ttlMs });
+function createAuth(secret, deviceId, ttlMs = 30 * 24 * 60 * 60 * 1000) {
+  return signPayload(secret, { sub: deviceId, exp: Date.now() + ttlMs });
 }
 
 function decodeAuth(secret, token) {
@@ -50,16 +50,10 @@ function verifyAuth(secret, token) {
   return decodeAuth(secret, token)?.sub || null;
 }
 
-function verifyFreeAnalysisIdentity(secret, token) {
-  const decoded = decodeAuth(secret, token);
-  return typeof decoded?.freeSub === 'string' ? decoded.freeSub : null;
-}
-
 module.exports = {
   createAuth,
   createAccountAuth,
   decodeAuth,
   decodeAccountAuth,
   verifyAuth,
-  verifyFreeAnalysisIdentity,
 };

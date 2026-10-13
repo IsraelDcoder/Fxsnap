@@ -221,7 +221,7 @@ export default function OnboardingFlow() {
       setFinishError(null);
       await updateSettings(preferences);
       await completeOnboarding();
-      router.replace('/analysis');
+      router.replace('/(tabs)/home');
     } catch (error) {
       setFinishError(error instanceof Error ? error.message : 'Unable to save your onboarding choices. Please try again.');
     } finally {

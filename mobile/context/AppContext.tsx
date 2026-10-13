@@ -3,8 +3,7 @@ import { Alert, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router } from 'expo-router';
 import { addBillingListener, billingIsConfigured, configureBilling, getPremiumStatus, purchasePlan, restorePurchases, type BillingPlan } from '@/services/billing';
-import { getServerAnalysisAccess, type ServerAnalysisAccess } from '@/services/apiAuth';
-import { getFeatureAccessDecision, isFreeAnalysisExhausted, type FeatureAccessDecision, type ProtectedFeature } from '@/services/featureAccess';
+import { getFeatureAccessDecision, type FeatureAccessDecision, type ProtectedFeature } from '@/services/featureAccess';
 import { setHapticsEnabled } from '@/services/haptics';
 import { createDailyRiskActivity, getLocalRiskDateKey, normalizeDailyRiskActivity, type DailyRiskActivity, type OpenRiskPosition } from '@/services/risk';
 import {
@@ -26,7 +25,6 @@ export interface AnalysisResult {
   pair: string;
   status?: AnalysisStatus;
   message?: string;
-  freeAnalysisUsed?: boolean;
   direction?: 'BUY' | 'SELL';
   timeframe?: string;
   takeProfitLevels?: string[];
@@ -481,51 +479,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const subscriptionActive = billingAvailable && !billingStatusReady
       ? await (billingStatusPromise.current ?? Promise.resolve(false))
       : isSubscribed;
-    let analysisAccess: ServerAnalysisAccess | null = null;
-    let accessCheckError: unknown;
-    if (!subscriptionActive && (feature === 'AI_ANALYSIS' || feature === 'TRADE_SETUP')) {
-      try {
-        analysisAccess = await getServerAnalysisAccess();
-      } catch (error) {
-        accessCheckError = error;
-      }
-    }
-
-    if (!analysisAccess && !subscriptionActive && (feature === 'AI_ANALYSIS' || feature === 'TRADE_SETUP')) {
-      console.warn(
-        '[ACCESS] Free-analysis access response unavailable; allowing analysis entry for backend enforcement.',
-        accessCheckError ?? 'The response was unavailable or invalid.'
-      );
-    }
-
-    if (analysisAccess && isFreeAnalysisExhausted(
-      analysisAccess.freeAnalysesUsed,
-      analysisAccess.freeAnalysisLimit,
-      subscriptionActive,
-    )) {
-      setPendingFeatureRoute(route);
-      const openPaywall = () => router.replace({
-        pathname: '/paywall',
-        params: { source: 'analysis-limit', used: String(analysisAccess.freeAnalysesUsed), limit: String(analysisAccess.freeAnalysisLimit) },
-      });
-      const message = 'Subscribe to unlock unlimited analysis.';
-      if (Platform.OS === 'web') {
-        globalThis.alert(`You have used your free analysis. ${message}`);
-        openPaywall();
-      } else {
-        Alert.alert('You have used your free analysis', message, [{ text: 'Continue', onPress: openPaywall }]);
-      }
-      return { allowed: false, requiresPaywall: true };
-    }
-
-    if (analysisAccess?.analysisInProgress) {
-      return {
-        allowed: false,
-        requiresPaywall: false,
-        error: 'Your free analysis is already running. Please wait for it to finish.',
-      };
-    }
-
     const decision = getFeatureAccessDecision(feature, subscriptionActive);
     if (grantAnalysisRoute && decision.allowed && route === '/analysis') {
       analysisAccessGrant.current = true;
@@ -537,7 +490,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
     if (decision.requiresPaywall) {
       setPendingFeatureRoute(route);
-      router.replace('/paywall');
+      router.replace({ pathname: '/paywall', params: { source: 'subscription-required' } });
     }
     return decision;
   }, [billingAvailable, billingStatusReady, isLoading, isSubscribed]);

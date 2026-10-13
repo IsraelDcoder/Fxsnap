@@ -53,7 +53,7 @@ Google sign-in is optional and does not change the anonymous device identity or 
 4. Set server-only `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` for Supabase Auth token verification and account deletion. These same server settings are used by the existing Supabase durable storage. Also configure `FXSNAP_AUTH_SECRET` and durable storage. Do not put a service-role key or other server credential in an `EXPO_PUBLIC_*` variable.
 5. Build and test on iOS and Android with the production app identifiers. Use an Expo development build for local OAuth testing so the existing `mobile://` scheme is registered; do not add an invented Expo Go redirect to production's allowed URLs.
 
-After sign-in, FXSnap saves and restores the app backup (settings, saved analyses, strategies, briefs, and current risk activity), notification preferences, daily-brief progress, and a compressed profile photo to the authenticated account. Account data is limited to 5 MB per backup. Device identity, free-analysis allowances, RevenueCat identity and entitlements, and device push tokens are not synced or changed. Account deletion removes the cloud backup; sign-out does not.
+After sign-in, FXSnap saves and restores the app backup (settings, saved analyses, strategies, briefs, and current risk activity), notification preferences, daily-brief progress, and a compressed profile photo to the authenticated account. Account data is limited to 5 MB per backup. Device identity, RevenueCat identity and entitlements, and device push tokens are not synced or changed. Chart analysis and AI strategy generation require an active Premium subscription. Account deletion removes the cloud backup; sign-out does not.
 
 ## Sentry
 

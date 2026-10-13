@@ -40,7 +40,6 @@ export function normalizeChartAnalysisError(payload: any): { status: AnalysisSta
 export interface ChartAnalysisResult {
   status: AnalysisStatus;
   message?: string;
-  freeAnalysisUsed?: boolean;
   detectedPair?: string | null;
   timeframe?: string | null;
   latestVisiblePrice?: number;
@@ -271,21 +270,18 @@ export function normalizeLatestVisiblePrice(payload: unknown): number | undefine
 export async function analyzeChartImage(
   imageBase64: string,
   mimeType = 'image/jpeg',
-  pair?: string,
-  premiumAccess = false
+  pair?: string
 ): Promise<ChartAnalysisResult> {
-  return sendChartAnalysis('/analyze-chart', { imageBase64, mimeType, pair, premiumAccess });
+  return sendChartAnalysis('/analyze-chart', { imageBase64, mimeType, pair });
 }
 
 export async function analyzeMultiTimeframeCharts(
   h4Chart: MultiTimeframeChartImage,
   m15Chart: MultiTimeframeChartImage,
   pair: string,
-  premiumAccess = false,
 ): Promise<ChartAnalysisResult> {
   return sendChartAnalysis('/api/multi-timeframe-analysis', {
     pair,
-    premiumAccess,
     charts: {
       h4: h4Chart,
       m15: m15Chart,
@@ -336,7 +332,6 @@ async function sendChartAnalysis(path: string, body: Record<string, unknown>): P
     return {
       status,
       message: payload.message || undefined,
-      freeAnalysisUsed: payload.freeAnalysisUsed === true,
       detectedPair: payload.detectedPair ?? null,
       timeframe: payload.timeframe ?? null,
       latestVisiblePrice,

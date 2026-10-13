@@ -94,10 +94,6 @@ export default function HomeDashboard() {
     try {
       const access = await checkFeatureAccess(feature, route, route === '/analysis');
       if (access.error) {
-        if (route === '/analysis') {
-          router.push(route);
-          return;
-        }
         Alert.alert('Unable to verify access', access.error);
         return;
       }

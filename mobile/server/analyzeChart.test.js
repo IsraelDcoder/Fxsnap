@@ -766,7 +766,7 @@ test('nested and aliased numeric BUY and SELL levels normalize into the canonica
 
 test('multi-timeframe request requires two bounded supported chart images', () => {
   const chart = { imageBase64: 'x'.repeat(100), mimeType: 'image/jpeg' };
-  const valid = MultiTimeframeInputSchema.safeParse({ pair: 'XAUUSD', premiumAccess: true, charts: { h4: chart, m15: chart } });
+  const valid = MultiTimeframeInputSchema.safeParse({ pair: 'XAUUSD', charts: { h4: chart, m15: chart } });
   const missingChart = MultiTimeframeInputSchema.safeParse({ pair: 'XAUUSD', charts: { h4: chart } });
   const unsupportedImage = MultiTimeframeInputSchema.safeParse({ pair: 'XAUUSD', charts: { h4: chart, m15: { ...chart, mimeType: 'image/gif' } } });
 
@@ -1312,15 +1312,25 @@ test('authenticated chart upload returns normalized candidate levels through the
   const previousFetch = global.fetch;
   const previousApiKey = process.env.OPENROUTER_API_KEY;
   const previousRevenueCatKey = process.env.REVENUECAT_SECRET_API_KEY;
-  const previousIncrement = persistentStore.increment;
   let providerCalls = 0;
+  let revenueCatEntitlementActive = true;
   let providerResponses = [providerAnalysis];
   const server = http.createServer(createRequestHandler());
 
   process.env.OPENROUTER_API_KEY = 'test-key';
-  delete process.env.REVENUECAT_SECRET_API_KEY;
-  persistentStore.increment = async () => null;
+  process.env.REVENUECAT_SECRET_API_KEY = 'test-revenuecat-key';
   global.fetch = async (url) => {
+    if (String(url).includes('api.revenuecat.com')) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          subscriber: {
+            entitlements: revenueCatEntitlementActive ? { premium: { expires_date: null } } : {},
+          },
+        }),
+      };
+    }
     assert.match(String(url), /\/chat\/completions$/);
     providerCalls += 1;
     const nextProviderResponse = providerResponses.shift();
@@ -1347,16 +1357,17 @@ test('authenticated chart upload returns normalized candidate levels through the
       pair: 'EURUSD',
       premiumAccess: true,
     });
-    const postAnalysis = () => new Promise((resolve, reject) => {
+    const post = (path, requestBody) => new Promise((resolve, reject) => {
+      const requestText = JSON.stringify(requestBody);
       const request = http.request({
         hostname: '127.0.0.1',
         port: address.port,
-        path: '/analyze-chart',
+        path,
         method: 'POST',
         headers: {
           authorization: `Bearer ${token}`,
           'content-type': 'application/json',
-          'content-length': Buffer.byteLength(body),
+          'content-length': Buffer.byteLength(requestText),
           connection: 'close',
         },
       }, (response) => {
@@ -1366,9 +1377,31 @@ test('authenticated chart upload returns normalized candidate levels through the
         response.on('end', () => resolve({ statusCode: response.statusCode, body: JSON.parse(responseText) }));
       });
       request.once('error', reject);
-      request.end(body);
+      request.end(requestText);
     });
+    const postAnalysis = () => post('/analyze-chart', JSON.parse(body));
 
+    revenueCatEntitlementActive = false;
+    const unpaidAnalysisResponse = await postAnalysis();
+    assert.equal(unpaidAnalysisResponse.statusCode, 402);
+    assert.equal(unpaidAnalysisResponse.body.code, 'PREMIUM_REQUIRED');
+    assert.equal(providerCalls, 0);
+    const unpaidStrategyResponse = await post('/api/strategy', {});
+    assert.equal(unpaidStrategyResponse.statusCode, 402);
+    assert.equal(unpaidStrategyResponse.body.code, 'PREMIUM_REQUIRED');
+    assert.equal(providerCalls, 0);
+    const unpaidMultiTimeframeResponse = await post('/api/multi-timeframe-analysis', {
+      pair: 'EURUSD',
+      premiumAccess: true,
+      charts: {
+        h4: { imageBase64: 'x'.repeat(120), mimeType: 'image/jpeg' },
+        m15: { imageBase64: 'x'.repeat(120), mimeType: 'image/jpeg' },
+      },
+    });
+    assert.equal(unpaidMultiTimeframeResponse.statusCode, 402);
+    assert.equal(unpaidMultiTimeframeResponse.body.code, 'PREMIUM_REQUIRED');
+    assert.equal(providerCalls, 0);
+    revenueCatEntitlementActive = true;
     const responseBody = await postAnalysis();
     assert.equal(responseBody.statusCode, 200);
     assert.equal(providerCalls, 1);
@@ -1490,7 +1523,6 @@ test('authenticated chart upload returns normalized candidate levels through the
     server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));
     global.fetch = previousFetch;
-    persistentStore.increment = previousIncrement;
     if (previousApiKey == null) delete process.env.OPENROUTER_API_KEY;
     else process.env.OPENROUTER_API_KEY = previousApiKey;
     if (previousRevenueCatKey == null) delete process.env.REVENUECAT_SECRET_API_KEY;

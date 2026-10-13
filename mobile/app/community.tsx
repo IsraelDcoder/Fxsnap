@@ -354,7 +354,7 @@ export default function CommunityScreen() {
       ? currentAnalysis
       : savedAnalyses.find((analysis) => analysis.id === shareAnalysisId) || null;
     if (!selected) return null;
-    if (!isSubscribed && !selected.freeAnalysisUsed) {
+    if (!isSubscribed) {
       return {
         ...buildAnalysisSnapshot(selected),
         takeProfits: (selected.takeProfitLevels || (selected.tradeSetup?.takeProfit ? [selected.tradeSetup.takeProfit] : [])).slice(0, 1),

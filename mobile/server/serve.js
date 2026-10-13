@@ -34,7 +34,6 @@ const {
   createAuth,
   decodeAccountAuth,
   verifyAuth,
-  verifyFreeAnalysisIdentity,
 } = require('./auth');
 const marketService = require('./marketService');
 // Optional Twelve Data provider (server-side market data proxy)
@@ -156,8 +155,6 @@ const DEFAULT_TRADE_SETUP = {
   risk_reward: null,
   setup_status: 'unknown',
 };
-const FREE_ANALYSIS_KEY_PREFIX = 'fxsnap:free-analysis:v1:';
-const FREE_ANALYSIS_LOCK_TTL_SECONDS = 150;
 const DEFAULT_CHART_INSTRUMENT_RULES = {
   XAUUSD: { tickSize: 0.01, pricePrecision: 2, maxEntryDistanceTicks: 500 },
   XAGUSD: { tickSize: 0.01, pricePrecision: 2, maxEntryDistanceTicks: 500 },
@@ -476,7 +473,6 @@ function normalizeCandidateLevelFollowup(raw) {
 }
 const MultiTimeframeInputSchema = z.object({
   pair: z.string().trim().min(1).max(20),
-  premiumAccess: z.boolean().optional(),
   charts: z.object({
     h4: z.object({
       imageBase64: z.string().min(100).max(5_400_000),
@@ -2209,10 +2205,6 @@ function verifyToken(req) {
   const token = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
   return verifyAuth(AUTH_SECRET, token);
 }
-function getFreeAnalysisIdentity(req, fallbackDeviceId) {
-  const token = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
-  return verifyFreeAnalysisIdentity(AUTH_SECRET, token) || fallbackDeviceId;
-}
 function requireAuth(req, res) {
   const deviceId = verifyToken(req);
   if (!deviceId) { sendJson(res, 401, { error: 'A valid anonymous session is required.' }); return null; }
@@ -2642,7 +2634,9 @@ async function handleAccountDeletion(req, res) {
 }
 
 async function generateStrategy(req, res) {
-  if (!requireAuth(req, res)) return;
+  const deviceId = requireAuth(req, res);
+  if (!deviceId) return;
+  if (!(await requirePremiumSubscription(deviceId, res))) return;
   if (!process.env.OPENROUTER_API_KEY || process.env.OPENROUTER_API_KEY.startsWith('replace_')) {
     return sendJson(res, 503, { error: 'OpenRouter is not configured. Set OPENROUTER_API_KEY on the server.' });
   }
@@ -3610,7 +3604,6 @@ function aiInvalidResponse(input, message) {
  */
 async function analyzeChart(req, res) {
   const deviceId = requireAuth(req, res); if (!deviceId) return;
-  const freeAnalysisIdentity = getFreeAnalysisIdentity(req, deviceId);
   if (!(await allowRequest(req, deviceId))) return sendJson(res, 429, { error: 'Too many requests. Try again shortly.' });
 
   let input = {};
@@ -3620,7 +3613,6 @@ async function analyzeChart(req, res) {
     return sendJson(res, 400, { error: error.message || 'Invalid JSON body.' });
   }
 
-  let freeAnalysisLockKey = null;
   try {
     const imageBase64 = typeof input.imageBase64 === 'string' ? input.imageBase64 : typeof input.image === 'string' ? input.image : '';
     const mime = typeof input.mimeType === 'string' ? input.mimeType : 'image/jpeg';
@@ -3631,38 +3623,10 @@ async function analyzeChart(req, res) {
     if (!['image/jpeg', 'image/png', 'image/webp'].includes(mime)) {
       return sendJson(res, 400, { error: 'Only JPEG, PNG, and WebP chart images are supported.' });
     }
+    if (!(await requirePremiumSubscription(deviceId, res))) return;
     const hasOpenRouter = Boolean(process.env.OPENROUTER_API_KEY && !process.env.OPENROUTER_API_KEY.startsWith('replace_'));
     if (!hasOpenRouter) {
       return sendJson(res, 200, aiUnavailableResponse(input, 'Chart AI is not configured on the server. Set OPENROUTER_API_KEY.'));
-    }
-
-    const verifiedPremium = await getRevenueCatPremiumStatus(deviceId);
-    const hasPremiumAccess = verifiedPremium === true || (verifiedPremium === null && input.premiumAccess === true);
-    if (!hasPremiumAccess) {
-      if (!persistentStore.enabled) return sendJson(res, 503, { error: 'Free analysis requires durable server storage.' });
-      const freeAnalysisKey = `${FREE_ANALYSIS_KEY_PREFIX}${freeAnalysisIdentity}`;
-      if (await persistentStore.getJson(freeAnalysisKey)) {
-        return sendJson(res, 402, {
-          code: 'PREMIUM_REQUIRED',
-          error: 'premium_required',
-          message: 'Your free analysis has been used. Get unlimited breakdowns with Premium.',
-        });
-      }
-      const lockKey = `${freeAnalysisKey}:pending`;
-      const claimCount = await persistentStore.increment(lockKey, FREE_ANALYSIS_LOCK_TTL_SECONDS);
-      if (claimCount !== 1) {
-        return sendJson(res, 409, { code: 'ANALYSIS_IN_PROGRESS', error: 'Your free analysis is already running. Please wait for it to finish.' });
-      }
-      freeAnalysisLockKey = lockKey;
-      if (await persistentStore.getJson(freeAnalysisKey)) {
-        await persistentStore.deleteKey(freeAnalysisLockKey, FREE_ANALYSIS_LOCK_TTL_SECONDS);
-        freeAnalysisLockKey = null;
-        return sendJson(res, 402, {
-          code: 'PREMIUM_REQUIRED',
-          error: 'premium_required',
-          message: 'Your free analysis has been used. Get unlimited breakdowns with Premium.',
-        });
-      }
     }
 
     {
@@ -3789,22 +3753,12 @@ async function analyzeChart(req, res) {
         }
       }
 
-      if (freeAnalysisLockKey && ['success', 'no_trade'].includes(finalResult.status)) {
-        await persistentStore.setJson(`${FREE_ANALYSIS_KEY_PREFIX}${freeAnalysisIdentity}`, { usedAt: new Date().toISOString() });
-        finalResult.freeAnalysisUsed = true;
-      }
       return sendJson(res, 200, finalResult);
     }
   } catch (error) {
     const detail = sanitizeDiagnosticText(error instanceof Error ? error.message : 'Unknown analysis error.');
     console.error('[Chart AI] Error:', { error: detail });
     return sendJson(res, 200, aiUnavailableResponse(input, `Chart AI failed: ${detail}`));
-  } finally {
-    if (freeAnalysisLockKey) {
-      await persistentStore.deleteKey(freeAnalysisLockKey, FREE_ANALYSIS_LOCK_TTL_SECONDS).catch((error) => {
-        console.error('[Chart AI] Failed to release free-analysis claim:', error);
-      });
-    }
   }
 }
 
@@ -3824,18 +3778,9 @@ async function analyzeMultiTimeframeCharts(req, res) {
   }
   const input = inputResult.data;
 
+  if (!(await requirePremiumSubscription(deviceId, res))) return;
   const hasOpenRouter = Boolean(process.env.OPENROUTER_API_KEY && !process.env.OPENROUTER_API_KEY.startsWith('replace_'));
   if (!hasOpenRouter) return sendJson(res, 200, aiUnavailableResponse(input, 'Chart AI is not configured on the server. Set OPENROUTER_API_KEY.'));
-
-  const verifiedPremium = input.premiumAccess === true ? await getRevenueCatPremiumStatus(deviceId) : false;
-  const hasPremiumAccess = verifiedPremium === true || (verifiedPremium === null && input.premiumAccess === true);
-  if (!hasPremiumAccess) {
-    return sendJson(res, 402, {
-      code: 'PREMIUM_REQUIRED',
-      error: 'premium_required',
-      message: 'A Premium subscription is required for chart analysis.',
-    });
-  }
 
   try {
     const raw = await callVisionModel(buildMultiTimeframeMessages(input.pair, input.charts), 60000);
@@ -3972,28 +3917,30 @@ async function getRevenueCatPremiumStatus(deviceId) {
   }
 }
 
+async function requirePremiumSubscription(deviceId, res) {
+  const active = await getRevenueCatPremiumStatus(deviceId);
+  if (active === true) return true;
+  if (active === false) {
+    sendJson(res, 402, {
+      code: 'PREMIUM_REQUIRED',
+      error: 'premium_required',
+      message: 'An active subscription is required to use this feature.',
+    });
+  } else {
+    sendJson(res, 503, {
+      code: 'SUBSCRIPTION_VERIFICATION_UNAVAILABLE',
+      error: 'subscription_verification_unavailable',
+      message: 'Your subscription could not be verified. Please try again.',
+    });
+  }
+  return false;
+}
+
 async function getAnalysisAccess(req, res) {
   const deviceId = requireAuth(req, res); if (!deviceId) return;
-  const freeAnalysisIdentity = getFreeAnalysisIdentity(req, deviceId);
-  if (!persistentStore.enabled) return sendJson(res, 503, { error: 'Analysis access requires durable server storage.' });
-  try {
-    const freeAnalysisKey = `${FREE_ANALYSIS_KEY_PREFIX}${freeAnalysisIdentity}`;
-    const [used, pending, premium] = await Promise.all([
-      persistentStore.getJson(freeAnalysisKey),
-      persistentStore.getCounter(`${freeAnalysisKey}:pending`, FREE_ANALYSIS_LOCK_TTL_SECONDS),
-      getRevenueCatPremiumStatus(deviceId),
-    ]);
-    const freeAnalysisAvailable = !used && pending < 1;
-    return sendJson(res, 200, {
-      canAnalyze: premium === true || freeAnalysisAvailable,
-      freeAnalysisAvailable,
-      analysisInProgress: premium !== true && !used && pending > 0,
-      freeAnalysesUsed: used ? 1 : 0,
-      freeAnalysisLimit: 1,
-    });
-  } catch (error) {
-    return sendJson(res, 503, { error: error.message || 'Unable to check analysis access.' });
-  }
+  const premium = await getRevenueCatPremiumStatus(deviceId);
+  if (premium === null) return sendJson(res, 503, { error: 'Unable to verify your subscription.' });
+  return sendJson(res, 200, { canAnalyze: premium });
 }
 
 function getPaywallRemoteConfig(req, res) {
@@ -4061,9 +4008,7 @@ function createRequestHandler() {
       return readJsonBody(req).then((body) => {
         const deviceId = String(body.deviceId || '');
         if (!/^[a-zA-Z0-9_-]{16,128}$/.test(deviceId)) return sendJson(res, 400, { error: 'Invalid device identity.' });
-        const freeAnalysisId = String(body.freeAnalysisId || deviceId);
-        if (!/^[a-zA-Z0-9_-]{16,128}$/.test(freeAnalysisId)) return sendJson(res, 400, { error: 'Invalid free-analysis device identity.' });
-        return sendJson(res, 200, { token: createAuth(AUTH_SECRET, deviceId, undefined, freeAnalysisId), expiresIn: 30 * 24 * 60 * 60 });
+        return sendJson(res, 200, { token: createAuth(AUTH_SECRET, deviceId), expiresIn: 30 * 24 * 60 * 60 });
       }).catch((error) => sendJson(res, 400, { error: error.message }));
     }
     if (pathname === '/api/account/google' && req.method === 'POST') {

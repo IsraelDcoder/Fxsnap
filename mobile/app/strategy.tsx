@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
-import { ActivityIndicator, Platform, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Platform, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { AnimatedTouchableOpacity as TouchableOpacity } from '@/components/AnimatedTouchableOpacity';
 import { AmbientBackdrop } from '@/components/AmbientBackdrop';
 import Animated, { FadeIn, FadeInDown, FadeInUp, useReducedMotion } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import * as Haptics from '@/services/haptics';
 import { useApp } from '@/context/AppContext';
 import type { SavedStrategy } from '@/context/AppContext';
@@ -53,20 +53,40 @@ function Generation() {
 export default function StrategyScreen() {
   const insets = useSafeAreaInsets(); const colors = useColors(); const { saveStrategy, savedStrategies, checkFeatureAccess } = useApp();
   const [stage, setStage] = useState<Stage>('inputs'); const [answers, setAnswers] = useState<Answers>({ style: null, risk: '1', pairs: [], session: null, experience: null }); const [variation, setVariation] = useState(0); const [name, setName] = useState(''); const [strategy, setStrategy] = useState<Strategy | null>(null); const [error, setError] = useState<string | null>(null);
+  const [accessVerified, setAccessVerified] = useState(false);
   const top = Platform.OS === 'web' ? 67 : insets.top; const bottom = Platform.OS === 'web' ? 34 : insets.bottom; const valid = Boolean(answers.style && answers.session && answers.experience && answers.pairs.length && Number(answers.risk) > 0 && Number(answers.risk) <= 5); const set = <K extends keyof Answers>(key: K, value: Answers[K]) => setAnswers((old) => ({ ...old, [key]: value }));
 
+  useFocusEffect(React.useCallback(() => {
+    let active = true;
+    setAccessVerified(false);
+    void checkFeatureAccess('STRATEGY_GENERATOR', '/strategy').then((access) => {
+      if (!active) return;
+      if (access.error) {
+        Alert.alert('Unable to verify access', access.error);
+        router.replace({ pathname: '/paywall', params: { source: 'subscription-required' } });
+        return;
+      }
+      if (access.allowed) setAccessVerified(true);
+    }).catch((accessError: unknown) => {
+      if (!active) return;
+      console.error('[ACCESS] Strategy subscription check failed.', accessError);
+      router.replace({ pathname: '/paywall', params: { source: 'subscription-required' } });
+    });
+    return () => { active = false; };
+  }, [checkFeatureAccess]));
+
+  if (!accessVerified) return null;
+
   const generate = async () => {
+    await runGeneration(variation);
+  };
+  const runGeneration = async (generationVariation: number) => {
     const access = await checkFeatureAccess('STRATEGY_GENERATOR', '/strategy');
     if (access.error) {
       setError(access.error);
       return;
     }
-    if (!access.allowed) {
-      return;
-    }
-    await runGeneration(variation);
-  };
-  const runGeneration = async (generationVariation: number) => {
+    if (!access.allowed) return;
     setError(null);
     setStage('generating');
     try {

@@ -25,7 +25,6 @@ export default function PaywallScreen() {
   const reduceMotion = useReducedMotion();
   const isDarkTheme = colors.text === '#FFFFFF';
   const { source } = useLocalSearchParams<{ source?: string }>();
-  const isAnalysisLimit = source === 'analysis-limit';
   const isAnalysisResultUnlock = source === 'analysis-result-locked';
   const returnRoute = isAnalysisResultUnlock
     ? '/analysis-result'
@@ -199,8 +198,8 @@ export default function PaywallScreen() {
           </View>
           <Text style={[styles.brandName, { color: colors.text }]}>FXSnap <Text style={styles.brandAccent}>AI</Text></Text>
         </View>
-        <Text style={[styles.title, isCompact && styles.compactTitle, { color: colors.text }]}>Your free analysis{"\nis used up"}</Text>
-        <Text style={[styles.subtitle, isCompact && styles.compactSubtitle, { color: colors.textSecondary }]}>Unlock unlimited AI chart insights — cancel anytime</Text>
+        <Text style={[styles.title, isCompact && styles.compactTitle, { color: colors.text }]}>Unlock FXSnap{"\nPremium"}</Text>
+        <Text style={[styles.subtitle, isCompact && styles.compactSubtitle, { color: colors.textSecondary }]}>Subscribe for AI chart analysis and strategy generation — cancel anytime</Text>
         <View style={styles.trustedRow}>
           <Feather name="users" size={20} color="#31D15B" />
           <Text style={[styles.trustedText, { color: colors.textSecondary }]}>Trusted by <Text style={styles.trustedCount}>3,700+</Text> traders</Text>
@@ -341,7 +340,7 @@ export default function PaywallScreen() {
               entering={reduceMotion ? undefined : FadeIn.delay(300).duration(320)}
               style={[styles.exitOfferDescription, { color: colors.textSecondary }]}
             >
-              You've used your free analysis. Unlock continued access to AI-powered chart insights with FXSnap.
+              Subscribe to unlock AI-powered chart analysis and personalized strategy generation with FXSnap.
             </Animated.Text>
             <View style={styles.exitOfferBenefits}>
               {[
