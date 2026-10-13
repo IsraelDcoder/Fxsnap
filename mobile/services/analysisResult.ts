@@ -38,20 +38,53 @@ export function hasValidatedTradeSetup(analysis: Pick<AnalysisResult, 'tradeSetu
   return isValidPrice(analysis.tradeSetup?.entryZone)
     && isValidPrice(analysis.tradeSetup?.stopLoss)
     && isValidPrice(target)
-    && riskReward != null
-    && riskReward >= 1.5;
+    && riskReward != null;
 }
 
-export function getMissingTradeLevelsExplanation(analysis: Pick<AnalysisResult, 'status' | 'tradeSetup' | 'takeProfitLevels'>): string | null {
+export function getMissingTradeLevelsExplanation(analysis: Pick<AnalysisResult, 'status' | 'tradeSetup' | 'takeProfitLevels' | 'candidateReview'>): string | null {
   if (analysis.status !== 'no_trade' && analysis.status !== 'success') return null;
   if (hasValidatedTradeSetup(analysis)) return null;
-  return 'Hold for now — the market is still developing. Wait for direction and price levels to confirm before considering an entry. Risk/reward will be calculated when the chart supports entry, stop, and target prices.';
+  if (analysis.tradeSetup?.type === 'buy' || analysis.tradeSetup?.type === 'sell') {
+    return 'A conditional setup was identified, but one or more price levels are not supported by the chart. No missing level or risk/reward value has been inferred.';
+  }
+  return 'No technically valid candidate was established from the visible chart evidence. No entry, stop, target, or risk/reward value has been inferred.';
 }
 
 export function getMarketDevelopmentPlan(
-  analysis: Pick<AnalysisResult, 'status' | 'marketBias' | 'analysis' | 'tradeSetup' | 'takeProfitLevels' | 'tradeStatus' | 'tradeTrigger'>,
+  analysis: Pick<AnalysisResult, 'status' | 'marketBias' | 'analysis' | 'tradeSetup' | 'takeProfitLevels' | 'tradeStatus' | 'tradeTrigger' | 'direction' | 'entryStatus' | 'setupType' | 'candidateReview'>,
   includeFullContext = false,
 ): string {
+  const isConditionalCandidate = analysis.tradeSetup?.type === 'buy' || analysis.tradeSetup?.type === 'sell';
+  if (isConditionalCandidate) {
+    const direction = analysis.tradeSetup!.type.toUpperCase();
+    const target = (analysis.takeProfitLevels ?? []).find(isValidPrice) ?? analysis.tradeSetup!.takeProfit;
+    const ratio = getRiskRewardRatio(analysis.tradeSetup!.riskReward);
+    const hasCompleteCandidate = isValidPrice(analysis.tradeSetup!.entryZone)
+      && isValidPrice(analysis.tradeSetup!.stopLoss)
+      && isValidPrice(target)
+      && ratio != null;
+    const entryStatus = analysis.entryStatus === 'trigger_observed'
+      ? 'Entry trigger observed in the screenshot; freshness and live execution are not implied.'
+      : analysis.entryStatus === 'missed'
+        ? 'Planned entry is marked missed.'
+        : analysis.entryStatus === 'unverified'
+          ? 'Entry status is unverified from this screenshot.'
+          : analysis.tradeStatus?.startsWith('waiting') && analysis.tradeTrigger
+            ? analysis.tradeTrigger
+            : 'Conditional setup; wait for the specified entry trigger.';
+    const setupType = analysis.setupType && analysis.setupType !== 'unspecified'
+      ? ` ${analysis.setupType.replace('_', ' ')}`
+      : '';
+    const candidateReason = analysis.candidateReview?.reason;
+    const notes = [entryStatus, candidateReason].filter(Boolean).join(' ');
+    const entryText = isValidPrice(analysis.tradeSetup!.entryZone) ? analysis.tradeSetup!.entryZone : 'not identified';
+    const stopText = isValidPrice(analysis.tradeSetup!.stopLoss) ? analysis.tradeSetup!.stopLoss : 'not identified';
+    const targetText = isValidPrice(target) ? target : 'not identified';
+    const ratioText = ratio == null ? 'not calculable from available levels' : `1:${ratio}`;
+    const candidateState = hasCompleteCandidate ? 'candidate' : 'incomplete candidate';
+    return `${direction}${setupType} ${candidateState} — Entry ${entryText}, SL ${stopText}, TP1 ${targetText}, R:R ${ratioText}. ${formatDevelopingNote(notes)}`;
+  }
+
   const isWaitingForConfirmation = analysis.tradeStatus?.startsWith('waiting') ?? false;
   const isHold = analysis.status === 'no_trade'
     || (analysis.status === 'success' && (!hasValidatedTradeSetup(analysis) || analysis.tradeStatus !== 'actionable'));
@@ -105,13 +138,13 @@ export function getTradeReadinessLabel(
   const isIdentified = (value: string) => isValidPrice(value);
   const riskRewardRatio = getRiskRewardRatio(riskReward);
   if (isIdentified(entry) && isIdentified(stopLoss) && isIdentified(takeProfit)
-    && riskRewardRatio != null && riskRewardRatio >= 1.5) {
+    && riskRewardRatio != null) {
     if (tradeStatus === 'actionable') return 'Ready';
     if (tradeStatus?.startsWith('waiting')) return 'Waiting for confirmation';
     const side = direction === 'BUY' || direction === 'SELL' ? `${direction} ` : '';
     return `${side}candidate setup · awaiting validation`;
   }
-  return 'Hold — market still developing';
+  return 'Not ready — the setup is incomplete or its risk/reward cannot be calculated.';
 }
 
 export function formatTradeReadiness(
@@ -188,6 +221,9 @@ export function buildAnalysisResult(chart: ChartAnalysisResult, pair: string, im
     tradeTrigger: chart.tradeTrigger,
     whyNotNow: chart.whyNotNow,
     dataLimitations: chart.dataLimitations,
+    entryStatus: chart.entryStatus,
+    setupType: chart.setupType,
+    candidateReview: chart.candidateReview,
     multiTimeframe: chart.multiTimeframe,
   };
 }

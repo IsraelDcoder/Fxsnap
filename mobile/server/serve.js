@@ -28,6 +28,7 @@ loadEnvFile();
 const { z } = require('zod');
 const persistentStore = require('./persistentStore');
 const { createCommunityApi } = require('./communityApi');
+const { getMaximumScreenshotAgeMinutes } = require('./strategyConfig');
 const {
   createAccountAuth,
   createAuth,
@@ -157,7 +158,6 @@ const DEFAULT_TRADE_SETUP = {
 };
 const FREE_ANALYSIS_KEY_PREFIX = 'fxsnap:free-analysis:v1:';
 const FREE_ANALYSIS_LOCK_TTL_SECONDS = 150;
-const DEFAULT_CHART_MAX_AGE_MINUTES = 24 * 60;
 const DEFAULT_CHART_INSTRUMENT_RULES = {
   XAUUSD: { tickSize: 0.01, pricePrecision: 2, maxEntryDistanceTicks: 500 },
   XAGUSD: { tickSize: 0.01, pricePrecision: 2, maxEntryDistanceTicks: 500 },
@@ -262,7 +262,7 @@ function hasActionableTradeSetup(tradeSetup) {
   const stop = parsePriceOrRange(tradeSetup.stop_loss);
   const target = parsePriceOrRange(tradeSetup.take_profit);
   const rrValue = Number(tradeSetup.risk_reward);
-  if (!entry || !stop || !target || !Number.isFinite(rrValue) || rrValue < 1.5) return false;
+  if (!entry || !stop || !target || !Number.isFinite(rrValue) || rrValue <= 0) return false;
   const calculated = computeRRFromLevels({
     entry: tradeSetup.entry_zone,
     sl: tradeSetup.stop_loss,
@@ -270,7 +270,7 @@ function hasActionableTradeSetup(tradeSetup) {
     direction: tradeSetup.type,
   });
   return calculated?.rr != null
-    && calculated.rr >= 1.5
+    && calculated.rr > 0
     && Math.abs(calculated.rr - rrValue) <= Math.max(0.1, calculated.rr * 0.05);
 }
 
@@ -367,7 +367,34 @@ const CandidateLevelFollowupSchema = z.object({
   stop_loss: z.string().trim().min(1).max(200).optional(),
   take_profit_levels: z.array(z.string().trim().min(1).max(200)).max(2).optional(),
   setup_status: z.enum(['valid', 'missed', 'invalidated', 'unclear']).optional(),
+  entry_status: z.enum(['waiting_for_trigger', 'trigger_observed', 'missed', 'unverified']).optional(),
+  entry_type: z.enum(['limit_zone', 'breakout', 'rejection', 'other', 'unspecified']).optional(),
   reason: z.string().trim().max(300).optional(),
+});
+const DirectionalEvidenceSchema = z.enum(['buy', 'sell', 'neutral', 'unavailable']);
+const TwoSidedCandidateSchema = z.object({
+  status: z.enum(['candidate', 'unsupported']),
+  entry_zone: z.string().trim().min(1).max(200).optional(),
+  stop_loss: z.string().trim().min(1).max(200).optional(),
+  take_profit_levels: z.array(z.string().trim().min(1).max(200)).max(2).optional(),
+  setup_status: z.enum(['valid', 'missed', 'invalidated', 'unclear']).optional(),
+  entry_status: z.enum(['waiting_for_trigger', 'trigger_observed', 'missed', 'unverified']).optional(),
+  entry_type: z.enum(['limit_zone', 'breakout', 'rejection', 'other', 'unspecified']).optional(),
+  evidence: z.object({
+    trend: DirectionalEvidenceSchema,
+    structure: DirectionalEvidenceSchema,
+    zone: z.enum(['support', 'resistance', 'neutral', 'unavailable']),
+    trigger: DirectionalEvidenceSchema,
+    higher_timeframe: DirectionalEvidenceSchema,
+    liquidity: DirectionalEvidenceSchema,
+    rsi: DirectionalEvidenceSchema,
+  }),
+  reason: z.string().trim().min(1).max(500),
+});
+const TwoSidedCandidateReviewSchema = z.object({
+  status: z.literal('reviewed'),
+  buy: TwoSidedCandidateSchema,
+  sell: TwoSidedCandidateSchema,
 });
 function normalizeCandidateLevelFollowup(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
@@ -421,6 +448,29 @@ function normalizeCandidateLevelFollowup(raw) {
     stop_loss: stop || undefined,
     take_profit_levels: targets,
     setup_status: setupStatus,
+    entry_status: canonicalizeEnumOr(
+      setup.entry_status ?? setup.entryStatus ?? raw.entry_status ?? raw.entryStatus,
+      {
+        waiting_for_trigger: 'waiting_for_trigger',
+        trigger_observed: 'trigger_observed',
+        missed: 'missed',
+        unverified: 'unverified',
+      },
+      ['waiting_for_trigger', 'trigger_observed', 'missed', 'unverified'],
+      undefined,
+    ),
+    entry_type: canonicalizeEnumOr(
+      setup.entry_type ?? setup.entryType ?? raw.entry_type ?? raw.entryType,
+      {
+        limit_zone: 'limit_zone',
+        breakout: 'breakout',
+        rejection: 'rejection',
+        other: 'other',
+        unspecified: 'unspecified',
+      },
+      ['limit_zone', 'breakout', 'rejection', 'other', 'unspecified'],
+      undefined,
+    ),
     reason: boundedString(raw.reason ?? raw.explanation ?? raw.rationale, '', 300) || undefined,
   };
 }
@@ -667,13 +717,7 @@ function getPriceConsistencyIssues(result, pairHint, now = Date.now()) {
   } else {
     const timestamp = Date.parse(chart.latest_candle_timestamp);
     const hasTimezone = /(?:Z|[+-]\d{2}:\d{2})$/i.test(chart.latest_candle_timestamp);
-    const configuredMaxAge = process.env.FXSNAP_CHART_MAX_AGE_MINUTES;
-    const maxAgeMinutes = configuredMaxAge == null || configuredMaxAge === ''
-      ? DEFAULT_CHART_MAX_AGE_MINUTES
-      : Number(configuredMaxAge);
-    if (!Number.isFinite(maxAgeMinutes) || maxAgeMinutes <= 0) {
-      throw new Error('FXSNAP_CHART_MAX_AGE_MINUTES must be a positive number.');
-    }
+    const maxAgeMinutes = getMaximumScreenshotAgeMinutes(chart.timeframe || result.timeframe);
     if (!hasTimezone || !Number.isFinite(timestamp)) {
       issues.push('The visible latest-candle timestamp is not a reliable ISO-8601 timestamp with a timezone.');
     } else if (timestamp > now + 5 * 60_000 || now - timestamp > maxAgeMinutes * 60_000) {
@@ -738,8 +782,8 @@ function getPriceConsistencyIssues(result, pairHint, now = Date.now()) {
     tp: target.min === target.max ? String(target.min) : `${target.min}-${target.max}`,
     direction,
   });
-  if (!calculated || calculated.rr == null || !Number.isFinite(calculated.rr) || calculated.rr < 1.5) {
-    issues.push('The proposed entry, stop, and TP1 do not produce a valid risk/reward of at least 1.5.');
+  if (!calculated || !Number.isFinite(calculated.rr) || calculated.rr <= 0) {
+    issues.push('The proposed entry, stop, and TP1 do not produce a valid risk/reward calculation.');
   }
   if (calculated?.issues?.length) {
     issues.push('The stop loss or TP1 is on the wrong side of the proposed entry.');
@@ -804,7 +848,7 @@ function preserveUnverifiedCandidateLevels(result, issues) {
     tp: target.min === target.max ? String(target.min) : `${target.min}-${target.max}`,
     direction: setup.type,
   });
-  if (!calculated || calculated.rr == null || calculated.rr < 1.5 || calculated.issues?.length) return null;
+  if (!calculated || !Number.isFinite(calculated.rr) || calculated.rr <= 0 || calculated.issues?.length) return null;
 
   const instrumentLimitation = rule
     ? []
@@ -1190,15 +1234,24 @@ function hasRequiredAnalysisPayload(raw) {
   if (!status) return false;
   if (status === 'invalid_image') return true;
 
-  return [
-    raw.chart,
-    raw.analysis,
-    raw.trade_setup,
-    raw.tradeSetup,
-    raw.direction,
-    raw.reasoning,
-    raw.reasons,
-  ].some((value) => value != null);
+  const chart = raw.chart && typeof raw.chart === 'object' && !Array.isArray(raw.chart)
+    ? raw.chart
+    : null;
+  const analysis = raw.analysis && typeof raw.analysis === 'object' && !Array.isArray(raw.analysis)
+    ? raw.analysis
+    : null;
+  if (!chart || typeof chart.is_chart !== 'boolean' || !analysis) return false;
+
+  const hasVisibleAnalysis = ['trend', 'structure_bias', 'market_structure', 'structure', 'sentiment']
+    .some((key) => typeof analysis[key] === 'string' && analysis[key].trim() !== ''
+      && !['unknown', 'uncertain', 'unavailable'].includes(analysis[key].trim().toLowerCase()));
+  const hasExplanation = Boolean(
+    (typeof raw.message === 'string' && raw.message.trim())
+    || (typeof analysis.notes === 'string' && analysis.notes.trim())
+    || (Array.isArray(raw.reasoning) && raw.reasoning.some((item) => typeof item === 'string' && item.trim()))
+    || (Array.isArray(raw.reasons) && raw.reasons.some((item) => typeof item === 'string' && item.trim())),
+  );
+  return hasVisibleAnalysis && hasExplanation;
 }
 
 function normalizeAnalysis(raw) {
@@ -1498,11 +1551,6 @@ function evaluateDecisionEngine(obs) {
         failed.push('The AI-provided levels are incomplete or geometrically invalid; no trade was validated.');
       } else if (rrValue == null || rrValue <= 0) {
         failed.push('The AI did not provide a valid risk/reward value for the proposed price levels.');
-      } else if (rrValue < 1.5) {
-        failed.push('Risk/reward does not meet the minimum 1.5 threshold for a trade.');
-      }
-      if (computed.rr != null && computed.rr < 1.5 && rrValue >= 1.5) {
-        failed.push('The AI-reported risk/reward meets the threshold, but the proposed price levels imply a lower ratio; verify the levels before trading.');
       }
     }
   } else if (hasProposedLevels) {
@@ -1561,11 +1609,13 @@ function evaluateDecisionEngine(obs) {
   score = Math.max(0, Math.min(100, Math.round(score)));
 
   const clearDirectionalRead = Boolean(validations.trend || validations.structure || hasDirectionalEvidence);
-  const setupReady = Boolean(trade_setup.type !== 'none' && trade_setup.risk_reward != null && Number(trade_setup.risk_reward) >= 1.5 && validations.candidate_setup);
+  const setupReady = Boolean(trade_setup.type !== 'none'
+    && Number.isFinite(Number(trade_setup.risk_reward))
+    && Number(trade_setup.risk_reward) > 0
+    && validations.candidate_setup);
 
   validations.all_required_conditions_met = clearDirectionalRead && (setupReady || (!setupReady && trade_setup.type === 'none' && !failed.some((f) => /invalid|not clearly visible|directional structure/i.test(f))));
 
-  const rrTooLow = trade_setup && trade_setup.type !== 'none' && (trade_setup.risk_reward == null || Number(trade_setup.risk_reward) < 1.5);
   const result = {
     strategy_validation: validations,
     strategy_score: score,
@@ -1578,13 +1628,8 @@ function evaluateDecisionEngine(obs) {
 
   if (!clearDirectionalRead && !validations.candidate_setup) {
     result.status = 'no_trade';
-  } else if (!validations.candidate_setup && trade_setup.type !== 'none'
-    || rrTooLow
-    || failed.some((condition) => /proposed price levels imply a lower ratio/i.test(condition))) {
+  } else if (!validations.candidate_setup && trade_setup.type !== 'none') {
     result.status = 'no_trade';
-    if (!result.failed_conditions.includes('Risk/reward does not meet the minimum threshold for a trade.')) {
-      result.failed_conditions.push('Risk/reward does not meet the minimum threshold for a trade.');
-    }
   }
 
   return result;
@@ -1899,7 +1944,7 @@ A trade is actionable only if ALL conditions are met:
 - Clear entry zone
 - Logical stop loss placement
 - Up to two chart-supported take-profit targets, when both are visible
-- Minimum risk-reward ratio of 1.5, calculated from the proposed entry, stop, and TP1
+- Calculate and report risk/reward from the proposed entry, stop, and TP1; do not enforce a fixed minimum or alter levels to reach a preferred ratio
 - No conflicting signals
 
 If any condition fails, return status="no_trade" but preserve any defensible directional candidate levels as described above.
@@ -1991,14 +2036,6 @@ function enforceValidationRules(response) {
   // - Keep response.status intact (success/no_trade) as determined by the evaluation engine.
   if (response.status === 'success') {
     try {
-      const rr = Number(response.trade_setup && response.trade_setup.risk_reward) || 0;
-      if (rr > 0 && rr < 1.5) {
-        // Preserve analysis; mark setup as waiting for a better entry
-        if (!response.tradeStatus || response.tradeStatus === 'actionable') response.tradeStatus = 'waiting_for_pullback';
-        response.tradeTrigger = response.tradeTrigger || 'Entry quality is below the minimum risk-reward threshold; wait for a better setup.';
-        response.analysis = response.analysis || {};
-        response.analysis.notes = mergeUniqueStrings([response.analysis.notes || '', 'Signal held back: risk-reward is below the 1.5 minimum.']).join(' ').trim();
-      }
       if (typeof response.marketConfidence === 'number' && response.marketConfidence < 40) {
         response.analysis = response.analysis || {};
         response.analysis.notes = mergeUniqueStrings([response.analysis.notes || '', 'Market clarity is low; consider waiting for additional confirmation.']).join(' ').trim();
@@ -2945,6 +2982,11 @@ async function callVisionModel(messages, timeoutMs = 30000) {
   if (!response.ok) {
     throw new Error(payload?.error?.message || 'Chart AI request failed.');
   }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    const error = new Error('The chart AI returned malformed or empty JSON.');
+    error.code = 'AI_INVALID_RESPONSE';
+    throw error;
+  }
 
   return parsed;
 }
@@ -2968,7 +3010,6 @@ async function callOpenRouterTrader(imageBase64, mimeType, pair, timeoutMs = 450
 function shouldRequestCandidateLevelFollowup(result) {
   if (!result
     || result.status !== 'no_trade'
-    || !['bullish', 'bearish'].includes(result.marketBias)
     || result.chart?.is_chart !== true
     || !['good', 'acceptable'].includes(result.chart?.chart_quality)
     || !result.chart?.price_scale_visible
@@ -2984,7 +3025,7 @@ function shouldRequestCandidateLevelFollowup(result) {
   );
 }
 
-function buildCandidateLevelFollowupMessages(imageBase64, mimeType, pair, result) {
+function buildCandidateLevelFollowupMessages(imageBase64, mimeType, pair, result, charts) {
   const context = {
     appInstrumentHint: pair || 'not provided; do not treat as authoritative',
     visibleInstrument: result.chart?.pair || result.detectedPair || 'not identified',
@@ -2996,18 +3037,31 @@ function buildCandidateLevelFollowupMessages(imageBase64, mimeType, pair, result
     firstPassStop: result.trade_setup?.stop_loss || 'not established',
     firstPassTargets: parseTakeProfitLevels(result.trade_setup?.take_profit_levels, result.trade_setup?.take_profit),
     firstPassAnalysis: result.analysis?.notes || result.analysis?.market_structure || result.analysis?.structure || '',
+    multiTimeframe: result.multiTimeframe ? {
+      alignment: result.multiTimeframe.alignment,
+      h4: result.multiTimeframe.h4,
+      m15: result.multiTimeframe.m15,
+    } : undefined,
   };
+  const chartContent = charts
+    ? [
+      { type: 'text', text: `The first image is the H4 context chart for ${pair}:` },
+      { type: 'image_url', image_url: { url: `data:${charts.h4.mimeType};base64,${charts.h4.imageBase64}` } },
+      { type: 'text', text: 'The second image is the M15 entry chart. Use it for entry location and the visible trigger:' },
+      { type: 'image_url', image_url: { url: `data:${charts.m15.mimeType};base64,${charts.m15.imageBase64}` } },
+    ]
+    : [
+      { type: 'text', text: `Review the chart image itself and supplement missing candidate levels where supported. Context is not a substitute for visible chart evidence: ${JSON.stringify(context)}` },
+      { type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageBase64}` } },
+    ];
   return [
     {
       role: 'system',
-      content: `You are doing exactly one focused second-pass review of the same uploaded chart because the first pass found a clear direction but missed one or more core trade levels. Re-examine the latest visible candles, chart scale, and nearby support/resistance, without assuming the app's instrument hint is correct. Keep the established direction. Return each candidate price independently only when it can be defensibly anchored to visible chart evidence; do not invent exact prices, calculate from an assumed pip size, or extrapolate unseen prices. Fill missing levels and retain supported first-pass levels. Partial results are useful: return any supported entry, stop, or target even when another level or a complete risk/reward calculation is unavailable; omit only unsupported fields. Missing or unreadable current-price markers, candle timestamps, or candle state do not prevent returning chart-supported candidate levels: set setup_status="unclear" when freshness or current-price validity cannot be verified. Use "missed" or "invalidated" when visible chart evidence shows that explicitly. Set status="no_candidate" only if no additional level can be supported, the scale cannot anchor exact prices, or candidate geometry is contradictory. These are candidate levels, not a validated or actionable trade. Do not describe them as a fresh opportunity unless freshness is independently verified. Return only JSON: {"status":"candidate|no_candidate","direction":"buy|sell","entry_zone":"visible price or range, if supported","stop_loss":"visible price, if supported","take_profit_levels":["TP1","TP2 optional, if supported"],"setup_status":"valid|missed|invalidated|unclear","reason":"brief chart evidence for each level and any verification limitation"}. For no_candidate, return status and reason.`,
+      content: `You are doing exactly one independent, two-sided review of the same uploaded chart because the first pass did not establish a complete candidate. Evaluate BUY and SELL separately; do not inherit or assume the first-pass direction. Treat market bias and candidate direction as separate. Use only the visible chart and current strategy rules. Calculate risk/reward from each proposed entry zone, stop, and TP1; do not enforce a fixed minimum or distort levels to reach a preferred ratio. The server will recompute the actual ratio. Do not invent prices or claim an entry is confirmed when its trigger is absent. Return chart-anchored candidate levels even when the entry is conditional; use unsupported when a direction has no defensible setup. For each side report the direction of trend, structure, entry trigger, higher-timeframe evidence, liquidity, and RSI as buy, sell, neutral, or unavailable; report zone as support, resistance, neutral, or unavailable. Do not manufacture missing indicator/timeframe evidence. Set setup_status to missed or invalidated only when visible; otherwise use valid only if the candidate structure still holds, or unclear when it cannot be verified. Set entry_status to waiting_for_trigger, trigger_observed, missed, or unverified. Set entry_type only to limit_zone, breakout, rejection, other, or unspecified. These are conditional candidates, not actionable trades. For multi-timeframe mode, reject any side that conflicts with the aligned H4/M15 direction or lacks the required M15 trigger. Output exactly this JSON shape: {"status":"reviewed","buy":{"status":"candidate|unsupported","entry_zone":"price/range or omit","stop_loss":"price or omit","take_profit_levels":["TP1","optional TP2"],"setup_status":"valid|missed|invalidated|unclear","entry_status":"waiting_for_trigger|trigger_observed|missed|unverified","entry_type":"limit_zone|breakout|rejection|other|unspecified","evidence":{"trend":"buy|sell|neutral|unavailable","structure":"buy|sell|neutral|unavailable","zone":"support|resistance|neutral|unavailable","trigger":"buy|sell|neutral|unavailable","higher_timeframe":"buy|sell|neutral|unavailable","liquidity":"buy|sell|neutral|unavailable","rsi":"buy|sell|neutral|unavailable"},"reason":"visible evidence or why unsupported"},"sell":{"status":"candidate|unsupported","entry_zone":"price/range or omit","stop_loss":"price or omit","take_profit_levels":["TP1","optional TP2"],"setup_status":"valid|missed|invalidated|unclear","entry_status":"waiting_for_trigger|trigger_observed|missed|unverified","entry_type":"limit_zone|breakout|rejection|other|unspecified","evidence":{"trend":"buy|sell|neutral|unavailable","structure":"buy|sell|neutral|unavailable","zone":"support|resistance|neutral|unavailable","trigger":"buy|sell|neutral|unavailable","higher_timeframe":"buy|sell|neutral|unavailable","liquidity":"buy|sell|neutral|unavailable","rsi":"buy|sell|neutral|unavailable"},"reason":"visible evidence or why unsupported"}}. Do not choose a winner in place of the server's evidence comparison. If a field cannot be read, say unavailable; do not return placeholder prices.`,
     },
     {
       role: 'user',
-      content: [
-        { type: 'text', text: `Review the chart image itself and supplement missing candidate levels where supported. Context is not a substitute for visible chart evidence: ${JSON.stringify(context)}` },
-        { type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageBase64}` } },
-      ],
+      content: chartContent,
     },
   ];
 }
@@ -3090,7 +3144,26 @@ function addPriceDataLimitations(result, pairHint) {
 async function retryPriceConsistencyOnce(result, pairHint, retryMessages, isMultiTimeframe = false) {
   if (result.levelFollowupStatus === 'completed') {
     const issues = getPriceConsistencyIssues(result, pairHint);
-    if (issues.length === 0) return result;
+    if (issues.length === 0) {
+      if (result.entryStatus === 'trigger_observed'
+        && result.trade_setup?.setup_status === 'valid'
+        && result.candidateReview?.status === 'selected') {
+        const direction = result.trade_setup.type === 'buy' ? 'BUY' : 'SELL';
+        return {
+          ...result,
+          status: 'success',
+          decision: direction,
+          tradeDecision: direction,
+          tradeType: direction,
+          setupDirection: result.trade_setup.type,
+          setupStatus: 'CONFIRMED',
+          tradeStatus: 'actionable',
+          entryReadiness: 100,
+          tradeTrigger: 'The entry trigger was observed and the candidate passed the screenshot, level, freshness, and risk checks.',
+        };
+      }
+      return result;
+    }
     const reason = `Candidate levels are shown for analysis only; the setup is not validated as a fresh opportunity. ${issues.join(' ')}`;
     const cannotVerifyFreshness = issues.some((issue) => /current price cannot be reliably read|rightmost candle could not be distinguished|timestamp is unreadable|timestamp is not a reliable|timestamp is stale or in the future|instrument or its tick-size rules could not be verified/i.test(issue));
     return {
@@ -3195,9 +3268,10 @@ function applyCandidateLevelFollowup(result, rawFollowup) {
   }
 
   const candidate = parsed.data;
-  const expectedDirection = result.marketBias === 'bullish' ? 'buy' : 'sell';
-  if (candidate.direction && candidate.direction !== expectedDirection) {
-    const reason = 'The follow-up direction conflicted with the established market read; its levels were not used.';
+  const original = result.trade_setup || DEFAULT_TRADE_SETUP;
+  const direction = candidate.direction || (result.marketBias === 'bullish' ? 'buy' : result.marketBias === 'bearish' ? 'sell' : 'none');
+  if (direction === 'none') {
+    const reason = 'The candidate review did not establish a direction.';
     return {
       ...result,
       levelFollowupStatus: 'no_candidate',
@@ -3205,9 +3279,6 @@ function applyCandidateLevelFollowup(result, rawFollowup) {
       dataLimitations: mergeUniqueStrings([...(result.dataLimitations || []), reason]),
     };
   }
-
-  const original = result.trade_setup || DEFAULT_TRADE_SETUP;
-  const direction = candidate.direction || expectedDirection;
   const originalEntry = parsePriceOrRange(original.entry_zone) ? original.entry_zone : null;
   const candidateEntry = parsePriceOrRange(candidate.entry_zone) ? candidate.entry_zone : null;
   const entry = originalEntry || candidateEntry;
@@ -3288,6 +3359,9 @@ function applyCandidateLevelFollowup(result, rawFollowup) {
     },
     levelFollowupStatus: 'completed',
     levelFollowupReason: candidateReason,
+    entryStatus: candidate.entry_status
+      || (freshnessIsUnverified ? 'unverified' : setupStatus === 'valid' ? 'waiting_for_trigger' : 'unverified'),
+    setupType: candidate.entry_type || 'unspecified',
     dataLimitations: mergeUniqueStrings([
       ...(result.dataLimitations || []),
       'Candidate levels came from one conditional chart review. They remain non-actionable until current price and setup validity are verified.',
@@ -3309,11 +3383,227 @@ function applyCandidateLevelFollowup(result, rawFollowup) {
   };
 }
 
+function directionalEvidenceScore(candidate, direction) {
+  const evidence = candidate.evidence;
+  const weights = {
+    trend: 1,
+    structure: 2,
+    trigger: 2,
+    higher_timeframe: 2,
+    liquidity: 1,
+    rsi: 1,
+  };
+  let score = Object.entries(weights).reduce((total, [field, weight]) => (
+    total + (evidence[field] === direction ? weight : evidence[field] !== 'unavailable'
+      && evidence[field] !== 'neutral' ? -weight : 0)
+  ), 0);
+  const matchingZone = direction === 'buy' ? 'support' : 'resistance';
+  const opposingZone = direction === 'buy' ? 'resistance' : 'support';
+  if (evidence.zone === matchingZone) score += 2;
+  else if (evidence.zone === opposingZone) score -= 2;
+  return score;
+}
+
+function twoSidedGeometryIssue(candidate, direction, result) {
+  const entry = parsePriceOrRange(candidate.entry_zone);
+  const stop = parsePriceOrRange(candidate.stop_loss);
+  const targets = (candidate.take_profit_levels || []).map(parsePriceOrRange).filter(Boolean);
+  const bounds = (range) => ({
+    low: range.min,
+    high: range.max,
+  });
+  if (entry && stop) {
+    const entryBounds = bounds(entry);
+    const stopBounds = bounds(stop);
+    const stopIsCorrectSide = direction === 'buy'
+      ? stopBounds.high < entryBounds.low
+      : stopBounds.low > entryBounds.high;
+    if (!stopIsCorrectSide) return `The proposed ${direction.toUpperCase()} stop is not beyond the entry zone in the invalidation direction.`;
+  }
+  if (entry && targets.length) {
+    const entryBounds = bounds(entry);
+    const targetBounds = targets.map(bounds);
+    const allTargetsCorrectSide = targetBounds.every((target) => direction === 'buy'
+      ? target.low > entryBounds.high
+      : target.high < entryBounds.low);
+    if (!allTargetsCorrectSide) return `A proposed ${direction.toUpperCase()} target is not beyond the entry zone in the reward direction.`;
+    const targetsAreOrdered = targetBounds.slice(1).every((target, index) => direction === 'buy'
+      ? target.low > targetBounds[index].high
+      : target.high < targetBounds[index].low);
+    if (!targetsAreOrdered) return 'The proposed take-profit targets are not ordered progressively away from entry.';
+  }
+  if (entry && stop && targets[0]) {
+    const calculated = computeRRFromLevels({
+      entry: candidate.entry_zone,
+      sl: candidate.stop_loss,
+      tp: candidate.take_profit_levels[0],
+      direction,
+    });
+    if (calculated.issues.length) return calculated.issues.join(' ');
+  }
+  const symbol = result?.chart?.pair || result?.detectedPair || '';
+  const rule = symbol ? chartInstrumentRule(symbol) : null;
+  if (rule) {
+    const prices = [
+      ...(entry ? [bounds(entry).low, bounds(entry).high] : []),
+      ...(stop ? [bounds(stop).low, bounds(stop).high] : []),
+      ...targets.flatMap((target) => [bounds(target).low, bounds(target).high]),
+    ];
+    if (prices.some((price) => decimalPlaces(price) > rule.pricePrecision || !isTickAligned(price, rule))) {
+      return `The proposed ${direction.toUpperCase()} prices do not match ${symbol} precision/tick size (${rule.tickSize}).`;
+    }
+  }
+  return null;
+}
+
+function applyTwoSidedCandidateReview(result, rawReview) {
+  const parsed = TwoSidedCandidateReviewSchema.safeParse(rawReview);
+  if (!parsed.success) {
+    const reason = 'The independent BUY/SELL review returned an incomplete or malformed response.';
+    return {
+      ...result,
+      candidateReview: { status: 'invalid_response', reason },
+      reasons: mergeUniqueStrings([...(result.reasons || []), reason]),
+      dataLimitations: mergeUniqueStrings([...(result.dataLimitations || []), reason]),
+    };
+  }
+
+  const evaluatedCandidates = ['buy', 'sell'].map((direction) => {
+    const candidate = parsed.data[direction];
+    const evidenceScore = directionalEvidenceScore(candidate, direction);
+    const directionalPatternPresent = candidate.evidence.structure === direction
+      || candidate.evidence.trigger === direction
+      || candidate.evidence.zone === (direction === 'buy' ? 'support' : 'resistance');
+    const candidateHasEntryTrigger = candidate.entry_status === 'trigger_observed'
+      && candidate.evidence.trigger === direction;
+    const geometryIssue = twoSidedGeometryIssue(candidate, direction, result);
+    const timeframeAllowsDirection = !result.multiTimeframe
+      || (result.multiTimeframe.alignment === 'aligned'
+        && result.multiTimeframe.h4?.trend === direction
+        && result.multiTimeframe.m15?.trend === direction
+        && Boolean(result.multiTimeframe.m15?.confirmation?.trim()));
+    if (candidate.status !== 'candidate' || evidenceScore <= 0 || !directionalPatternPresent
+      || candidate.setup_status === 'missed' || candidate.setup_status === 'invalidated'
+      || candidate.entry_status === 'missed' || !timeframeAllowsDirection || geometryIssue) {
+      return {
+        direction,
+        candidate,
+        evidenceScore,
+        result: null,
+        rejectionReason: geometryIssue || candidate.reason,
+      };
+    }
+
+    const baseResult = {
+      ...result,
+      trade_setup: { ...DEFAULT_TRADE_SETUP, take_profit_levels: [] },
+      levelFollowupStatus: undefined,
+    };
+    const candidateResult = applyCandidateLevelFollowup(baseResult, {
+      status: 'candidate',
+      direction,
+      entry_zone: candidate.entry_zone,
+      stop_loss: candidate.stop_loss,
+      take_profit_levels: candidate.take_profit_levels,
+      setup_status: candidate.setup_status,
+      entry_status: candidate.entry_status,
+      entry_type: candidate.entry_type,
+      reason: candidate.reason,
+    });
+    const setup = candidateResult.trade_setup || DEFAULT_TRADE_SETUP;
+    const levels = [
+      setup.entry_zone,
+      setup.stop_loss,
+      ...parseTakeProfitLevels(setup.take_profit_levels, setup.take_profit),
+    ].filter((level) => parsePriceOrRange(level));
+    if (candidateResult.levelFollowupStatus !== 'completed' || levels.length === 0) {
+      return { direction, candidate, evidenceScore, result: null };
+    }
+
+    const entry = parsePriceOrRange(setup.entry_zone);
+    const stop = parsePriceOrRange(setup.stop_loss);
+    const target = parsePriceOrRange(setup.take_profit);
+    let geometryIssues = [];
+    let riskReward = null;
+    if (entry && stop && target) {
+      const calculated = computeRRFromLevels({
+        entry: setup.entry_zone,
+        sl: setup.stop_loss,
+        tp: setup.take_profit,
+        direction,
+      });
+      geometryIssues = calculated.issues || [];
+      riskReward = calculated.rr;
+      if (geometryIssues.length > 0) {
+        return { direction, candidate, evidenceScore, result: null };
+      }
+    }
+
+    const candidateReadinessReason = candidate.setup_status !== 'valid'
+      ? 'The candidate setup validity is not confirmed.'
+      : !candidateHasEntryTrigger
+        ? 'The candidate is conditional; its entry trigger has not been observed.'
+        : null;
+    return {
+      direction,
+      candidate,
+      evidenceScore,
+      result: {
+        ...candidateResult,
+        candidateReview: {
+          status: 'selected',
+          direction,
+          evidenceScore,
+          reason: candidateResult.levelFollowupReason || candidate.reason,
+        },
+        entryStatus: candidate.entry_status || (candidateHasEntryTrigger ? 'trigger_observed' : 'waiting_for_trigger'),
+        setupType: candidate.entry_type || 'unspecified',
+        tradeTrigger: candidateReadinessReason || 'Entry trigger observed; screenshot and price checks passed.',
+      },
+    };
+  });
+  const candidates = evaluatedCandidates.filter((item) => item.result);
+
+  if (candidates.length === 0) {
+    const reason = `Neither directional scenario met the provisional evidence and level checks. BUY: ${evaluatedCandidates[0].rejectionReason || parsed.data.buy.reason} SELL: ${evaluatedCandidates[1].rejectionReason || parsed.data.sell.reason}`;
+    return {
+      ...result,
+      candidateReview: { status: 'none', reason },
+      reasons: mergeUniqueStrings([...(result.reasons || []), reason]),
+      dataLimitations: mergeUniqueStrings([...(result.dataLimitations || []), reason]),
+    };
+  }
+
+  if (candidates.length === 1) return candidates[0].result;
+
+  const [buy, sell] = candidates;
+  if (buy.evidenceScore === sell.evidenceScore) {
+    const reason = 'Both BUY and SELL candidates passed the available checks with equal directional evidence; no side was selected.';
+    return {
+      ...result,
+      candidateReview: { status: 'ambiguous', reason },
+      reasons: mergeUniqueStrings([...(result.reasons || []), reason]),
+      whyNotNow: mergeUniqueStrings([...(result.whyNotNow || []), reason]),
+      dataLimitations: mergeUniqueStrings([...(result.dataLimitations || []), reason]),
+      tradeTrigger: reason,
+    };
+  }
+
+  const selected = buy.evidenceScore > sell.evidenceScore ? buy : sell;
+  return {
+    ...selected.result,
+    candidateReview: {
+      ...selected.result.candidateReview,
+      reason: `${selected.result.candidateReview.reason} The other side had weaker explicit directional evidence (${Math.min(buy.evidenceScore, sell.evidenceScore)} versus ${Math.max(buy.evidenceScore, sell.evidenceScore)} signals).`,
+    },
+  };
+}
+
 async function recoverCandidateLevels(result, requestFollowup) {
   if (!shouldRequestCandidateLevelFollowup(result)) return result;
   try {
     const followup = await requestFollowup();
-    return applyCandidateLevelFollowup(result, followup);
+    return applyTwoSidedCandidateReview(result, followup);
   } catch (error) {
     const reason = 'The conditional chart review for missing candidate levels failed; the original market analysis is preserved.';
     const detail = error instanceof Error ? error.message : 'Unknown provider error.';
@@ -3436,7 +3726,7 @@ function aiInvalidResponse(input, message) {
  * Flow:
  * 1. Send image → AI (with the strict trader system prompt)
  * 2. AI returns structured JSON
- * 3. Backend validates rules (confidence < 70 → no_trade, RR < 1.5 → no_trade)
+ * 3. Backend validates chart evidence and setup geometry, then calculates actual R:R
  * 4. Return ONE clean state: success | no_trade | invalid_image | ai_unavailable
  */
 async function analyzeChart(req, res) {
@@ -3510,6 +3800,9 @@ async function analyzeChart(req, res) {
 
       if (!raw) {
         const detail = sanitizeDiagnosticText(lastError instanceof Error ? lastError.message : 'Unknown provider error.');
+        if (lastError?.code === 'AI_INVALID_RESPONSE') {
+          return sendJson(res, 200, aiInvalidResponse(input, detail));
+        }
         console.error('[Chart AI] Provider failed:', { error: detail });
         const message = `Chart AI could not analyze the image. ${detail}`;
         return sendJson(res, 200, aiUnavailableResponse(input, message));
@@ -3696,6 +3989,13 @@ async function analyzeMultiTimeframeCharts(req, res) {
     finalResult.timeframe = 'H4 + M15';
     finalResult.chart.timeframe = 'H4 + M15';
     enforceMultiTimeframeAlignment(finalResult);
+    if (finalResult.multiTimeframe?.alignment === 'aligned'
+      && shouldRequestCandidateLevelFollowup(finalResult)) {
+      finalResult = await recoverCandidateLevels(finalResult, () => callVisionModel(
+        buildCandidateLevelFollowupMessages('', '', input.pair, finalResult, input.charts),
+        30000,
+      ));
+    }
     finalResult = await retryPriceConsistencyOnce(
       finalResult,
       input.pair,
@@ -4163,10 +4463,13 @@ module.exports.getPriceConsistencyIssues = getPriceConsistencyIssues;
 module.exports.holdSetupForPriceValidation = holdSetupForPriceValidation;
 module.exports.shouldRequestCandidateLevelFollowup = shouldRequestCandidateLevelFollowup;
 module.exports.buildCandidateLevelFollowupMessages = buildCandidateLevelFollowupMessages;
+module.exports.callVisionModel = callVisionModel;
 module.exports.buildPriceConsistencyRetryMessages = buildPriceConsistencyRetryMessages;
 module.exports.buildMultiTimeframePriceRetryMessages = buildMultiTimeframePriceRetryMessages;
 module.exports.retryPriceConsistencyOnce = retryPriceConsistencyOnce;
 module.exports.applyCandidateLevelFollowup = applyCandidateLevelFollowup;
+module.exports.applyTwoSidedCandidateReview = applyTwoSidedCandidateReview;
+module.exports.TwoSidedCandidateReviewSchema = TwoSidedCandidateReviewSchema;
 module.exports.recoverCandidateLevels = recoverCandidateLevels;
 module.exports.CandidateLevelFollowupSchema = CandidateLevelFollowupSchema;
 module.exports.summarizeAnalysisPayload = summarizeAnalysisPayload;

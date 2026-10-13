@@ -84,6 +84,14 @@ export interface ChartAnalysisResult {
   tradeTrigger?: string;
   whyNotNow?: string[];
   dataLimitations?: string[];
+  entryStatus?: 'waiting_for_trigger' | 'trigger_observed' | 'missed' | 'unverified';
+  setupType?: 'limit_zone' | 'breakout' | 'rejection' | 'other' | 'unspecified';
+  candidateReview?: {
+    status: 'selected' | 'none' | 'ambiguous' | 'invalid_response';
+    direction?: 'buy' | 'sell';
+    evidenceScore?: number;
+    reason: string;
+  };
   breakdown?: {
     trend?: number;
     zone?: number;
@@ -366,6 +374,26 @@ async function sendChartAnalysis(path: string, body: Record<string, unknown>): P
       entryReadiness: Math.max(0, Math.min(100, Number(payload.entryReadiness) || 0)),
       tradeDecision: payload.tradeDecision || 'NONE',
       tradeTrigger: payload.tradeTrigger || '',
+      entryStatus: ['waiting_for_trigger', 'trigger_observed', 'missed', 'unverified'].includes(payload.entryStatus)
+        ? payload.entryStatus
+        : undefined,
+      setupType: ['limit_zone', 'breakout', 'rejection', 'other', 'unspecified'].includes(payload.setupType)
+        ? payload.setupType
+        : undefined,
+      candidateReview: payload.candidateReview && typeof payload.candidateReview === 'object'
+        ? {
+          status: ['selected', 'none', 'ambiguous', 'invalid_response'].includes(payload.candidateReview.status)
+            ? payload.candidateReview.status
+            : 'invalid_response',
+          direction: ['buy', 'sell'].includes(payload.candidateReview.direction)
+            ? payload.candidateReview.direction
+            : undefined,
+          evidenceScore: typeof payload.candidateReview.evidenceScore === 'number'
+            ? payload.candidateReview.evidenceScore
+            : undefined,
+          reason: typeof payload.candidateReview.reason === 'string' ? payload.candidateReview.reason : '',
+        }
+        : undefined,
       whyNotNow: Array.isArray(payload.whyNotNow) ? payload.whyNotNow.map(String) : [],
       dataLimitations: Array.isArray(payload.dataLimitations) ? payload.dataLimitations.map(String) : [],
       confidence: Math.max(0, Math.min(100, Number(payload.confidence) || 0)),

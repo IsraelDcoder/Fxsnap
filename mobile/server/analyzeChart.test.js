@@ -13,7 +13,10 @@ const {
   getTraderSystemPrompt,
   buildMultiTimeframeMessages,
   buildCandidateLevelFollowupMessages,
+  callVisionModel,
   shouldRequestCandidateLevelFollowup,
+  applyTwoSidedCandidateReview,
+  getPriceConsistencyIssues,
   applyCandidateLevelFollowup,
   recoverCandidateLevels,
   summarizeAnalysisPayload,
@@ -25,7 +28,6 @@ const {
   TradeAnalysisSchema,
   hasRequiredAnalysisPayload,
   chartInstrumentRule,
-  getPriceConsistencyIssues,
   holdSetupForPriceValidation,
   buildPriceConsistencyRetryMessages,
   retryPriceConsistencyOnce,
@@ -58,20 +60,20 @@ const directionalChartWithoutLevels = {
   reasons: [],
 };
 
-test('one conditional follow-up is requested only for readable directional charts with incomplete levels', () => {
+test('one conditional review is requested for readable charts with incomplete levels regardless of first-pass bias', () => {
   assert.equal(shouldRequestCandidateLevelFollowup(directionalChartWithoutLevels), true);
   assert.equal(shouldRequestCandidateLevelFollowup({
     ...directionalChartWithoutLevels,
     marketBias: 'neutral',
-  }), false);
+  }), true);
   assert.equal(shouldRequestCandidateLevelFollowup({
     ...directionalChartWithoutLevels,
     marketBias: 'mixed',
-  }), false);
+  }), true);
   assert.equal(shouldRequestCandidateLevelFollowup({
     ...directionalChartWithoutLevels,
     marketBias: undefined,
-  }), false);
+  }), true);
   assert.equal(shouldRequestCandidateLevelFollowup({
     ...directionalChartWithoutLevels,
     chart: { ...directionalChartWithoutLevels.chart, has_enough_candles: false },
@@ -408,12 +410,12 @@ test('price-consistency retry prompt forces a fresh review of the same image', (
   assert.equal(messages[1].content[1].image_url.url, 'data:image/jpeg;base64,image-data');
 });
 
-test('follow-up prompt sends the same chart and treats the selected pair as an unverified hint', () => {
+test('two-sided follow-up prompt sends the same chart and evaluates both directions independently', () => {
   const messages = buildCandidateLevelFollowupMessages('image-data', 'image/jpeg', 'BTCUSD', directionalChartWithoutLevels);
 
   assert.equal(messages.length, 2);
-  assert.match(messages[0].content, /without assuming the app's instrument hint is correct/i);
-  assert.match(messages[0].content, /not a validated or actionable trade/i);
+  assert.match(messages[0].content, /Evaluate BUY and SELL separately/i);
+  assert.match(messages[0].content, /conditional candidates, not actionable trades/i);
   assert.match(messages[1].content[0].text, /BTCUSD/);
   assert.equal(messages[1].content[1].image_url.url, 'data:image/jpeg;base64,image-data');
 });
@@ -434,7 +436,7 @@ test('valid follow-up levels fill missing fields but remain a non-actionable no-
   assert.equal(result.trade_setup.entry_zone, '1.1000');
   assert.equal(result.trade_setup.stop_loss, '1.0900');
   assert.deepEqual(result.trade_setup.take_profit_levels, ['1.1200', '1.1300']);
-  assert.equal(result.trade_setup.risk_reward, 2);
+  assert.ok(Math.abs(result.trade_setup.risk_reward - 2) < 1e-9);
   assert.equal(result.tradeDecision, 'WAIT');
   assert.equal(result.tradeStatus, 'waiting_for_confirmation');
   assert.equal(result.entryReadiness, 0);
@@ -534,7 +536,7 @@ test('unclear current-price freshness does not hide chart-supported follow-up le
   });
 });
 
-test('follow-up cannot overwrite supported first-pass levels or add contradictory levels', () => {
+test('follow-up preserves supported entry levels and adds only geometrically consistent candidate levels', () => {
   const partial = {
     ...directionalChartWithoutLevels,
     trade_setup: {
@@ -553,9 +555,12 @@ test('follow-up cannot overwrite supported first-pass levels or add contradictor
   });
 
   assert.equal(conflicting.status, 'no_trade');
+  assert.equal(conflicting.trade_setup.type, 'sell');
   assert.equal(conflicting.trade_setup.entry_zone, '1.1000');
-  assert.equal(conflicting.trade_setup.stop_loss, 'none');
-  assert.equal(conflicting.levelFollowupStatus, 'no_candidate');
+  assert.equal(conflicting.trade_setup.stop_loss, '1.1100');
+  assert.equal(conflicting.trade_setup.take_profit, '1.0800');
+  assert.ok(Math.abs(conflicting.trade_setup.risk_reward - 2) < 1e-9);
+  assert.equal(conflicting.levelFollowupStatus, 'completed');
 
   const wrongGeometry = applyCandidateLevelFollowup(directionalChartWithoutLevels, {
     status: 'candidate',
@@ -595,18 +600,34 @@ test('level recovery makes at most one provider request and preserves the origin
   const recovered = await recoverCandidateLevels(directionalChartWithoutLevels, async () => {
     calls += 1;
     return {
-      status: 'candidate',
-      direction: 'buy',
-      entry_zone: '1.1000',
-      stop_loss: '1.0900',
-      take_profit_levels: ['1.1200'],
-      setup_status: 'valid',
-      reason: 'Entry at visible support; stop below the swing low.',
+      status: 'reviewed',
+      buy: {
+        status: 'candidate',
+        entry_zone: '1.10000',
+        stop_loss: '1.09900',
+        take_profit_levels: ['1.10200'],
+        setup_status: 'valid',
+        entry_status: 'waiting_for_trigger',
+        entry_type: 'limit_zone',
+        evidence: {
+          trend: 'buy', structure: 'buy', zone: 'support', trigger: 'unavailable',
+          higher_timeframe: 'unavailable', liquidity: 'unavailable', rsi: 'unavailable',
+        },
+        reason: 'Entry at visible support; stop below the swing low.',
+      },
+      sell: {
+        status: 'unsupported',
+        evidence: {
+          trend: 'neutral', structure: 'neutral', zone: 'neutral', trigger: 'neutral',
+          higher_timeframe: 'unavailable', liquidity: 'unavailable', rsi: 'unavailable',
+        },
+        reason: 'No bearish structure is visible.',
+      },
     };
   });
 
   assert.equal(calls, 1);
-  assert.equal(recovered.trade_setup.entry_zone, '1.1000');
+  assert.equal(recovered.trade_setup.entry_zone, '1.10000');
 
   calls = 0;
   const failed = await recoverCandidateLevels(directionalChartWithoutLevels, async () => {
@@ -918,7 +939,7 @@ test('comma-formatted crypto prices and ranges parse as full price values', () =
   assert.equal(result.trade_setup.entry_zone, '67,500');
 });
 
-test('risk/reward is recalculated from levels and cannot pass validation on a reported ratio', () => {
+test('risk/reward is recalculated from levels rather than trusting the reported ratio', () => {
   const result = evaluateDecisionEngine({
     raw: {
       chart: { is_chart: true },
@@ -942,14 +963,14 @@ test('risk/reward is recalculated from levels and cannot pass validation on a re
     },
   });
 
-  assert.equal(result.status, 'no_trade');
+  assert.equal(result.status, 'success');
   assert.equal(result.trade_setup.type, 'buy');
   assert.equal(result.trade_setup.entry_zone, '100');
   assert.equal(result.trade_setup.stop_loss, '95');
   assert.equal(result.trade_setup.take_profit, '104');
   assert.equal(result.trade_setup.risk_reward, 0.8);
   assert.ok(result.rrIssues.some((issue) => /differs from the ratio implied/i.test(issue)));
-  assert.ok(result.failed_conditions.some((condition) => /minimum 1\.5/i.test(condition)));
+  assert.ok(!result.failed_conditions.some((condition) => /minimum risk.reward/i.test(condition)));
 });
 
 test('canonical JSON parsing accepts object, string, and fenced JSON payloads', () => {
@@ -968,21 +989,234 @@ test('canonical JSON parsing accepts object, string, and fenced JSON payloads', 
   assert.equal(c.trade_setup.risk_reward, 2.2);
 });
 
-test('provider responses require the minimum analysis contract before normalization', () => {
+test('provider responses require chart, visible analysis, and an explanation before normalization', () => {
   const validNoTrade = {
     status: 'no_trade',
     chart: { is_chart: true },
     analysis: { trend: 'bullish' },
-    confidence: 64,
+    reasoning: ['Visible swing structure supports a bullish bias.'],
   };
 
   assert.equal(hasRequiredAnalysisPayload(validNoTrade), true);
-  assert.equal(hasRequiredAnalysisPayload({ ...validNoTrade, chart: undefined }), true);
-  assert.equal(hasRequiredAnalysisPayload({ ...validNoTrade, analysis: { trend: 'uncertain' } }), true);
-  assert.equal(hasRequiredAnalysisPayload({ ...validNoTrade, confidence: 'unknown' }), true);
+  assert.equal(hasRequiredAnalysisPayload({ ...validNoTrade, chart: undefined }), false);
+  assert.equal(hasRequiredAnalysisPayload({ ...validNoTrade, analysis: { trend: 'uncertain' } }), false);
+  assert.equal(hasRequiredAnalysisPayload({ status: 'no_trade', reasoning: ['Only a reason'] }), false);
   assert.equal(hasRequiredAnalysisPayload({ status: 'invalid_image' }), true);
   assert.equal(hasRequiredAnalysisPayload({ status: 'no_trade' }), false);
   assert.equal(hasRequiredAnalysisPayload({}), false);
+});
+
+test('vision provider failures and malformed JSON remain distinct errors', async () => {
+  const previousFetch = global.fetch;
+  global.fetch = async () => ({
+    ok: true,
+    status: 200,
+    text: async () => JSON.stringify({
+      choices: [{ finish_reason: 'stop', message: { content: '{invalid-json' } }],
+    }),
+  });
+  try {
+    await assert.rejects(callVisionModel([{ role: 'user', content: 'test' }]), (error) => (
+      error.code === 'AI_INVALID_RESPONSE'
+    ));
+
+    global.fetch = async () => ({
+      ok: false,
+      status: 503,
+      text: async () => JSON.stringify({ error: { message: 'Provider unavailable.' } }),
+    });
+    await assert.rejects(callVisionModel([{ role: 'user', content: 'test' }]), /Provider unavailable/);
+  } finally {
+    global.fetch = previousFetch;
+  }
+});
+
+function twoSidedCandidate(direction, overrides = {}) {
+  const buy = direction === 'buy';
+  return {
+    status: 'candidate',
+    entry_zone: buy ? '1.10000' : '1.10000',
+    stop_loss: buy ? '1.09900' : '1.10100',
+    take_profit_levels: [buy ? '1.10200' : '1.09800'],
+    setup_status: 'valid',
+    entry_status: 'waiting_for_trigger',
+    entry_type: buy ? 'limit_zone' : 'rejection',
+    evidence: {
+      trend: direction,
+      structure: direction,
+      zone: buy ? 'support' : 'resistance',
+      trigger: direction,
+      higher_timeframe: 'unavailable',
+      liquidity: 'unavailable',
+      rsi: 'unavailable',
+    },
+    reason: `Visible ${direction} structure, zone, and trigger.`,
+    ...overrides,
+  };
+}
+
+function twoSidedReview(buy, sell) {
+  return { status: 'reviewed', buy, sell };
+}
+
+test('two-sided review identifies independent BUY and SELL candidates with exact chart-supported levels', () => {
+  for (const direction of ['buy', 'sell']) {
+    const result = applyTwoSidedCandidateReview(
+      { ...directionalChartWithoutLevels, marketBias: 'neutral' },
+      twoSidedReview(
+        direction === 'buy' ? twoSidedCandidate('buy') : { ...twoSidedCandidate('buy'), status: 'unsupported' },
+        direction === 'sell' ? twoSidedCandidate('sell') : { ...twoSidedCandidate('sell'), status: 'unsupported' },
+      ),
+    );
+    assert.equal(result.trade_setup.type, direction);
+    assert.equal(result.trade_setup.entry_zone, '1.10000');
+    assert.ok(Math.abs(result.trade_setup.risk_reward - 2) < 1e-9);
+    assert.equal(result.tradeStatus, 'waiting_for_confirmation');
+    assert.equal(result.candidateReview.status, 'selected');
+  }
+});
+
+test('mixed first-pass bias selects the side with stronger explicit evidence', () => {
+  const buyWins = applyTwoSidedCandidateReview(
+    { ...directionalChartWithoutLevels, marketBias: 'mixed' },
+    twoSidedReview(twoSidedCandidate('buy'), twoSidedCandidate('sell', {
+      evidence: {
+        trend: 'sell', structure: 'neutral', zone: 'neutral', trigger: 'neutral',
+        higher_timeframe: 'unavailable', liquidity: 'unavailable', rsi: 'unavailable',
+      },
+    })),
+  );
+  assert.equal(buyWins.trade_setup.type, 'buy');
+
+  const sellWins = applyTwoSidedCandidateReview(
+    { ...directionalChartWithoutLevels, marketBias: 'mixed' },
+    twoSidedReview(twoSidedCandidate('buy', {
+      evidence: {
+        trend: 'buy', structure: 'neutral', zone: 'neutral', trigger: 'neutral',
+        higher_timeframe: 'unavailable', liquidity: 'unavailable', rsi: 'unavailable',
+      },
+    }), twoSidedCandidate('sell')),
+  );
+  assert.equal(sellWins.trade_setup.type, 'sell');
+});
+
+test('two-sided review abstains when both candidates fail or pass with equal evidence', () => {
+  const unsupported = (direction) => ({
+    ...twoSidedCandidate(direction),
+    status: 'unsupported',
+    reason: `No supported ${direction} candidate.`,
+  });
+  const none = applyTwoSidedCandidateReview(
+    { ...directionalChartWithoutLevels, marketBias: 'neutral' },
+    twoSidedReview(unsupported('buy'), unsupported('sell')),
+  );
+  assert.equal(none.trade_setup.type, 'none');
+  assert.equal(none.candidateReview.status, 'none');
+
+  const tie = applyTwoSidedCandidateReview(
+    { ...directionalChartWithoutLevels, marketBias: 'mixed' },
+    twoSidedReview(twoSidedCandidate('buy'), twoSidedCandidate('sell')),
+  );
+  assert.equal(tie.trade_setup.type, 'none');
+  assert.equal(tie.candidateReview.status, 'ambiguous');
+});
+
+test('two-sided review rejects invalid directional geometry without altering proposed prices', () => {
+  const invalidBuy = twoSidedCandidate('buy', { stop_loss: '1.10100', take_profit_levels: ['1.10200'] });
+  const rejected = applyTwoSidedCandidateReview(
+    { ...directionalChartWithoutLevels, marketBias: 'neutral' },
+    twoSidedReview(invalidBuy, { ...twoSidedCandidate('sell'), status: 'unsupported' }),
+  );
+  assert.equal(rejected.trade_setup.type, 'none');
+  assert.match(rejected.candidateReview.reason, /stop/i);
+});
+
+test('valid directional setups are not rejected for a low calculated risk/reward ratio', () => {
+  const cases = [
+    { target: '1.10050', ratio: 0.5 },
+    { target: '1.10100', ratio: 1 },
+    { target: '1.10200', ratio: 2 },
+    { target: '1.10500', ratio: 5 },
+  ];
+  for (const item of cases) {
+    const normalized = normalizeAnalysis(canonicalizeRawAnalysis({
+      status: 'success',
+      chart: { is_chart: true },
+      analysis: { trend: 'bullish', structure: 'Higher highs and higher lows.' },
+      zones: { support: '1.1000' },
+      trade_setup: {
+        type: 'buy',
+        entry_zone: '1.10000',
+        stop_loss: '1.09900',
+        take_profit: item.target,
+        take_profit_levels: [item.target],
+        risk_reward: 999,
+        setup_status: 'valid',
+      },
+    }));
+    const result = evaluateDecisionEngine(buildStructuredObservations(normalized));
+    assert.ok(Math.abs(result.trade_setup.risk_reward - item.ratio) < 1e-9);
+    assert.equal(result.status, 'success');
+    assert.ok(!result.failed_conditions.some((reason) => /minimum risk.reward/i.test(reason)));
+  }
+});
+
+test('two-sided candidate selection keeps a geometrically valid low-R:R setup and its actual ratio', () => {
+  const result = applyTwoSidedCandidateReview(
+    { ...directionalChartWithoutLevels, marketBias: 'neutral' },
+    twoSidedReview(
+      twoSidedCandidate('buy', { take_profit_levels: ['1.10050'] }),
+      { ...twoSidedCandidate('sell'), status: 'unsupported' },
+    ),
+  );
+
+  assert.equal(result.trade_setup.type, 'buy');
+  assert.ok(Math.abs(result.trade_setup.risk_reward - 0.5) < 1e-9);
+  assert.equal(result.candidateReview.status, 'selected');
+  assert.equal(result.candidateReview.rejectedRiskReason, undefined);
+});
+
+test('conditional candidate levels stay unverified without timestamp or reliable screenshot price', async () => {
+  const candidate = applyTwoSidedCandidateReview(
+    {
+      ...directionalChartWithoutLevels,
+      marketBias: 'neutral',
+      chart: {
+        ...directionalChartWithoutLevels.chart,
+        latest_visible_price: null,
+        current_price_source: 'unreadable',
+        latest_candle_timestamp: null,
+        current_candle_status: 'unknown',
+      },
+    },
+    twoSidedReview(twoSidedCandidate('buy'), {
+      ...twoSidedCandidate('sell'),
+      status: 'unsupported',
+    }),
+  );
+  const final = await retryPriceConsistencyOnce(candidate, 'EURUSD', () => {
+    throw new Error('An unverified candidate must not trigger another model call.');
+  });
+  assert.equal(final.trade_setup.type, 'buy');
+  assert.equal(final.candidateValidationStatus, 'unverified');
+  assert.ok(final.dataLimitations.some((reason) => /freshness cannot be verified/i.test(reason)));
+});
+
+test('triggered two-sided candidate becomes actionable only after all screenshot checks pass', async () => {
+  const candidate = applyTwoSidedCandidateReview(
+    { ...directionalChartWithoutLevels, marketBias: 'neutral' },
+    twoSidedReview(
+      twoSidedCandidate('buy', { entry_status: 'trigger_observed' }),
+      { ...twoSidedCandidate('sell'), status: 'unsupported' },
+    ),
+  );
+  const final = await retryPriceConsistencyOnce(candidate, 'EURUSD', () => {
+    throw new Error('A passing candidate must not trigger unnecessary reanalysis.');
+  });
+  assert.equal(final.status, 'success');
+  assert.equal(final.tradeDecision, 'BUY');
+  assert.equal(final.tradeStatus, 'actionable');
+  assert.ok(Math.abs(final.trade_setup.risk_reward - 2) < 1e-9);
 });
 
 test('partial directional responses pass normalization without becoming actionable trades', () => {
@@ -1121,15 +1355,10 @@ test('authenticated chart upload returns normalized candidate levels through the
 
     providerResponses = [
       { ...providerAnalysis, trade_setup: undefined },
-      {
-        status: 'candidate',
-        direction: 'buy',
-        entry_zone: '1.10000',
-        stop_loss: '1.09900',
-        take_profit_levels: ['1.10200'],
-        setup_status: 'valid',
-        reason: 'Entry at support; stop below the visible swing low.',
-      },
+      twoSidedReview(
+        twoSidedCandidate('buy', { reason: 'Entry at support; stop below the visible swing low.' }),
+        { ...twoSidedCandidate('sell'), status: 'unsupported' },
+      ),
     ];
     providerCalls = 0;
     const recoveredResponse = await postAnalysis();
@@ -1165,15 +1394,13 @@ test('authenticated chart upload returns normalized candidate levels through the
     };
     providerResponses = [
       missingLevelsAndFreshness,
-      {
-        status: 'candidate',
-        direction: 'buy',
-        entry_zone: '1.10000',
-        stop_loss: '1.09900',
-        take_profit_levels: ['1.10200'],
-        setup_status: 'unclear',
-        reason: 'Entry at visible support, stop below the latest swing low, target at visible resistance. Current price and screenshot freshness are unclear.',
-      },
+      twoSidedReview(
+        twoSidedCandidate('buy', {
+          setup_status: 'unclear',
+          reason: 'Entry at visible support, stop below the latest swing low, target at visible resistance. Current price and screenshot freshness are unclear.',
+        }),
+        { ...twoSidedCandidate('sell'), status: 'unsupported' },
+      ),
     ];
     providerCalls = 0;
     const unverifiedLevelsResponse = await postAnalysis();
@@ -1750,7 +1977,7 @@ test('computed RR overrides a mismatched model report without dropping validated
   assert.ok(result.rrIssues.some((issue) => /differs/i.test(issue)));
 });
 
-test('insufficient RR should block trade', () => {
+test('a low calculated R:R does not block an otherwise valid trade setup', () => {
   const normalized = {
     status: 'success',
     timeframe: 'D1',
@@ -1765,15 +1992,14 @@ test('insufficient RR should block trade', () => {
   };
 
   const res = applyMentorStrategy(normalized);
-  // With strict RR enforcement the final status should be no_trade, but a fallback candidate may be preserved for DEVELOPING workflows
-  assert.equal(res.status, 'no_trade');
+  assert.equal(res.status, 'success');
   assert.equal(res.marketBias, 'bullish');
   assert.equal(res.trade_setup.type, 'buy');
   assert.equal(res.trade_setup.entry_zone, '1.1000');
   assert.equal(res.trade_setup.stop_loss, '1.0955');
   assert.equal(res.trade_setup.take_profit, '1.1020');
-  assert.ok(res.trade_setup.risk_reward < 1.5);
-  assert.ok(res.reasons.some((r) => /risk.reward|risk\/reward/i.test(r)) || res.rrIssues.length > 0);
+  assert.ok(res.trade_setup.risk_reward > 0);
+  assert.ok(res.rrIssues.some((issue) => /differs from the ratio implied/i.test(issue)));
 });
 
 // Small sanity test for the observation builder
@@ -1877,7 +2103,7 @@ test('reported RR cannot hide conservative SELL geometry or its computed ratio',
   assert.equal(res.trade_setup.risk_reward, 1);
   assert.notEqual(res.decision, 'SELL');
   assert.ok(res.rrIssues.some((issue) => /differs/i.test(issue)));
-  assert.ok(res.reasons.some((reason) => /risk.reward does not meet the minimum/i.test(reason)));
+  assert.ok(!res.reasons.some((reason) => /risk.reward does not meet the minimum/i.test(reason)));
   assert.ok(typeof res.breakdown?.trend === 'number' && res.breakdown.trend > 0);
   assert.ok(res.breakdown?.liquidity === null || res.breakdown?.liquidity === undefined);
   assert.ok(res.breakdown?.rsi === null || res.breakdown?.rsi === undefined);

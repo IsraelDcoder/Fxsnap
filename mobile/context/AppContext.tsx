@@ -97,6 +97,14 @@ export interface AnalysisResult {
   whyNotNow?: string[];
   dataLimitations?: string[];
   rrIssues?: string[];
+  entryStatus?: 'waiting_for_trigger' | 'trigger_observed' | 'missed' | 'unverified';
+  setupType?: 'limit_zone' | 'breakout' | 'rejection' | 'other' | 'unspecified';
+  candidateReview?: {
+    status: 'selected' | 'none' | 'ambiguous' | 'invalid_response';
+    direction?: 'buy' | 'sell';
+    evidenceScore?: number;
+    reason: string;
+  };
   multiTimeframe?: {
     alignment: 'aligned' | 'conflicting' | 'unclear';
     summary: string;

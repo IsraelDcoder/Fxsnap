@@ -2,7 +2,7 @@
 
 ## Steps
 - [x] 1. serve.js: add trader system prompt + strict output Zod schema + single-pass AI chart analysis
-- [x] 2. serve.js: add validation layer (confidence < 70 → no_trade, RR < 1.5 → no_trade)
+- [x] 2. serve.js: add validation layer; calculate actual R:R without enforcing a fixed minimum
 - [x] 3. serve.js: remove Alpha Vantage / /api/market-data entirely
 - [x] 4. services/marketData.ts: delete live market data service
 - [x] 5. services/backtest.ts: self-contain CandleData/TrendAnalysis types (remove marketData import)
@@ -17,4 +17,3 @@
 - [ ] 14. Server syntax check (node --check serve.js)
 - [ ] 15. Run tests (npm test)
 - [ ] 16. Verify server starts + /api/health returns 200
-

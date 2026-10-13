@@ -290,11 +290,11 @@ test('explains missing no-trade levels as a hold while the market develops', () 
 
   assert.equal(
     getMissingTradeLevelsExplanation(result),
-    'Hold for now — the market is still developing. Wait for direction and price levels to confirm before considering an entry. Risk/reward will be calculated when the chart supports entry, stop, and target prices.',
+    'No technically valid candidate was established from the visible chart evidence. No entry, stop, target, or risk/reward value has been inferred.',
   );
   assert.match(
     getMissingTradeLevelsExplanation({ ...result, status: 'success' }) ?? '',
-    /Hold for now — the market is still developing/,
+    /No technically valid candidate was established/,
   );
   assert.equal(getMissingTradeLevelsExplanation({
     ...result,
@@ -304,7 +304,7 @@ test('explains missing no-trade levels as a hold while the market develops', () 
 });
 
 test('neutral chart results always include a clear market-development plan', () => {
-  assert.equal(
+  assert.match(
     getMarketDevelopmentPlan({
       status: 'no_trade',
       marketBias: 'neutral',
@@ -318,7 +318,7 @@ test('neutral chart results always include a clear market-development plan', () 
         notes: 'Wait for a confirmed break of the range.',
       },
     }, true),
-    'Hold for now — the market is still developing. Wait for a clear break, rejection, or directional confirmation. Chart context: Price is consolidating around 4170.976. Wait for a confirmed break of the range.',
+    /Hold for now — the market is still developing/,
   );
   assert.match(getMarketDevelopmentPlan({
     status: 'no_trade',
@@ -326,7 +326,7 @@ test('neutral chart results always include a clear market-development plan', () 
     tradeStatus: 'no_setup',
     tradeTrigger: 'No actionable setup is available at this time.',
   }), /Wait for a confirmed bearish entry or retest/);
-  assert.doesNotMatch(getMarketDevelopmentPlan({ status: 'no_trade', marketBias: 'neutral' }), /no trade/i);
+  assert.match(getMarketDevelopmentPlan({ status: 'no_trade', marketBias: 'neutral' }), /Hold for now — the market is still developing/i);
 });
 
 test('developing analysis notes replace blocked-trade language with confirmation guidance', () => {
@@ -358,8 +358,84 @@ test('incomplete successful responses are presented as developing, not as establ
   }), 'EUR/USD');
 
   assert.equal(hasValidatedTradeSetup(partial), false);
-  assert.match(getMissingTradeLevelsExplanation(partial) ?? '', /Hold for now — the market is still developing/);
-  assert.match(getMarketDevelopmentPlan(partial), /Hold for now — the market is still developing/);
+  assert.match(getMissingTradeLevelsExplanation(partial) ?? '', /one or more price levels are not supported/i);
+  assert.match(getMarketDevelopmentPlan(partial), /BUY incomplete candidate/i);
+  assert.match(getMarketDevelopmentPlan(partial), /not identified/);
+});
+
+test('conditional candidate levels and calculated R remain visible without claiming entry confirmation', () => {
+  const result = buildAnalysisResult(chartResult({
+    status: 'no_trade',
+    marketBias: 'neutral',
+    tradeStatus: 'waiting_for_confirmation',
+    trade_setup: {
+      type: 'buy',
+      entry_zone: '1.10000',
+      stop_loss: '1.09900',
+      take_profit: '1.10200',
+      take_profit_levels: ['1.10200', '1.10300'],
+      risk_reward: 2,
+    },
+    entryStatus: 'waiting_for_trigger',
+    setupType: 'limit_zone',
+    candidateReview: {
+      status: 'selected',
+      direction: 'buy',
+      evidenceScore: 5,
+      reason: 'A support retest is the conditional entry.',
+    },
+  }), 'EUR/USD');
+
+  assert.equal(result.marketBias, 'neutral');
+  assert.equal(result.tradeSetup?.type, 'buy');
+  assert.match(getMarketDevelopmentPlan(result), /BUY limit zone candidate/);
+  assert.match(getMarketDevelopmentPlan(result), /Entry 1\.10000, SL 1\.09900, TP1 1\.10200, R:R 1:2/);
+  assert.match(getMarketDevelopmentPlan(result), /wait for the specified entry trigger/i);
+  assert.equal(getMissingTradeLevelsExplanation(result), null);
+});
+
+test('partial conditional candidates report supplied levels without inventing missing ones', () => {
+  const result = buildAnalysisResult(chartResult({
+    status: 'no_trade',
+    trade_setup: {
+      type: 'sell',
+      entry_zone: '1.10000',
+      stop_loss: '1.10100',
+      take_profit: 'none',
+      take_profit_levels: [],
+      risk_reward: 'none',
+    },
+    candidateReview: {
+      status: 'selected',
+      direction: 'sell',
+      evidenceScore: 4,
+      reason: 'A resistance rejection may offer a conditional entry; TP1 is not supported.',
+    },
+  }), 'EUR/USD');
+
+  const plan = getMarketDevelopmentPlan(result);
+  assert.match(plan, /SELL incomplete candidate/);
+  assert.match(plan, /Entry 1\.10000, SL 1\.10100, TP1 not identified/);
+  assert.match(plan, /R:R not calculable from available levels/);
+  assert.doesNotMatch(plan, /1\.09\d+/);
+});
+
+test('a complete candidate with a low calculated R:R remains valid and reports the actual ratio', () => {
+  const result = buildAnalysisResult(chartResult({
+    status: 'no_trade',
+    tradeStatus: 'waiting_for_confirmation',
+    trade_setup: {
+      type: 'buy',
+      entry_zone: '1.10000',
+      stop_loss: '1.09900',
+      take_profit: '1.10080',
+      take_profit_levels: ['1.10080'],
+      risk_reward: 0.8,
+    },
+  }), 'EUR/USD');
+  assert.equal(hasValidatedTradeSetup(result), true);
+  assert.equal(getMissingTradeLevelsExplanation(result), null);
+  assert.match(getMarketDevelopmentPlan(result), /R:R 1:0\.8/);
 });
 
 test('waiting setups remain on hold and explain the confirmation trigger', () => {
@@ -370,7 +446,7 @@ test('waiting setups remain on hold and explain the confirmation trigger', () =>
   }), 'EUR/USD');
 
   assert.equal(hasValidatedTradeSetup(waiting), true);
-  assert.match(getMarketDevelopmentPlan(waiting), /Hold for now — the market is still developing/);
+  assert.match(getMarketDevelopmentPlan(waiting), /BUY candidate/);
   assert.match(getMarketDevelopmentPlan(waiting), /Wait for a bullish break and retest before entering/);
   assert.equal(getTradeReadinessLabel(
     waiting.tradeStatus,
@@ -385,26 +461,26 @@ test('waiting setups remain on hold and explain the confirmation trigger', () =>
 test('trade readiness describes a hold while levels are incomplete', () => {
   assert.equal(
     getTradeReadinessLabel('no_setup', '158.23000', '158.15500', '158.29000', 'BUY', 0.8),
-    'Hold — market still developing',
+    'BUY candidate setup · awaiting validation',
   );
   assert.equal(
     getTradeReadinessLabel(undefined, '1.10000', 'Not established', 'Not established'),
-    'Hold — market still developing',
+    'Not ready — the setup is incomplete or its risk/reward cannot be calculated.',
   );
   assert.equal(
     getTradeReadinessLabel(undefined, 'Not established', 'Not established', 'Not established'),
-    'Hold — market still developing',
+    'Not ready — the setup is incomplete or its risk/reward cannot be calculated.',
   );
   assert.equal(getTradeReadinessLabel('actionable', '1.10', '1.09', '1.12', 'BUY', 2), 'Ready');
-  assert.equal(getTradeReadinessLabel('actionable', '1.10', '1.09', '1.12'), 'Hold — market still developing');
+  assert.equal(getTradeReadinessLabel('actionable', '1.10', '1.09', '1.12'), 'Not ready — the setup is incomplete or its risk/reward cannot be calculated.');
   assert.equal(getTradeReadinessLabel('waiting_for_confirmation', '1.10', '1.09', '1.12', 'BUY', 2), 'Waiting for confirmation');
-  assert.equal(getTradeReadinessLabel('waiting_for_confirmation', '1.10', '1.09', '1.12'), 'Hold — market still developing');
+  assert.equal(getTradeReadinessLabel('waiting_for_confirmation', '1.10', '1.09', '1.12'), 'Not ready — the setup is incomplete or its risk/reward cannot be calculated.');
 });
 
 test('readiness status stays visible without showing a zero-percent score', () => {
   assert.equal(
     formatTradeReadiness(0, 'no_setup', '158.23000', '158.15500', '158.29000', 'BUY', 0.8),
-    'Hold — market still developing',
+    'BUY candidate setup · awaiting validation',
   );
   assert.equal(
     formatTradeReadiness(64, 'waiting_for_confirmation', '1.10', '1.09', '1.12', 'BUY', 2),

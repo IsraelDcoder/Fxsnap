@@ -27,6 +27,7 @@ git push -u origin main
    - OPENROUTER_API_KEY
    - OPENROUTER_MODEL (text model for strategy generation)
    - OPENROUTER_VISION_MODEL (OpenRouter vision model, e.g. `openai/gpt-4o-mini`)
+   - FXSNAP_CHART_MAX_AGE_MINUTES (optional stricter cap; per-timeframe screenshot age limits default to M15 60 minutes, H1 4 hours, H4 12 hours, D1 48 hours, and unknown timeframes 60 minutes)
    - OPENROUTER_SITE_URL
    - OPENROUTER_APP_NAME
    - GEMINI_API_KEY (Google Gemini key for chart analysis)
