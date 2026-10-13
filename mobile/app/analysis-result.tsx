@@ -292,16 +292,18 @@ export default function AnalysisResultScreen() {
     ? 'WAIT FOR CONFIRMATION'
     : formatTradeReadiness(
       entryReadiness,
-      isValidatedActionable ? 'actionable' : undefined,
+      currentAnalysis?.tradeStatus,
       entryLevel,
       stopLevel,
       tp1Level,
-      isValidatedActionable ? currentAnalysis?.tradeSetup?.type?.toUpperCase() : undefined,
+      currentAnalysis?.tradeSetup?.type?.toUpperCase(),
       currentAnalysis?.tradeSetup?.riskReward,
     );
+  const isBuySignal = readinessText.startsWith('BUY');
+  const isSellSignal = readinessText.startsWith('SELL');
+  const signalColor = isBuySignal ? '#00E676'
+    : isSellSignal ? '#FF5252' : '#FFC857';
   const directionLabel = readinessText;
-  const signalColor = readinessText === 'BUY' ? '#00E676'
-    : readinessText === 'SELL' ? '#FF5252' : '#FFC857';
   const currentPrice = currentAnalysis?.latestVisiblePrice;
   const marketEntryText = currentPrice != null
     ? formatInstrumentPriceText(currentPrice, pair)
@@ -628,7 +630,7 @@ export default function AnalysisResultScreen() {
             <Text style={[styles.entryCaption, { color: colors.textSecondary }]}>{currentPrice != null ? 'LATEST VISIBLE PRICE' : 'PRICE UNREADABLE'}</Text>
             <Text numberOfLines={1} adjustsFontSizeToFit style={[styles.entryPrice, { color: colors.text }]}>{marketEntryText}</Text>
             <View style={[styles.directionPill, { backgroundColor: `${signalColor}20` }]}>
-              <Feather name={readinessText === 'SELL' ? 'trending-down' : readinessText === 'BUY' ? 'trending-up' : 'clock'} size={13} color={signalColor} />
+              <Feather name={isSellSignal ? 'trending-down' : isBuySignal ? 'trending-up' : 'clock'} size={13} color={signalColor} />
               <Text style={[styles.directionPillText, { color: signalColor }]}>{directionLabel}</Text>
             </View>
           </View>
@@ -710,7 +712,8 @@ export default function AnalysisResultScreen() {
         {activeTab === 'analysis' ? (
           <>
             <Animated.View entering={FadeInUp.duration(350)} style={[styles.verdictCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
-              <View style={styles.verdictTop}><Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>TRADE SIGNAL</Text><View style={[styles.verdictBadge, { backgroundColor: `${signalColor}20` }]}><View style={[styles.verdictDot, { backgroundColor: signalColor }]} /><Text style={[styles.verdictText, { color: signalColor }]}>{readinessText}</Text></View></View>
+              <View style={styles.verdictTop}><Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>{hasDirectionalCandidate ? 'TRADE SETUP' : 'TRADE SIGNAL'}</Text><View style={[styles.verdictBadge, { backgroundColor: `${signalColor}20` }]}><View style={[styles.verdictDot, { backgroundColor: signalColor }]} /><Text style={[styles.verdictText, { color: signalColor }]}>{readinessText}</Text></View></View>
+              {hasDirectionalCandidate && !isValidatedActionable ? <Text style={[styles.bodyMuted, { color: colors.textSecondary }]}>Conditional plan only. Wait for the entry trigger; do not enter yet.</Text> : null}
               {currentPrice != null ? <View style={styles.confidenceLine}><Text style={[styles.bodyMuted, { color: colors.textSecondary }]}>Latest visible price (screenshot)</Text><Text style={[styles.confidenceText, { color: colors.text }]}>{marketEntryText}</Text></View> : null}
             </Animated.View>
             {hasCompleteDirectionalSetup ? (

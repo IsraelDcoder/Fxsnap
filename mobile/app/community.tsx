@@ -31,6 +31,7 @@ import {
   blockCommunityMember,
   checkCommunityUsername,
   createCommunityClientId,
+  type CommunityRequestError,
   deleteCommunityMessage,
   followCommunityMember,
   getCommunityBootstrap,
@@ -60,7 +61,11 @@ import {
   type CommunityProfile,
   type CommunityReaction,
 } from '@/services/community';
-import { COMMUNITY_VIEWABILITY_CONFIG, getNewVisiblePostIds } from '@/services/communityEngagement';
+import {
+  applyCommunityReaction,
+  COMMUNITY_VIEWABILITY_CONFIG,
+  getNewVisiblePostIds,
+} from '@/services/communityEngagement';
 import CommunityPostCard from '@/components/CommunityPostCard';
 import CommunityPreviewNotice from '@/components/CommunityPreviewNotice';
 
@@ -84,7 +89,9 @@ type CommunityPostAction = {
 };
 
 function apiErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : 'The Community request failed. Please try again.';
+  if (!(error instanceof Error)) return 'The Community request failed. Please try again.';
+  const requestId = (error as CommunityRequestError).requestId;
+  return requestId ? `${error.message} Reference: ${requestId}` : error.message;
 }
 
 function firstParam(value: string | string[] | undefined) {
@@ -191,6 +198,7 @@ export default function CommunityScreen() {
   const flatListRef = useRef<FlashListRef<CommunityMessage>>(null);
   const recordedViewIds = useRef(new Map<string, number>());
   const pendingReactionIds = useRef(new Set<string>());
+  const commentSubmissionPending = useRef(false);
   const currentAccountIdRef = useRef<string | null>(null);
   const processedPostId = useRef<string | null>(null);
   const processedAnalysisId = useRef<string | null>(null);
@@ -612,31 +620,79 @@ export default function CommunityScreen() {
 
   const submitComment = async () => {
     const body = commentDraft.trim();
-    if (!commentPost || !body || commentSending) return;
+    if (!commentPost || !body || commentSubmissionPending.current) return;
+    commentSubmissionPending.current = true;
+    const clientMessageId = commentId.current || (commentId.current = createCommunityClientId());
+    const target = replyTarget || commentPost;
+    const optimisticId = `pending-${clientMessageId}`;
+    const optimisticMessage: CommunityMessage = {
+      id: optimisticId,
+      clientMessageId,
+      authorAccountId: profile?.accountId || '',
+      authorUsername: profile?.username || '',
+      authorPictureUrl: profile?.pictureUrl || null,
+      isOfficial: profile?.isAdmin || false,
+      isFollowed: false,
+      kind: 'text',
+      category: null,
+      body,
+      payload: {},
+      replyTo: {
+        id: target.id,
+        author_username: target.authorUsername,
+        body: target.body,
+        kind: target.kind,
+        removed_at: target.removed ? target.createdAt : null,
+      },
+      pinnedAt: null,
+      createdAt: new Date().toISOString(),
+      commentCount: 0,
+      viewCount: 0,
+      shareCount: 0,
+      removed: false,
+      reactions: [],
+    };
     setCommentSending(true);
+    if (replyTarget && replyTarget.id !== commentPost.id) {
+      setThreadReplies((previous) => [...previous, optimisticMessage]);
+    } else {
+      setComments((previous) => [...previous, optimisticMessage]);
+    }
+    setPosts((previous) => previous.map((post) => post.id === commentPost.id
+      ? { ...post, commentCount: post.commentCount + 1 }
+      : post));
+    setCommentPost((previous) => previous?.id === commentPost.id
+      ? { ...previous, commentCount: previous.commentCount + 1 }
+      : previous);
     try {
       const result = await publishCommunityComment(
         commentPost.id,
         body,
-        commentId.current || (commentId.current = createCommunityClientId()),
+        clientMessageId,
         replyTarget?.id,
       );
       if (replyTarget && replyTarget.id !== commentPost.id) {
-        setThreadReplies((previous) => [...previous, result.message]);
+        setThreadReplies((previous) => previous.map((item) => item.id === optimisticId ? result.message : item));
       } else {
-        setComments((previous) => [...previous, result.message]);
+        setComments((previous) => previous.map((item) => item.id === optimisticId ? result.message : item));
       }
       setCommentDraft('');
       commentId.current = null;
+    } catch (error) {
+      if (replyTarget && replyTarget.id !== commentPost.id) {
+        setThreadReplies((previous) => previous.filter((item) => item.id !== optimisticId));
+      } else {
+        setComments((previous) => previous.filter((item) => item.id !== optimisticId));
+      }
       setPosts((previous) => previous.map((post) => post.id === commentPost.id
-        ? { ...post, commentCount: post.commentCount + 1 }
+        ? { ...post, commentCount: Math.max(0, post.commentCount - 1) }
         : post));
       setCommentPost((previous) => previous?.id === commentPost.id
-        ? { ...previous, commentCount: previous.commentCount + 1 }
+        ? { ...previous, commentCount: Math.max(0, previous.commentCount - 1) }
         : previous);
-    } catch (error) {
       Alert.alert('Could not send reply', apiErrorMessage(error));
     } finally {
+      commentSubmissionPending.current = false;
       setCommentSending(false);
     }
   };
@@ -645,6 +701,14 @@ export default function CommunityScreen() {
     if (pendingReactionIds.current.has(post.id)) return;
     pendingReactionIds.current.add(post.id);
     setReactionBusyIds((current) => new Set(current).add(post.id));
+    const previousReactions = post.reactions;
+    const optimisticReactions = applyCommunityReaction(previousReactions, reaction);
+    setPosts((previous) => previous.map((item) => item.id === post.id
+      ? { ...item, reactions: optimisticReactions }
+      : item));
+    setCommentPost((current) => current?.id === post.id
+      ? { ...current, reactions: optimisticReactions }
+      : current);
     try {
       const result = await toggleCommunityReaction(post.id, reaction);
       setPosts((previous) => previous.map((item) => item.id === post.id
@@ -654,6 +718,12 @@ export default function CommunityScreen() {
         ? { ...current, reactions: result.reactions }
         : current);
     } catch (error) {
+      setPosts((previous) => previous.map((item) => item.id === post.id
+        ? { ...item, reactions: previousReactions }
+        : item));
+      setCommentPost((current) => current?.id === post.id
+        ? { ...current, reactions: previousReactions }
+        : current);
       Alert.alert('Could not update reaction', apiErrorMessage(error));
     } finally {
       pendingReactionIds.current.delete(post.id);

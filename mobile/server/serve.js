@@ -1888,7 +1888,7 @@ Read the right edge first. Use only the visible current-price marker or rightmos
 
 Recognizable but cropped, obscured or poor-quality charts are charts: set is_chart=true, chart_quality=poor and no_trade when evidence is insufficient. Use invalid_image only for a clearly non-chart, blank, corrupted or unrecognizable image. If evidence conflicts or is insufficient, choose no_trade; do not claim a win probability.
 
-Support and resistance define the setup; confirmation defines whether to trade now. When both clear numeric levels are visible, always return a complete conditional setup: buy entry at/near support, SL beyond the visible support-side swing, TP1 at resistance; or sell entry at/near resistance, SL beyond the visible resistance-side swing, TP1 at support. Anchor entry to the level/retest, never midrange. If current price is between boundaries, plan from the nearer boundary; use trend/structure to choose a side, and if direction is still unclear keep the result WAIT/no_trade while retaining the conditional levels. Do not require consolidation or a confirmed trend to describe a candidate. Only signal BUY/SELL after price action confirms the relevant level (for example consolidation/rejection at support or resistance, or a clear aligned trend); otherwise wait for confirmation. Use visible swing invalidation for SL; no arbitrary buffers. Compute R:R from these exact entry/SL/TP1 levels. If either level or a defensible SL truly cannot be read or derived, do not invent it; explain the limitation and return WAIT.
+Support and resistance define setup direction; confirmation defines whether to enter now. When a readable chart supports a demand/support or supply/resistance setup, return the best supported conditional BUY or SELL plan with exact chart-grounded levels, even if its trigger is not confirmed: buy entry at/near support, SL beyond the visible support-side swing, TP1 at resistance; or sell entry at/near resistance, SL beyond the visible resistance-side swing, TP1 at support. Anchor entry to the level/retest, never midrange. If current price is between boundaries, plan from the nearer boundary and use visible trend/structure to choose the side. Do not require consolidation or a confirmed trend to describe a candidate. Mark an untriggered plan as waiting_for_confirmation/no_trade, retain its direction and levels, and explain the trigger still needed; reserve an actionable BUY/SELL decision for setups whose trigger and current-price checks pass. Use visible swing invalidation for SL; no arbitrary buffers. Compute R:R from these exact entry/SL/TP1 levels. If a directional setup or defensible level truly cannot be supported, do not invent it; explain the limitation and return no_trade.
 
 Also assess trend, swing structure, visible liquidity, volatility, volume, indicators and price action. Keep directional bias, conditional candidate and actionability separate. Preserve supported candidate levels with status=no_trade; use type=none only if no direction/setup can be supported. Explain evidence for entry, SL and TP1; include TP2 only if independently supported. A candidate is valid while current visible structure holds and price has not missed entry, reached TP or invalidated SL/structure; waiting for its trigger may be valid. Otherwise use missed, invalidated, unclear or unknown. Only call it actionable when current-price/candle checks and a clear entry, logical SL, supported TP and no-conflict checks pass. Calculate risk_reward from the same entry, SL and TP1; use null if unreliable. The server validates actionability and recalculates R:R; do not force a minimum.
 
@@ -2929,7 +2929,7 @@ function buildCandidateLevelFollowupMessages(imageBase64, mimeType, pair, result
   return [
     {
       role: 'system',
-      content: `Evaluate BUY and SELL separately using visible chart evidence; first-pass analysis is context, not proof. When support and resistance are both clear and numeric, always provide a complete conditional candidate from a boundary: buy at/near support, SL beyond its visible swing, TP at resistance; sell at/near resistance, SL beyond its visible swing, TP at support. Use the nearer boundary when price is between them. Do not return unsupported just because trend, consolidation or entry trigger is unclear; mark setup_status=unclear (or valid if structure holds), entry_status=waiting_for_trigger, and let the final signal be WAIT. Only reject a side if levels/defensible SL are genuinely unreadable, structure is invalidated/missed, or multi-timeframe evidence conflicts. No invented prices/buffers. For each side report trend, structure, zone, trigger, higher-timeframe, liquidity and RSI as buy, sell, neutral or unavailable. Entry status: waiting_for_trigger, trigger_observed, missed or unverified. Entry type: limit_zone, breakout, rejection, other or unspecified. A candidate is conditional, not an actionable trade; BUY/SELL signal requires confirmation (consolidation/rejection at its level or clear aligned trend). For multi-timeframe mode require aligned H4/M15 evidence and M15 trigger before BUY/SELL, but retain candidate levels and WAIT when confirmation is pending. Do not pick a winner if evidence is truly equal; otherwise the server compares evidence and recalculates R:R. Return only:
+      content: `Evaluate BUY and SELL separately using visible chart evidence; first-pass analysis is context, not proof. When support and resistance are both clear and numeric, provide complete conditional candidates from the boundaries: buy at/near support, SL beyond its visible swing, TP at resistance; sell at/near resistance, SL beyond its visible swing, TP at support. Use the nearer boundary when price is between them. Do not return unsupported just because trend, consolidation or entry trigger is unclear; mark setup_status=unclear (or valid if structure holds), entry_status=waiting_for_trigger. These are setup directions, not instructions to enter immediately. Only reject a side if levels/defensible SL are genuinely unreadable, structure is invalidated/missed, or multi-timeframe evidence conflicts. No invented prices/buffers. For each side report trend, structure, zone, trigger, higher-timeframe, liquidity and RSI as buy, sell, neutral or unavailable. Entry status: waiting_for_trigger, trigger_observed, missed or unverified. Entry type: limit_zone, breakout, rejection, other or unspecified. A candidate is conditional, not an actionable trade; retain BUY/SELL setup direction while the trigger is pending. For multi-timeframe mode require aligned H4/M15 evidence and M15 trigger before calling a setup actionable, but retain candidate levels and direction while confirmation is pending. When both candidates have equal evidence, prefer the direction supported by the established bias; otherwise prefer the valid entry zone nearer the latest visible price. If both remain equally supported and equally near, do not invent a preference; the server will retain the ambiguity. The server validates actionability and recalculates R:R. Return only:
 {"status":"reviewed","buy":{"status":"candidate|unsupported","entry_zone":"price/range or omit","stop_loss":"price or omit","take_profit_levels":["TP1","optional TP2"],"setup_status":"valid|missed|invalidated|unclear","entry_status":"waiting_for_trigger|trigger_observed|missed|unverified","entry_type":"limit_zone|breakout|rejection|other|unspecified","evidence":{"trend":"buy|sell|neutral|unavailable","structure":"buy|sell|neutral|unavailable","zone":"support|resistance|neutral|unavailable","trigger":"buy|sell|neutral|unavailable","higher_timeframe":"buy|sell|neutral|unavailable","liquidity":"buy|sell|neutral|unavailable","rsi":"buy|sell|neutral|unavailable"},"reason":"visible evidence or why unsupported"},"sell":{"status":"candidate|unsupported","entry_zone":"price/range or omit","stop_loss":"price or omit","take_profit_levels":["TP1","optional TP2"],"setup_status":"valid|missed|invalidated|unclear","entry_status":"waiting_for_trigger|trigger_observed|missed|unverified","entry_type":"limit_zone|breakout|rejection|other|unspecified","evidence":{"trend":"buy|sell|neutral|unavailable","structure":"buy|sell|neutral|unavailable","zone":"support|resistance|neutral|unavailable","trigger":"buy|sell|neutral|unavailable","higher_timeframe":"buy|sell|neutral|unavailable","liquidity":"buy|sell|neutral|unavailable","rsi":"buy|sell|neutral|unavailable"},"reason":"visible evidence or why unsupported"}}`,
     },
     {
@@ -3277,6 +3277,16 @@ function directionalEvidenceScore(candidate, direction) {
   return score;
 }
 
+function candidateEntryDistance(candidate, latestVisiblePrice) {
+  const price = parsePriceOrRange(latestVisiblePrice);
+  const entry = parsePriceOrRange(candidate.entry_zone);
+  if (!price || !entry || price.min !== price.max) return null;
+  const currentPrice = price.min;
+  if (currentPrice < entry.min) return entry.min - currentPrice;
+  if (currentPrice > entry.max) return currentPrice - entry.max;
+  return 0;
+}
+
 function twoSidedGeometryIssue(candidate, direction, result) {
   const entry = parsePriceOrRange(candidate.entry_zone);
   const stop = parsePriceOrRange(candidate.stop_loss);
@@ -3450,24 +3460,49 @@ function applyTwoSidedCandidateReview(result, rawReview) {
   if (candidates.length === 1) return candidates[0].result;
 
   const [buy, sell] = candidates;
+  let selectionReason = null;
   if (buy.evidenceScore === sell.evidenceScore) {
-    const reason = 'Both BUY and SELL candidates passed the available checks with equal directional evidence; no side was selected.';
-    return {
-      ...result,
-      candidateReview: { status: 'ambiguous', reason },
-      reasons: mergeUniqueStrings([...(result.reasons || []), reason]),
-      whyNotNow: mergeUniqueStrings([...(result.whyNotNow || []), reason]),
-      dataLimitations: mergeUniqueStrings([...(result.dataLimitations || []), reason]),
-      tradeTrigger: reason,
-    };
+    const establishedBias = result.marketBias === 'bullish'
+      ? 'buy'
+      : result.marketBias === 'bearish'
+        ? 'sell'
+        : result.marketBias == null && result.analysis?.trend === 'bullish'
+          ? 'buy'
+          : result.marketBias == null && result.analysis?.trend === 'bearish'
+            ? 'sell'
+            : null;
+    if (establishedBias) {
+      selectionReason = `Directional evidence was tied, so the conditional ${establishedBias.toUpperCase()} setup matching the established chart bias was selected.`;
+    } else {
+      const buyDistance = candidateEntryDistance(buy.candidate, result.chart?.latest_visible_price);
+      const sellDistance = candidateEntryDistance(sell.candidate, result.chart?.latest_visible_price);
+      if (buyDistance != null && sellDistance != null && buyDistance !== sellDistance) {
+        const nearerDirection = buyDistance < sellDistance ? 'BUY' : 'SELL';
+        selectionReason = `Directional evidence was tied, so the ${nearerDirection} setup with the nearer supported entry zone was selected.`;
+      } else {
+        const reason = 'Both BUY and SELL candidates passed the available checks with equal directional evidence and no chart-supported tie-break; no side was selected.';
+        return {
+          ...result,
+          candidateReview: { status: 'ambiguous', reason },
+          reasons: mergeUniqueStrings([...(result.reasons || []), reason]),
+          whyNotNow: mergeUniqueStrings([...(result.whyNotNow || []), reason]),
+          dataLimitations: mergeUniqueStrings([...(result.dataLimitations || []), reason]),
+          tradeTrigger: reason,
+        };
+      }
+    }
   }
 
-  const selected = buy.evidenceScore > sell.evidenceScore ? buy : sell;
+  const selected = selectionReason
+    ? (selectionReason.includes('BUY') ? buy : sell)
+    : buy.evidenceScore > sell.evidenceScore ? buy : sell;
   return {
     ...selected.result,
     candidateReview: {
       ...selected.result.candidateReview,
-      reason: `${selected.result.candidateReview.reason} The other side had weaker explicit directional evidence (${Math.min(buy.evidenceScore, sell.evidenceScore)} versus ${Math.max(buy.evidenceScore, sell.evidenceScore)} signals).`,
+      reason: selectionReason
+        ? `${selected.result.candidateReview.reason} ${selectionReason}`
+        : `${selected.result.candidateReview.reason} The other side had weaker explicit directional evidence (${Math.min(buy.evidenceScore, sell.evidenceScore)} versus ${Math.max(buy.evidenceScore, sell.evidenceScore)} signals).`,
     },
   };
 }

@@ -112,6 +112,12 @@ export interface CommunityNotification {
   created_at: string;
 }
 
+export interface CommunityRequestError extends Error {
+  status?: number;
+  onboardingRequired?: boolean;
+  requestId?: string;
+}
+
 export interface CommunityAnalysisSnapshot {
   source: 'fxsnap_ai';
   sourceAnalysisId: string;
@@ -165,9 +171,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const message = payload && typeof payload === 'object' && 'error' in payload && typeof payload.error === 'string'
       ? payload.error
       : `Community request failed (${response.status}).`;
-    const error = new Error(message) as Error & { status?: number; onboardingRequired?: boolean };
+    const error: CommunityRequestError = new Error(message);
     error.status = response.status;
     error.onboardingRequired = Boolean(payload && typeof payload === 'object' && 'onboardingRequired' in payload && payload.onboardingRequired === true);
+    error.requestId = payload && typeof payload === 'object' && 'requestId' in payload && typeof payload.requestId === 'string'
+      ? payload.requestId
+      : undefined;
     throw error;
   }
   return payload as T;

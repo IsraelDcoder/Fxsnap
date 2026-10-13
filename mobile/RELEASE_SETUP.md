@@ -9,6 +9,7 @@
 5. Build with the production EAS profile.
 
 The local `npm run build` command creates a web export. Native release builds use `npm run build:ios`, `npm run build:android`, or `npm run build:all`.
+Android release builds use R8 minification and resource shrinking. Test the resulting release build before submitting it, and verify the updated DEX optimization metrics in Play Console. The app does not lock orientation, so include landscape and large-screen layouts in device testing.
 
 ## RevenueCat
 
@@ -64,7 +65,7 @@ Create a Sentry React Native project, set `EXPO_PUBLIC_SENTRY_DSN`, and configur
 - Replace draft privacy and terms documents with reviewed, hosted URLs.
 - Add support and account-deletion URLs.
 - Complete App Store privacy and Google Play Data Safety declarations.
-- Test camera, gallery, image upload, billing, restore, expiration, refund/revocation, sharing, offline errors, and small-screen layouts on real devices.
+- Test camera, gallery, image upload, billing, restore, expiration, refund/revocation, sharing, offline errors, and small-screen, landscape, tablet, and foldable layouts on real devices.
 
 ## Market-data launch scope
 

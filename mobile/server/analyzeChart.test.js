@@ -418,7 +418,8 @@ test('two-sided follow-up prompt sends the same chart and evaluates both directi
   assert.match(messages[0].content, /Evaluate BUY and SELL separately/i);
   assert.match(messages[0].content, /Do not return unsupported just because trend, consolidation or entry trigger is unclear/i);
   assert.match(messages[0].content, /mark setup_status=unclear.*entry_status=waiting_for_trigger/i);
-  assert.match(messages[0].content, /A candidate is conditional, not an actionable trade/i);
+  assert.match(messages[0].content, /retain BUY\/SELL setup direction while the trigger is pending/i);
+  assert.match(messages[0].content, /prefer the direction supported by the established bias/i);
   assert.match(messages[1].content[0].text, /BTCUSD/);
   assert.equal(messages[1].content[1].image_url.url, 'data:image/jpeg;base64,image-data');
 });
@@ -889,12 +890,13 @@ test('vision instructions reserve invalid_image for clearly non-chart or unrecog
   assert.match(prompt, /invalid_image only for a clearly non-chart/i);
   assert.match(prompt, /chart_quality=poor and no_trade/i);
   assert.match(prompt, /status=no_trade/i);
-  assert.match(prompt, /Support and resistance define the setup; confirmation defines whether to trade now/i);
+  assert.match(prompt, /Support and resistance define setup direction; confirmation defines whether to enter now/i);
   assert.match(prompt, /buy entry at\/near support, SL beyond the visible support-side swing, TP1 at resistance/i);
   assert.match(prompt, /sell entry at\/near resistance, SL beyond the visible resistance-side swing, TP1 at support/i);
   assert.match(prompt, /If current price is between boundaries, plan from the nearer boundary/i);
   assert.match(prompt, /Do not require consolidation or a confirmed trend to describe a candidate/i);
-  assert.match(prompt, /Only signal BUY\/SELL after price action confirms/i);
+  assert.match(prompt, /return the best supported conditional BUY or SELL plan/i);
+  assert.match(prompt, /reserve an actionable BUY\/SELL decision for setups whose trigger and current-price checks pass/i);
   assert.match(prompt, /Compute R:R from these exact entry\/SL\/TP1 levels/i);
   assert.match(prompt, /candidate levels/i);
   assert.match(prompt, /entry, SL and TP1/i);
@@ -1149,6 +1151,27 @@ test('two-sided review abstains when both candidates fail or pass with equal evi
   );
   assert.equal(tie.trade_setup.type, 'none');
   assert.equal(tie.candidateReview.status, 'ambiguous');
+});
+
+test('two-sided review resolves an evidence tie using the nearer supported entry zone', () => {
+  const result = applyTwoSidedCandidateReview(
+    { ...directionalChartWithoutLevels, marketBias: 'mixed' },
+    twoSidedReview(
+      twoSidedCandidate('buy', {
+        entry_zone: '1.10100',
+        stop_loss: '1.10000',
+        take_profit_levels: ['1.10300'],
+      }),
+      twoSidedCandidate('sell', {
+        entry_zone: '1.10200',
+        stop_loss: '1.10300',
+        take_profit_levels: ['1.10000'],
+      }),
+    ),
+  );
+  assert.equal(result.trade_setup.type, 'buy');
+  assert.match(result.candidateReview.reason, /nearer supported entry zone/i);
+  assert.equal(result.tradeStatus, 'waiting_for_confirmation');
 });
 
 test('two-sided review rejects invalid directional geometry without altering proposed prices', () => {

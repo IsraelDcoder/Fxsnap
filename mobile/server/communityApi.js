@@ -20,9 +20,10 @@ const USERNAME_PATTERN = /^[a-z0-9_]{3,24}$/;
 const RESERVED_USERNAMES = new Set(['admin', 'administrator', 'fxsnap', 'fxsnap_official', 'moderator', 'support', 'system']);
 
 class CommunityError extends Error {
-  constructor(message, status = 500) {
+  constructor(message, status = 500, requestId = null) {
     super(message);
     this.status = status;
+    this.requestId = requestId;
   }
 }
 
@@ -60,6 +61,23 @@ function parseRows(value) {
   return Array.isArray(value) ? value : [];
 }
 
+function communityDatabaseOperation(path, method, body) {
+  if (path === 'rpc/fxsnap_community_set_reaction') return 'reaction_update';
+  if (path === 'fxsnap_community_messages' && method === 'POST' && body?.reply_to_id) return 'reply_creation';
+  return `${method.toLowerCase()}_${path.split('?')[0].replace(/^rpc\//, 'rpc_')}`;
+}
+
+function safeDatabaseMessage(value) {
+  return String(value || 'No database error message was provided.')
+    .replace(/\bBearer\s+\S+/gi, 'Bearer [redacted]')
+    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, '[redacted token]')
+    .replace(/\busr_[A-Za-z0-9_-]+\b/g, '[redacted account]')
+    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[redacted email]')
+    .replace(/\b[0-9a-f]{8}-[0-9a-f-]{27,}\b/gi, '[redacted id]')
+    .replace(/[\r\n\t]+/g, ' ')
+    .slice(0, 500);
+}
+
 async function dispatchCommunityPush(objectId) {
   try {
     await require('./notificationService').dispatchCommunityPushNotifications(objectId);
@@ -92,27 +110,71 @@ function createCommunityApi({
   async function database(path, options = {}) {
     const config = getServerConfig();
     if (!config.ready) throw new CommunityError('Community storage is not configured. Apply the migration and configure server-side Supabase storage first.', 503);
-    const response = await fetch(`${config.supabaseUrl}/rest/v1/${path}`, {
-      ...options,
-      headers: {
-        apikey: config.serviceKey,
-        authorization: `Bearer ${config.serviceKey}`,
-        'content-type': 'application/json',
-        ...(options.headers || {}),
-      },
-    });
+    const method = options.method || 'GET';
+    let requestBody = null;
+    if (typeof options.body === 'string') {
+      try { requestBody = JSON.parse(options.body); } catch { requestBody = null; }
+    }
+    const operation = communityDatabaseOperation(path, method, requestBody);
+    const requestId = crypto.randomUUID();
+    let response;
+    try {
+      response = await fetch(`${config.supabaseUrl}/rest/v1/${path}`, {
+        ...options,
+        headers: {
+          apikey: config.serviceKey,
+          authorization: `Bearer ${config.serviceKey}`,
+          'content-type': 'application/json',
+          ...(options.headers || {}),
+        },
+      });
+    } catch (error) {
+      console.error('[Community] Supabase request failed.', {
+        operation,
+        requestId,
+        httpStatus: null,
+        databaseCode: null,
+        databaseMessage: safeDatabaseMessage(error instanceof Error ? error.message : null),
+        path: path.split('?')[0],
+      });
+      throw new CommunityError('Community storage is temporarily unavailable. Please try again.', 502, requestId);
+    }
     const responseText = await response.text();
     let payload = null;
     if (responseText) {
       try { payload = JSON.parse(responseText); } catch { payload = null; }
     }
     if (!response.ok) {
-      if (response.status === 404 || response.status === 406) {
-        throw new CommunityError('Community database migration is not installed or is unavailable.', 503);
+      const databaseCode = typeof payload?.code === 'string' ? payload.code : null;
+      const databaseMessage = safeDatabaseMessage(payload?.message || payload?.error);
+      console.error('[Community] Supabase request failed.', {
+        operation,
+        requestId,
+        httpStatus: response.status,
+        databaseCode,
+        databaseMessage,
+        path: path.split('?')[0],
+      });
+      if (response.status === 404 || response.status === 406
+        || ['42P01', '42703', '42883', 'PGRST202', 'PGRST204', 'PGRST205'].includes(databaseCode)) {
+        throw new CommunityError('Community database migration is not installed or is unavailable.', 503, requestId);
       }
-      if (response.status === 409) throw new CommunityError('That action conflicts with existing community data.', 409);
-      console.error('[Community] Supabase request failed.', { status: response.status, path: path.split('?')[0] });
-      throw new CommunityError('Community storage could not complete the request. Please try again.', 502);
+      if (response.status === 409 || databaseCode === '23505') {
+        throw new CommunityError('That action conflicts with existing community data.', 409, requestId);
+      }
+      if (['23502', '23514', '22P02'].includes(databaseCode)) {
+        throw new CommunityError('Some community message details are invalid. Check your reply and try again.', 400, requestId);
+      }
+      if (databaseCode === '23503') {
+        throw new CommunityError('The community post could not be found. Refresh the discussion and try again.', 404, requestId);
+      }
+      if (databaseCode === 'P0001' && /message not found/i.test(databaseMessage)) {
+        throw new CommunityError('The community post could not be found. Refresh the discussion and try again.', 404, requestId);
+      }
+      if (databaseCode === '42501') {
+        throw new CommunityError('You are not authorized to update this community post.', 403, requestId);
+      }
+      throw new CommunityError('Community storage could not complete the request. Please try again.', 502, requestId);
     }
     return payload;
   }
@@ -847,7 +909,7 @@ function createCommunityApi({
           && new Date(actor.profile.muted_until).getTime() > Date.now()) {
           return sendJson(res, 403, { error: 'Your Community account is muted until the displayed time.' });
         }
-        return publishMessage(req, actor, await readJsonBody(req), res);
+        return await publishMessage(req, actor, await readJsonBody(req), res);
       }
 
       const commentsMatch = pathname.match(/^\/api\/community\/messages\/([0-9a-f-]+)\/comments$/i);
@@ -868,7 +930,7 @@ function createCommunityApi({
           }
           replyToId = replyTarget.id;
         }
-        return publishMessage(req, actor, {
+        return await publishMessage(req, actor, {
           ...body,
           kind: 'text',
           replyToId,
@@ -1462,9 +1524,22 @@ function createCommunityApi({
 
       return sendJson(res, 405, { error: 'Unsupported Community operation.' });
     } catch (error) {
-      if (error instanceof CommunityError) return sendJson(res, error.status, { error: error.message });
-      console.error('[Community] Request failed.', error instanceof Error ? error.name : 'Unknown error');
-      return sendJson(res, 500, { error: 'The Community request failed. Please try again.' });
+      if (error instanceof CommunityError) {
+        return sendJson(res, error.status, {
+          error: error.message,
+          ...(error.requestId ? { requestId: error.requestId } : {}),
+        });
+      }
+      const requestId = crypto.randomUUID();
+      console.error('[Community] Request failed.', {
+        requestId,
+        operation: communityDatabaseOperation(pathname, req.method || 'GET', null),
+        errorName: error instanceof Error ? error.name : 'UnknownError',
+      });
+      return sendJson(res, 500, {
+        error: 'The Community request failed. Please try again.',
+        requestId,
+      });
     }
   }
 

@@ -472,10 +472,10 @@ test('waiting setups remain on hold and explain the confirmation trigger', () =>
     '1.1100',
     'BUY',
     2,
-  ), 'WAIT FOR CONFIRMATION');
+  ), 'BUY SETUP');
 });
 
-test('trade signal is limited to buy, sell, or wait for confirmation', () => {
+test('trade readiness distinguishes conditional setup direction from an actionable signal', () => {
   assert.equal(
     getTradeReadinessLabel('no_setup', '158.23000', '158.15500', '158.29000', 'BUY', 0.8),
     'WAIT FOR CONFIRMATION',
@@ -491,17 +491,18 @@ test('trade signal is limited to buy, sell, or wait for confirmation', () => {
   assert.equal(getTradeReadinessLabel('actionable', '1.10', '1.09', '1.12', 'BUY', 2), 'BUY');
   assert.equal(getTradeReadinessLabel('actionable', '1.10', '1.09', '1.12', 'SELL', 2), 'SELL');
   assert.equal(getTradeReadinessLabel('actionable', '1.10', '1.09', '1.12'), 'WAIT FOR CONFIRMATION');
-  assert.equal(getTradeReadinessLabel('waiting_for_confirmation', '1.10', '1.09', '1.12', 'BUY', 2), 'WAIT FOR CONFIRMATION');
+  assert.equal(getTradeReadinessLabel('waiting_for_confirmation', '1.10', '1.09', '1.12', 'BUY', 2), 'BUY SETUP');
+  assert.equal(getTradeReadinessLabel('waiting_for_confirmation', '1.10', 'Not established', '1.12', 'SELL', 2), 'SELL BIAS');
 });
 
-test('trade signal is not obscured by readiness percentages', () => {
+test('trade readiness is not obscured by readiness percentages', () => {
   assert.equal(
     formatTradeReadiness(0, 'no_setup', '158.23000', '158.15500', '158.29000', 'BUY', 0.8),
     'WAIT FOR CONFIRMATION',
   );
   assert.equal(
     formatTradeReadiness(64, 'waiting_for_confirmation', '1.10', '1.09', '1.12', 'BUY', 2),
-    'WAIT FOR CONFIRMATION',
+    'BUY SETUP',
   );
   assert.equal(
     formatTradeReadiness(100, 'actionable', '1.10', '1.09', '1.12', 'SELL', 2),

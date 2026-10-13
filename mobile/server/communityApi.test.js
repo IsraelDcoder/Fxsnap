@@ -28,6 +28,7 @@ function makeHarness({
   initialReactions = [],
   initialConversations = [],
   initialSupportMessages = [],
+  databaseFailure = null,
 } = {}) {
   const profiles = [...initialProfiles];
   const messages = [...initialMessages];
@@ -43,7 +44,12 @@ function makeHarness({
     const parsed = new URL(String(url));
     const table = parsed.pathname.split('/').pop();
     const method = options.method || 'GET';
-    requests.push({ table, method, query: parsed.search, body: options.body ? JSON.parse(options.body) : null });
+    const request = { table, method, query: parsed.search, body: options.body ? JSON.parse(options.body) : null };
+    requests.push(request);
+    const failure = databaseFailure?.(request);
+    if (failure) {
+      return makeResponse(failure.status, failure.body);
+    }
 
     if (table === 'fxsnap_community_record_views' && method === 'POST') {
       const body = JSON.parse(options.body);
@@ -225,7 +231,14 @@ function makeHarness({
   };
 
   const api = createCommunityApi({
-    getActor: async () => actor,
+    getActor: async (_request, response) => {
+      if (!actor) {
+        response.statusCode = 401;
+        response.body = { error: 'Sign in with Google.' };
+        return null;
+      }
+      return actor;
+    },
     sendJson: (response, status, body) => {
       response.statusCode = status;
       response.body = body;
@@ -312,6 +325,98 @@ test('members can load and publish replies in a post discussion', async () => {
   assert.equal(published.body.message.body, 'A new reply');
   assert.equal(published.body.message.replyTo.id, messageId);
   assert.deepEqual(harness.pushedCommunityEvents, [published.body.message.id]);
+  const refreshed = await harness.call(commentsPath);
+  assert.equal(refreshed.statusCode, 200, JSON.stringify(refreshed.body));
+  assert.equal(refreshed.body.comments.length, 2);
+  assert.equal(refreshed.body.comments[1].body, 'A new reply');
+});
+
+test('reply database failures log safe diagnostics and return a correlated safe response', async () => {
+  const messageId = '00000000-0000-4000-8000-000000000046';
+  const profile = {
+    account_id: ACCOUNT_ID,
+    supabase_user_id: MEMBER_ID,
+    username: 'chartpro',
+    picture_url: null,
+    accepted_rules_version: RULES_VERSION,
+    status: 'active',
+    muted_until: null,
+    joined_at: new Date().toISOString(),
+  };
+  const root = {
+    id: messageId,
+    account_id: 'usr_post-author',
+    author_username: 'another',
+    is_official: false,
+    kind: 'text',
+    category: 'market_discussion',
+    body: 'Original post',
+    payload: {},
+    reply_to_id: null,
+    pinned_at: null,
+    removed_at: null,
+    created_at: new Date().toISOString(),
+    client_message_id: '00000000-0000-4000-8000-000000000047',
+  };
+  const harness = makeHarness({
+    initialProfiles: [profile],
+    initialMessages: [root],
+    databaseFailure: (request) => request.table === 'fxsnap_community_messages' && request.method === 'POST'
+      ? { status: 400, body: { code: '23514', message: 'check constraint failed for usr_private-account' } }
+      : null,
+  });
+  const logged = [];
+  const originalError = console.error;
+  console.error = (...args) => logged.push(args);
+  try {
+    const response = await harness.call(`/api/community/messages/${messageId}/comments`, {
+      method: 'POST',
+      body: {
+        clientMessageId: '00000000-0000-4000-8000-000000000048',
+        body: 'A reply',
+      },
+    });
+    assert.equal(response.statusCode, 400);
+    assert.equal(response.body.error, 'Some community message details are invalid. Check your reply and try again.');
+    assert.match(response.body.requestId, /^[0-9a-f-]{36}$/i);
+    assert.equal(response.body.error.includes('usr_private-account'), false);
+    assert.equal(logged.length, 1);
+    assert.equal(logged[0][0], '[Community] Supabase request failed.');
+    assert.equal(logged[0][1].operation, 'reply_creation');
+    assert.equal(logged[0][1].requestId, response.body.requestId);
+    assert.equal(logged[0][1].databaseCode, '23514');
+    assert.equal(logged[0][1].databaseMessage.includes('usr_private-account'), false);
+  } finally {
+    console.error = originalError;
+  }
+});
+
+test('reply submission rejects missing posts and unauthenticated members', async () => {
+  const postId = '00000000-0000-4000-8000-000000000049';
+  const profile = {
+    account_id: ACCOUNT_ID,
+    supabase_user_id: MEMBER_ID,
+    username: 'chartpro',
+    picture_url: null,
+    accepted_rules_version: RULES_VERSION,
+    status: 'active',
+    muted_until: null,
+    joined_at: new Date().toISOString(),
+  };
+  const body = { clientMessageId: '00000000-0000-4000-8000-000000000050', body: 'A reply' };
+  const missingPost = await makeHarness({ initialProfiles: [profile] }).call(
+    `/api/community/messages/${postId}/comments`,
+    { method: 'POST', body },
+  );
+  assert.equal(missingPost.statusCode, 404);
+
+  const unauthenticated = makeHarness({ actor: null });
+  const unauthorized = await unauthenticated.call(
+    `/api/community/messages/${postId}/comments`,
+    { method: 'POST', body },
+  );
+  assert.equal(unauthorized.statusCode, 401);
+  assert.equal(unauthenticated.requests.length, 0);
 });
 
 test('Community bootstrap returns the member profile and first feed page together', async () => {
@@ -392,6 +497,7 @@ test('members can add and remove a reaction on a post', async () => {
   const legacyPostView = await harness.call(`/api/community/messages/${messageId}`);
   assert.equal(legacyPostView.body.post.reactions.find((item) => item.reaction === 'like')?.reacted, true);
   assert.equal(legacyPostView.body.post.reactions.find((item) => item.reaction === 'love')?.reacted, true);
+  assert.equal(legacyPostView.body.post.reactions.find((item) => item.reaction === 'love')?.count, 1);
 
   const removed = await harness.call(path, request);
   assert.equal(removed.statusCode, 200, JSON.stringify(removed.body));
@@ -456,6 +562,61 @@ test('all reaction choices replace the prior selection and concurrent requests l
     harness.call(path, { method: 'POST', body: { reaction } })
   )));
   assert.equal(harness.reactions.length, 1);
+});
+
+test('reaction RPC failures log safe diagnostics and return a correlated safe response', async () => {
+  const messageId = '00000000-0000-4000-8000-000000000063';
+  const profile = {
+    account_id: ACCOUNT_ID,
+    supabase_user_id: MEMBER_ID,
+    username: 'chartpro',
+    picture_url: null,
+    accepted_rules_version: RULES_VERSION,
+    status: 'active',
+    muted_until: null,
+    joined_at: new Date().toISOString(),
+  };
+  const message = {
+    id: messageId,
+    account_id: 'usr_another-member',
+    author_username: 'another',
+    is_official: false,
+    kind: 'text',
+    category: 'market_discussion',
+    body: 'A post',
+    payload: {},
+    reply_to_id: null,
+    pinned_at: null,
+    removed_at: null,
+    created_at: new Date().toISOString(),
+    client_message_id: '00000000-0000-4000-8000-000000000064',
+  };
+  const harness = makeHarness({
+    initialProfiles: [profile],
+    initialMessages: [message],
+    databaseFailure: (request) => request.table === 'fxsnap_community_set_reaction' && request.method === 'POST'
+      ? { status: 400, body: { code: 'PGRST202', message: 'Could not find function for usr_private-account' } }
+      : null,
+  });
+  const logged = [];
+  const originalError = console.error;
+  console.error = (...args) => logged.push(args);
+  try {
+    const response = await harness.call(`/api/community/messages/${messageId}/reactions`, {
+      method: 'POST',
+      body: { reaction: 'love' },
+    });
+    assert.equal(response.statusCode, 503);
+    assert.equal(response.body.error, 'Community database migration is not installed or is unavailable.');
+    assert.match(response.body.requestId, /^[0-9a-f-]{36}$/i);
+    assert.equal(logged.length, 1);
+    assert.equal(logged[0][1].operation, 'reaction_update');
+    assert.equal(logged[0][1].requestId, response.body.requestId);
+    assert.equal(logged[0][1].databaseCode, 'PGRST202');
+    assert.equal(logged[0][1].databaseMessage.includes('usr_private-account'), false);
+  } finally {
+    console.error = originalError;
+  }
 });
 
 test('view events deduplicate viewers for 24 hours and exclude authors', async () => {

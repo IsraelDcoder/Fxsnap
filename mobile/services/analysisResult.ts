@@ -154,8 +154,12 @@ export function getTradeReadinessLabel(
     && isValidPrice(stopLoss)
     && isValidPrice(takeProfit)
     && getRiskRewardRatio(riskReward) != null;
-  if (tradeStatus === 'actionable' && hasCompleteSetup && (normalizedDirection === 'BUY' || normalizedDirection === 'SELL')) {
-    return normalizedDirection;
+  if (normalizedDirection !== 'BUY' && normalizedDirection !== 'SELL') {
+    return 'WAIT FOR CONFIRMATION';
+  }
+  if (tradeStatus === 'actionable' && hasCompleteSetup) return normalizedDirection;
+  if (tradeStatus === 'waiting_for_confirmation') {
+    return hasCompleteSetup ? `${normalizedDirection} SETUP` : `${normalizedDirection} BIAS`;
   }
   return 'WAIT FOR CONFIRMATION';
 }
