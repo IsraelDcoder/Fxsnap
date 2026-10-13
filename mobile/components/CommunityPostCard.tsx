@@ -9,18 +9,11 @@ import { COMMUNITY_CATEGORIES } from '@/services/community';
 import { formatCompactCommunityCount } from '@/services/communityFormatting';
 import { CommunityReactionTapGuard } from '@/services/communityReactionInteraction';
 import { formatInstrumentPriceText } from '@/services/priceFormatting';
+import { formatRiskReward } from '@/services/analysisResult';
 import { useColors } from '@/hooks/useColors';
 
 function textValue(value: unknown, fallback = '—') {
   return typeof value === 'string' && value.trim() ? value : fallback;
-}
-
-function formatRiskReward(value: unknown) {
-  if (typeof value === 'number' && Number.isFinite(value) && value > 0) return `1:${value}`;
-  if (typeof value !== 'string' || !value.trim()) return '—';
-  const ratio = value.trim();
-  if (ratio.includes(':')) return ratio;
-  return Number.isFinite(Number(ratio)) && Number(ratio) > 0 ? `1:${ratio}` : '—';
 }
 
 function relativeTime(isoDate: string) {
@@ -322,7 +315,7 @@ export default function CommunityPostCard({
         <View style={[styles.engagementAction, compact && styles.compactAction]} accessible accessibilityLabel={`${post.viewCount} views`}>
           <Feather name="eye" size={compact ? 14 : 17} color={colors.textSecondary} />
           <Text style={[styles.actionLabel, compact && styles.compactActionLabel, { color: colors.textSecondary }]}>
-            {formatCompactCommunityCount(post.viewCount)}
+            {ownAccount ? `Views ${post.viewCount.toLocaleString()}` : formatCompactCommunityCount(post.viewCount)}
           </Text>
         </View>
         <TouchableOpacity

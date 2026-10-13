@@ -36,6 +36,7 @@ function makeHarness({
   const shareDedup = new Map();
   const conversations = [...initialConversations];
   const supportMessages = [...initialSupportMessages];
+  const pushedCommunityEvents = [];
   const savedNames = [];
   const requests = [];
   global.fetch = async (url, options = {}) => {
@@ -232,6 +233,7 @@ function makeHarness({
     },
     readJsonBody: async (request) => request.body || {},
     saveCommunityUsername: async (_accountId, username) => { savedNames.push(username); },
+    dispatchCommunityPush: async (objectId) => { pushedCommunityEvents.push(objectId); },
   });
 
   return {
@@ -243,6 +245,7 @@ function makeHarness({
     supportMessages,
     requests,
     savedNames,
+    pushedCommunityEvents,
     async call(path, { method = 'GET', body } = {}) {
       const response = {};
       await api({ method, body }, response, new URL(path, 'https://fxsnap.test'));
@@ -308,6 +311,45 @@ test('members can load and publish replies in a post discussion', async () => {
   assert.equal(published.statusCode, 201, JSON.stringify(published.body));
   assert.equal(published.body.message.body, 'A new reply');
   assert.equal(published.body.message.replyTo.id, messageId);
+  assert.deepEqual(harness.pushedCommunityEvents, [published.body.message.id]);
+});
+
+test('Community bootstrap returns the member profile and first feed page together', async () => {
+  const profile = {
+    account_id: ACCOUNT_ID,
+    supabase_user_id: MEMBER_ID,
+    username: 'chartpro',
+    picture_url: null,
+    accepted_rules_version: RULES_VERSION,
+    status: 'active',
+    muted_until: null,
+    joined_at: new Date().toISOString(),
+  };
+  const post = {
+    id: '00000000-0000-4000-8000-000000000051',
+    account_id: ACCOUNT_ID,
+    author_username: profile.username,
+    is_official: false,
+    kind: 'text',
+    category: 'trading',
+    body: 'First feed post',
+    payload: {},
+    reply_to_id: null,
+    pinned_at: null,
+    removed_at: null,
+    created_at: new Date().toISOString(),
+    client_message_id: '00000000-0000-4000-8000-000000000052',
+    view_count: 0,
+    share_count: 0,
+  };
+  const harness = makeHarness({ initialProfiles: [profile], initialMessages: [post] });
+  const response = await harness.call('/api/community/bootstrap?feed=global&limit=30');
+
+  assert.equal(response.statusCode, 200, JSON.stringify(response.body));
+  assert.equal(response.body.profile.username, 'chartpro');
+  assert.equal(response.body.messages.length, 1);
+  assert.equal(response.body.messages[0].body, 'First feed post');
+  assert.equal(response.body.nextCursor, null);
 });
 
 test('members can add and remove a reaction on a post', async () => {
@@ -345,6 +387,7 @@ test('members can add and remove a reaction on a post', async () => {
   assert.equal(added.statusCode, 200, JSON.stringify(added.body));
   assert.equal(added.body.reacted, true);
   assert.equal(harness.reactions.length, 1);
+  assert.deepEqual(harness.pushedCommunityEvents, [messageId]);
 
   const legacyPostView = await harness.call(`/api/community/messages/${messageId}`);
   assert.equal(legacyPostView.body.post.reactions.find((item) => item.reaction === 'like')?.reacted, true);
@@ -354,6 +397,7 @@ test('members can add and remove a reaction on a post', async () => {
   assert.equal(removed.statusCode, 200, JSON.stringify(removed.body));
   assert.equal(removed.body.reacted, false);
   assert.equal(harness.reactions.length, 0);
+  assert.deepEqual(harness.pushedCommunityEvents, [messageId]);
 
   const legacyRequest = await harness.call(path, { method: 'POST', body: { reaction: 'like' } });
   assert.equal(legacyRequest.body.selectedReaction, 'love');

@@ -81,6 +81,7 @@ export default function SettingsScreen() {
     dailyBrief: true,
     inactivity: true,
     weekly: true,
+    community: true,
   });
   const [notificationsLoading, setNotificationsLoading] = useState(true);
   const [notificationsBusy, setNotificationsBusy] = useState(false);
@@ -549,6 +550,15 @@ export default function SettingsScreen() {
             disabled={notificationsLoading || notificationsBusy || !notificationPreferences.enabled}
             colors={colors}
             onValueChange={(weekly) => void changeNotificationPreferences({ weekly })}
+          />
+          <NotificationToggle
+            icon="users"
+            label="Community activity"
+            description="New Community posts, replies, and reactions."
+            value={notificationPreferences.community}
+            disabled={notificationsLoading || notificationsBusy || !notificationPreferences.enabled}
+            colors={colors}
+            onValueChange={(community) => void changeNotificationPreferences({ community })}
             last
           />
           {notificationsLoading ? (

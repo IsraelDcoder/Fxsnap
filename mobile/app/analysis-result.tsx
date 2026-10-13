@@ -234,6 +234,9 @@ export default function AnalysisResultScreen() {
     && hasValidatedTradeSetup(currentAnalysis);
   const hasDirectionalCandidate = currentAnalysis?.tradeSetup?.type === 'buy'
     || currentAnalysis?.tradeSetup?.type === 'sell';
+  const hasCompleteDirectionalSetup = hasDirectionalCandidate
+    && currentAnalysis != null
+    && hasValidatedTradeSetup(currentAnalysis);
   const isDevelopingResult = currentAnalysis != null
     && !isAnalysisUnavailable
     && canShowMarketRead
@@ -708,7 +711,7 @@ export default function AnalysisResultScreen() {
                 <View style={styles.targetTrack}><View style={styles.targetDot} /></View><Text style={styles.calloutLevelName}>TP2</Text><Text numberOfLines={1} style={styles.calloutLevelPrice}>{hasFullAnalysisAccess ? tp2Level : 'Unlock'}</Text>{!hasFullAnalysisAccess ? <Feather name="lock" size={10} color="#C6A94B" /> : null}
               </TouchableOpacity>
             ) : (
-              <View style={styles.calloutLevelRow}><View style={styles.targetTrack}><View style={styles.targetDotMuted} /></View><Text style={styles.calloutLevelName}>TP2</Text><Text style={styles.calloutMissing}>Optional; not identified</Text></View>
+              <View style={styles.calloutLevelRow}><View style={styles.targetTrack}><View style={styles.targetDotMuted} /></View><Text style={styles.calloutLevelName}>TP2</Text><Text style={styles.calloutMissing}>Open</Text></View>
             )}
           </View>
           <TouchableOpacity style={styles.stopCallout} onPress={() => highlightLevel('sl')}>
@@ -732,7 +735,7 @@ export default function AnalysisResultScreen() {
               <View style={styles.confidenceLine}><Text style={[styles.bodyMuted, { color: colors.textSecondary }]}>Evidence score</Text><Text style={[styles.confidenceText, { color: colors.text }]}>{confidenceLabel} · {confidence}%</Text></View>
               <View style={[styles.confidenceTrack, { backgroundColor: colors.surface }]}><View style={[styles.confidenceProgress, { width: `${Math.max(0, Math.min(confidence, 100))}%`, backgroundColor: directionColor }]} /></View>
             </Animated.View>
-            {isDevelopingResult ? (
+            {isDevelopingResult && !hasCompleteDirectionalSetup ? (
               <View style={[styles.levelsCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
                 <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>MARKET DEVELOPMENT</Text>
                 <Text style={[styles.reasoningText, { color: colors.textSecondary }]}>{marketDevelopmentPlan}</Text>
@@ -743,7 +746,7 @@ export default function AnalysisResultScreen() {
               <TradeLevelRow label="Entry" value={entryLevelText} /><View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
               <TradeLevelRow label="Stop Loss" value={stopLevelText} color={colors.sell} /><View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
               <TradeLevelRow label="Take Profit 1" value={tp1LevelText} color={colors.buy} /><View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
-              <TradeLevelRow label="Take Profit 2" value={usableTargetLevels.length > 1 ? (hasFullAnalysisAccess ? tp2Level : '••••••') : 'Optional; not identified'} color={colors.buy} locked={!hasFullAnalysisAccess && usableTargetLevels.length > 1} onPress={() => openLockedContent('tp2')} /><View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
+              <TradeLevelRow label="Take Profit 2" value={usableTargetLevels.length > 1 ? (hasFullAnalysisAccess ? tp2Level : '••••••') : 'Open'} color={colors.buy} locked={!hasFullAnalysisAccess && usableTargetLevels.length > 1} onPress={() => openLockedContent('tp2')} /><View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
                 <TradeLevelRow label="Risk : Reward" value={hasFullAnalysisAccess ? riskRewardText : '••••'} color={colors.buy} locked={!hasFullAnalysisAccess} onPress={() => openLockedContent('risk-reward')} />
             </View>
             {isValidatedActionable ? (

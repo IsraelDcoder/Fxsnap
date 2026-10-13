@@ -60,7 +60,35 @@ function parseRows(value) {
   return Array.isArray(value) ? value : [];
 }
 
-function createCommunityApi({ getActor, sendJson, readJsonBody, saveCommunityUsername }) {
+async function dispatchCommunityPush(objectId) {
+  try {
+    await require('./notificationService').dispatchCommunityPushNotifications(objectId);
+  } catch (error) {
+    console.error('[Community] Activity push dispatch failed; the queued event will be retried.', {
+      objectId,
+      error: error instanceof Error ? error.message : 'Unknown notification error.',
+    });
+  }
+}
+
+function createCommunityApi({
+  getActor,
+  sendJson,
+  readJsonBody,
+  saveCommunityUsername,
+  dispatchCommunityPush: sendCommunityPush = dispatchCommunityPush,
+}) {
+  function dispatchQueuedCommunityPush(messageId) {
+    void Promise.resolve()
+      .then(() => sendCommunityPush(messageId))
+      .catch((error) => {
+        console.error('[Community] Activity push dispatch failed; the queued event will be retried.', {
+          messageId,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      });
+  }
+
   async function database(path, options = {}) {
     const config = getServerConfig();
     if (!config.ready) throw new CommunityError('Community storage is not configured. Apply the migration and configure server-side Supabase storage first.', 503);
@@ -338,8 +366,7 @@ function createCommunityApi({ getActor, sendJson, readJsonBody, saveCommunityUse
   async function listMessages(actor, url, res) {
     const rawLimit = Number(url.searchParams.get('limit') || MEMBER_LIMIT);
     if (!Number.isInteger(rawLimit) || rawLimit < 1 || rawLimit > MEMBER_LIMIT) {
-      sendJson(res, 400, { error: `Message page size must be between 1 and ${MEMBER_LIMIT}.` });
-      return;
+      throw new CommunityError(`Message page size must be between 1 and ${MEMBER_LIMIT}.`, 400);
     }
     const cursor = url.searchParams.get('before');
     let before = null;
@@ -351,28 +378,26 @@ function createCommunityApi({ getActor, sendJson, readJsonBody, saveCommunityUse
         before = decoded;
       } catch {
         if (Number.isNaN(Date.parse(cursor))) {
-          sendJson(res, 400, { error: 'Invalid message history cursor.' });
-          return;
+          throw new CommunityError('Invalid message history cursor.', 400);
         }
         before = { createdAt: new Date(cursor).toISOString(), id: 'ffffffff-ffff-ffff-ffff-ffffffffffff' };
       }
     }
     const category = url.searchParams.get('category');
     if (category && !COMMUNITY_CATEGORIES.includes(category)) {
-      sendJson(res, 400, { error: 'Choose a valid Community category.' });
-      return;
+      throw new CommunityError('Choose a valid Community category.', 400);
     }
     const feed = url.searchParams.get('feed') || 'global';
     if (!['global', 'following'].includes(feed)) {
-      sendJson(res, 400, { error: 'Choose a valid Community feed.' });
-      return;
+      throw new CommunityError('Choose a valid Community feed.', 400);
     }
     const following = feed === 'following'
       ? parseRows(await getRows('fxsnap_community_follows',
         `follower_account_id=eq.${encodeURIComponent(actor.accountId)}&select=followed_account_id&limit=500`))
       : null;
     if (following && following.length === 0) {
-      return sendJson(res, 200, { messages: [], nextCursor: null, hasMore: false, followingEmpty: true });
+      const emptyPage = { messages: [], nextCursor: null, hasMore: false, followingEmpty: true };
+      return res ? sendJson(res, 200, emptyPage) : emptyPage;
     }
     const blocks = parseRows(await getRows(
       'fxsnap_community_blocks',
@@ -407,12 +432,13 @@ function createCommunityApi({ getActor, sendJson, readJsonBody, saveCommunityUse
     const next = hasMore && page.length
       ? Buffer.from(JSON.stringify({ createdAt: page[page.length - 1].created_at, id: page[page.length - 1].id })).toString('base64url')
       : null;
-    return sendJson(res, 200, {
+    const result = {
       messages: serialized,
       nextCursor: next,
       hasMore,
       followingEmpty: Boolean(following && following.length > 0 && page.length === 0),
-    });
+    };
+    return res ? sendJson(res, 200, result) : result;
   }
 
   async function publishMessage(req, actor, body, res) {
@@ -535,6 +561,7 @@ function createCommunityApi({ getActor, sendJson, readJsonBody, saveCommunityUse
     }
     if (!inserted.length) throw new CommunityError('Message could not be confirmed after saving. Retry safely with the same message id.', 502);
     const [message] = await serializeMessages(inserted, actor);
+    dispatchQueuedCommunityPush(message.id);
     return sendJson(res, 201, { message, duplicate: false });
   }
 
@@ -560,7 +587,7 @@ function createCommunityApi({ getActor, sendJson, readJsonBody, saveCommunityUse
     if (!pathname.startsWith('/api/community/') && !pathname.startsWith('/api/admin/community/')) return false;
     try {
       const actor = await authorize(req, res, {
-        joined: !['/api/community/me', '/api/community/username', '/api/community/join'].includes(pathname),
+        joined: !['/api/community/me', '/api/community/username', '/api/community/join', '/api/community/bootstrap'].includes(pathname),
       });
       if (!actor) return true;
       const config = getServerConfig();
@@ -581,6 +608,44 @@ function createCommunityApi({ getActor, sendJson, readJsonBody, saveCommunityUse
         return sendJson(res, 200, {
           rulesVersion: RULES_VERSION,
           profile: rows[0] ? profileForClient(rows[0], actor.isAdmin, actor.pictureUrl) : null,
+        });
+      }
+
+      if (pathname === '/api/community/bootstrap' && req.method === 'GET') {
+        const profiles = parseRows(await getRows(
+          'fxsnap_community_profiles',
+          `${profileQuery(actor.accountId)}&select=account_id,supabase_user_id,username,picture_url,status,muted_until,accepted_rules_version,joined_at&limit=1`,
+        ));
+        let profile = profiles[0];
+        if (!profile) return sendJson(res, 200, { profile: null, messages: [], nextCursor: null, hasMore: false });
+        if (profile.supabase_user_id !== actor.supabaseUserId) {
+          return sendJson(res, 403, { error: 'The signed-in account does not match this Community profile.' });
+        }
+        if (['suspended', 'banned'].includes(profile.status)) {
+          return sendJson(res, 403, { error: 'This Community account is currently unavailable.' });
+        }
+        if (actor.pictureUrl && actor.pictureUrl !== profile.picture_url) {
+          const updatedProfiles = parseRows(await patchRows(
+            'fxsnap_community_profiles',
+            profileQuery(actor.accountId),
+            { picture_url: actor.pictureUrl, updated_at: new Date().toISOString() },
+          ));
+          if (updatedProfiles[0]) profile = updatedProfiles[0];
+        }
+        if (profile.status === 'muted' && profile.muted_until
+          && new Date(profile.muted_until).getTime() <= Date.now()) {
+          const updatedProfiles = parseRows(await patchRows(
+            'fxsnap_community_profiles',
+            profileQuery(actor.accountId),
+            { status: 'active', muted_until: null, updated_at: new Date().toISOString() },
+          ));
+          if (updatedProfiles[0]) profile = updatedProfiles[0];
+        }
+        actor.profile = profile;
+        const page = await listMessages(actor, url, null);
+        return sendJson(res, 200, {
+          profile: profileForClient(profile, actor.isAdmin, actor.pictureUrl),
+          ...page,
         });
       }
 
@@ -1030,6 +1095,7 @@ function createCommunityApi({ getActor, sendJson, readJsonBody, saveCommunityUse
         }))[0];
         const reactions = groupReactions(await queryReactions([message.id]), actor.accountId);
         const selectedReaction = selection?.selected_reaction || null;
+        if (selectedReaction) dispatchQueuedCommunityPush(message.id);
         return sendJson(res, 200, {
           reacted: selectedReaction !== null,
           selectedReaction,

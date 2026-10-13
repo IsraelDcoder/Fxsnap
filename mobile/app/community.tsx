@@ -32,9 +32,9 @@ import {
   createCommunityClientId,
   deleteCommunityMessage,
   followCommunityMember,
+  getCommunityBootstrap,
   getCommunityComments,
   getCommunityFollows,
-  getCommunityMe,
   getCommunityMessages,
   getCommunityNotifications,
   getCommunityPost,
@@ -46,6 +46,7 @@ import {
   reportCommunityMessage,
   shareCommunityPost,
   subscribeToCommunityChanges,
+  subscribeToCommunityPresence,
   toggleCommunityReaction,
   updateCommunityMessage,
   unblockCommunityMember,
@@ -179,6 +180,7 @@ export default function CommunityScreen() {
   const [threadLoading, setThreadLoading] = useState(false);
   const [commentSending, setCommentSending] = useState(false);
   const [notifications, setNotifications] = useState<CommunityNotification[]>([]);
+  const [onlineMemberCount, setOnlineMemberCount] = useState<number | null>(null);
   const [blocksVisible, setBlocksVisible] = useState(false);
   const [blocks, setBlocks] = useState<Array<{ accountId: string; username: string }>>([]);
   const [postActionsPost, setPostActionsPost] = useState<CommunityMessage | null>(null);
@@ -190,6 +192,7 @@ export default function CommunityScreen() {
   const currentAccountIdRef = useRef<string | null>(null);
   const processedPostId = useRef<string | null>(null);
   const processedAnalysisId = useRef<string | null>(null);
+  const skipBootstrapFeedFetch = useRef(false);
   const publishId = useRef<string | null>(null);
   const commentId = useRef<string | null>(null);
   currentAccountIdRef.current = profile?.accountId || null;
@@ -239,19 +242,26 @@ export default function CommunityScreen() {
         return;
       }
       setAccount(linkedAccount);
-      const membership = await getCommunityMe();
+      const initialCategory = COMMUNITY_CATEGORIES.find((item) => item.id === categoryParam)?.id || null;
+      const membership = await getCommunityBootstrap({ feed: 'global', category: initialCategory, limit: 30 });
       if (!membership.profile) {
         setProfile(null);
         setStage('onboarding');
         return;
       }
+      setCategory(initialCategory);
+      setPosts(membership.messages);
+      setNextCursor(membership.nextCursor);
+      setHasMore(membership.hasMore);
+      setFollowingEmpty(membership.followingEmpty === true);
+      skipBootstrapFeedFetch.current = true;
       setProfile(membership.profile);
       setStage('feed');
     } catch (error) {
       setScreenError(apiErrorMessage(error));
       setStage('error');
     }
-  }, []);
+  }, [categoryParam]);
 
   useEffect(() => { void bootstrap(); }, [bootstrap]);
 
@@ -262,6 +272,10 @@ export default function CommunityScreen() {
 
   useEffect(() => {
     if (stage !== 'feed' || !profile) return;
+    if (skipBootstrapFeedFetch.current) {
+      skipBootstrapFeedFetch.current = false;
+      return;
+    }
     void loadFeed(true);
   }, [category, feed, profile, stage]);
 
@@ -282,6 +296,15 @@ export default function CommunityScreen() {
       unsubscribe();
     };
   }, [loadFeed, profile, refreshNotifications, stage]);
+
+  useEffect(() => {
+    if (stage !== 'feed' || !profile) {
+      setOnlineMemberCount(null);
+      return;
+    }
+    setOnlineMemberCount(null);
+    return subscribeToCommunityPresence(profile.accountId, setOnlineMemberCount);
+  }, [profile, stage]);
 
   useEffect(() => {
     if (stage !== 'feed' || !profile) return;
@@ -1070,6 +1093,13 @@ export default function CommunityScreen() {
         ListHeaderComponent={
           <>
             <CommunityPreviewNotice />
+            <View style={[styles.onlineBanner, { backgroundColor: colors.card, borderColor: colors.cardBorder }]} accessibilityRole="summary">
+              <View style={[styles.onlineDot, { backgroundColor: onlineMemberCount == null ? colors.textMuted : colors.buy }]} />
+              <Text style={[styles.onlineLabel, { color: colors.textSecondary }]}>
+                {onlineMemberCount == null ? 'Community members online' : `${onlineMemberCount} ${onlineMemberCount === 1 ? 'member' : 'members'} online`}
+              </Text>
+              <Feather name="radio" size={13} color={onlineMemberCount == null ? colors.textMuted : colors.buy} />
+            </View>
             <View style={styles.feedTabs}>
               {(['global', 'following'] as const).map((item) => (
                 <TouchableOpacity
@@ -1495,6 +1525,9 @@ const styles = StyleSheet.create({
   headerSubtitle: { fontSize: 10, fontFamily: 'Inter_400Regular', marginTop: 2 },
   notificationDot: { width: 8, height: 8, borderRadius: 4, position: 'absolute', right: 8, top: 7 },
   feedContent: { paddingHorizontal: 7, paddingTop: 6 },
+  onlineBanner: { minHeight: 36, flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, borderRadius: 12, paddingHorizontal: 11, marginTop: 6 },
+  onlineDot: { width: 7, height: 7, borderRadius: 4 },
+  onlineLabel: { flex: 1, fontSize: 10, fontFamily: 'Inter_600SemiBold' },
   masonryCell: { paddingHorizontal: 4, paddingVertical: 4 },
   feedTabs: { flexDirection: 'row', gap: 7, marginTop: 8, marginBottom: 3 },
   feedTab: { minHeight: 34, justifyContent: 'center', borderWidth: 1, borderRadius: 17, paddingHorizontal: 15 },

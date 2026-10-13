@@ -11,10 +11,12 @@ create table if not exists public.fxsnap_push_devices (
   device_id text primary key,
   expo_token text not null unique,
   platform text not null check (platform in ('ios', 'android')),
-  preferences jsonb not null default '{"dailyBrief": true, "inactivity": true, "weekly": true}'::jsonb,
+  preferences jsonb not null default '{"dailyBrief": true, "inactivity": true, "weekly": true, "community": true}'::jsonb,
   registered_at timestamptz not null default now(),
   last_notification_at timestamptz
 );
+alter table public.fxsnap_push_devices
+  alter column preferences set default '{"dailyBrief": true, "inactivity": true, "weekly": true, "community": true}'::jsonb;
 
 alter table public.fxsnap_kv enable row level security;
 alter table public.fxsnap_push_devices enable row level security;

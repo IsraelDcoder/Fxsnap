@@ -4254,7 +4254,11 @@ function createRequestHandler() {
         return sendJson(res, 401, { error: 'Invalid notification dispatch credential.' });
       }
       const notifications = require('./notificationService');
-      return notifications.sendScheduledCampaigns(new Date(), getRevenueCatPremiumStatus)
+      return Promise.all([
+        notifications.sendScheduledCampaigns(new Date(), getRevenueCatPremiumStatus),
+        notifications.dispatchCommunityPushNotifications(),
+      ])
+        .then(([campaigns, community]) => ({ campaigns, community }))
         .then((result) => sendJson(res, 200, result))
         .catch((error) => sendJson(res, 500, { error: error.message || 'Notification dispatch failed.' }));
     }

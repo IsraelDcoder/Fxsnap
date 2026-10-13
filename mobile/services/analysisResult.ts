@@ -80,7 +80,7 @@ export function getMarketDevelopmentPlan(
     const entryText = isValidPrice(analysis.tradeSetup!.entryZone) ? analysis.tradeSetup!.entryZone : 'not identified';
     const stopText = isValidPrice(analysis.tradeSetup!.stopLoss) ? analysis.tradeSetup!.stopLoss : 'not identified';
     const targetText = isValidPrice(target) ? target : 'not identified';
-    const ratioText = ratio == null ? 'not calculable from available levels' : `1:${ratio}`;
+    const ratioText = ratio == null ? 'not calculable from available levels' : formatRiskReward(ratio);
     const candidateState = hasCompleteCandidate ? 'candidate' : 'incomplete candidate';
     return `${direction}${setupType} ${candidateState} — Entry ${entryText}, SL ${stopText}, TP1 ${targetText}, R:R ${ratioText}. ${formatDevelopingNote(notes)}`;
   }
@@ -122,9 +122,23 @@ export function formatDevelopingNote(note: string): string {
 
 export function formatRiskReward(value: unknown): string {
   if (isUnavailableAnalysisValue(value)) return '—';
-  if (typeof value === 'string' && value.includes(':')) return value;
+  const formatPart = (part: string) => {
+    const number = Number(part);
+    return Number.isFinite(number) && number > 0
+      ? String(Math.round(number * 100) / 100 || '<0.01')
+      : null;
+  };
+  if (typeof value === 'string' && value.includes(':')) {
+    const ratio = value.trim().match(/^(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)$/);
+    if (!ratio) return value;
+    const risk = formatPart(ratio[1]);
+    const reward = formatPart(ratio[2]);
+    return risk && reward ? `${risk}:${reward}` : value;
+  }
   const number = Number(value);
-  return Number.isFinite(number) ? String(Math.round(number * 100) / 100) : String(value);
+  return Number.isFinite(number) && number > 0
+    ? `1:${formatPart(String(number))}`
+    : String(value);
 }
 
 export function getTradeReadinessLabel(

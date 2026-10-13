@@ -161,6 +161,8 @@ begin
         update public.fxsnap_community_messages
           set view_count = view_count + 1
           where id = requested_id;
+        insert into public.fxsnap_community_events (event_type, object_id)
+          values ('view', requested_id);
       end if;
     end if;
 
@@ -321,9 +323,87 @@ alter table public.fxsnap_community_events
   drop constraint if exists fxsnap_community_events_event_type_check;
 alter table public.fxsnap_community_events
   add constraint fxsnap_community_events_event_type_check
-    check (event_type in ('message', 'reaction', 'message_removed', 'message_pinned', 'announcement', 'notification'));
+    check (event_type in ('message', 'reaction', 'message_removed', 'message_pinned', 'announcement', 'notification', 'view'));
 create index if not exists fxsnap_community_events_created_idx
   on public.fxsnap_community_events (created_at desc, id desc);
+
+create table if not exists public.fxsnap_community_push_queue (
+  id bigint generated always as identity primary key,
+  event_type text not null check (event_type in ('post', 'reply', 'reaction')),
+  object_id uuid not null,
+  actor_account_id text not null,
+  status text not null default 'pending' check (status in ('pending', 'processing', 'sent', 'failed')),
+  attempt_count integer not null default 0 check (attempt_count >= 0),
+  next_attempt_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  sent_at timestamptz,
+  last_error text,
+  created_at timestamptz not null default now()
+);
+create index if not exists fxsnap_community_push_queue_pending_idx
+  on public.fxsnap_community_push_queue (next_attempt_at, created_at)
+  where status in ('pending', 'processing');
+alter table public.fxsnap_community_push_queue enable row level security;
+revoke all on table public.fxsnap_community_push_queue from public, anon, authenticated;
+grant all on table public.fxsnap_community_push_queue to service_role;
+
+create or replace function public.fxsnap_community_claim_push_events(p_limit integer default 100, p_object_id uuid default null)
+returns table(id bigint, event_type text, object_id uuid, actor_account_id text, attempt_count integer)
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  return query
+    with available as (
+      select queue.id
+      from public.fxsnap_community_push_queue queue
+      where (
+          (queue.status = 'pending' and queue.next_attempt_at <= now())
+          or (queue.status = 'processing' and queue.updated_at <= now() - interval '5 minutes')
+        )
+        and (p_object_id is null or queue.object_id = p_object_id)
+      order by queue.created_at, queue.id
+      limit least(greatest(coalesce(p_limit, 100), 1), 100)
+      for update skip locked
+    )
+    update public.fxsnap_community_push_queue queue
+    set status = 'processing',
+        attempt_count = queue.attempt_count + 1,
+        updated_at = now()
+    from available
+    where queue.id = available.id
+    returning queue.id, queue.event_type, queue.object_id, queue.actor_account_id, queue.attempt_count;
+end;
+$$;
+revoke all on function public.fxsnap_community_claim_push_events(integer, uuid) from public, anon, authenticated;
+grant execute on function public.fxsnap_community_claim_push_events(integer, uuid) to service_role;
+
+create or replace function public.fxsnap_community_finish_push_event(p_id bigint, p_error text default null)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.fxsnap_community_push_queue
+  set status = case
+        when p_error is null then 'sent'
+        when attempt_count >= 5 then 'failed'
+        else 'pending'
+      end,
+      sent_at = case when p_error is null then now() else null end,
+      next_attempt_at = case
+        when p_error is null then next_attempt_at
+        else now() + make_interval(secs => least(3600, 30 * (2 ^ least(attempt_count, 7))::integer))
+      end,
+      updated_at = now(),
+      last_error = left(p_error, 500)
+  where id = p_id and status = 'processing';
+end;
+$$;
+revoke all on function public.fxsnap_community_finish_push_event(bigint, text) from public, anon, authenticated;
+grant execute on function public.fxsnap_community_finish_push_event(bigint, text) to service_role;
 
 create table if not exists public.fxsnap_community_notifications (
   id uuid primary key default gen_random_uuid(),
@@ -386,6 +466,12 @@ begin
       event_kind := case when new.kind = 'announcement' then 'announcement' else 'message' end;
       insert into public.fxsnap_community_events (event_type, object_id)
         values (event_kind, new.id);
+      insert into public.fxsnap_community_push_queue (event_type, object_id, actor_account_id)
+        values (
+          case when new.reply_to_id is null then 'post' else 'reply' end,
+          new.id,
+          new.account_id
+        );
       if new.reply_to_id is not null then
         select account_id into parent_account_id
           from public.fxsnap_community_messages where id = new.reply_to_id;
@@ -409,6 +495,8 @@ begin
   elsif tg_table_name = 'fxsnap_community_reactions' and tg_op = 'INSERT' then
     insert into public.fxsnap_community_events (event_type, object_id)
       values ('reaction', new.message_id);
+    insert into public.fxsnap_community_push_queue (event_type, object_id, actor_account_id)
+      values ('reaction', new.message_id, new.account_id);
     select account_id into parent_account_id
       from public.fxsnap_community_messages where id = new.message_id;
     if parent_account_id is not null and parent_account_id <> new.account_id then

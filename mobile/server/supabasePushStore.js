@@ -51,15 +51,23 @@ async function remove(deviceId) {
 }
 
 async function list() {
-  const rows = await request(`${TABLE}?select=device_id,expo_token,platform,preferences,registered_at,last_notification_at`);
-  return (rows || []).map((row) => ({
-    deviceId: row.device_id,
-    token: row.expo_token,
-    platform: row.platform,
-    preferences: row.preferences,
-    registeredAt: row.registered_at,
-    lastNotificationAt: row.last_notification_at,
-  }));
+  const entries = [];
+  const pageSize = 1000;
+  for (let offset = 0; ; offset += pageSize) {
+    const rows = await request(
+      `${TABLE}?select=device_id,expo_token,platform,preferences,registered_at,last_notification_at&order=device_id.asc`,
+      { headers: { range: `${offset}-${offset + pageSize - 1}` } },
+    );
+    entries.push(...(rows || []).map((row) => ({
+      deviceId: row.device_id,
+      token: row.expo_token,
+      platform: row.platform,
+      preferences: row.preferences,
+      registeredAt: row.registered_at,
+      lastNotificationAt: row.last_notification_at,
+    })));
+    if (!rows || rows.length < pageSize) return entries;
+  }
 }
 
 async function markNotified(deviceId, notifiedAt) {
@@ -70,4 +78,18 @@ async function markNotified(deviceId, notifiedAt) {
   });
 }
 
-module.exports = { register, remove, list, markNotified };
+async function claimCommunityEvents(limit = 100, objectId = null) {
+  return request('rpc/fxsnap_community_claim_push_events', {
+    method: 'POST',
+    body: JSON.stringify({ p_limit: limit, p_object_id: objectId }),
+  });
+}
+
+async function finishCommunityEvent(id, error = null) {
+  return request('rpc/fxsnap_community_finish_push_event', {
+    method: 'POST',
+    body: JSON.stringify({ p_id: id, p_error: error }),
+  });
+}
+
+module.exports = { register, remove, list, markNotified, claimCommunityEvents, finishCommunityEvent };

@@ -6,7 +6,7 @@ import { API_BASE_URL, getApiHeaders, getDeviceId } from './apiAuth';
 import { notifyAccountDataChanged } from './accountDataEvents';
 import type { EventSubscription, NotificationResponse } from 'expo-notifications';
 
-export type NotificationRoute = '/daily-brief' | '/analysis' | '/saved';
+export type NotificationRoute = '/daily-brief' | '/analysis' | '/saved' | '/community';
 
 export type PushNotificationPayload = {
   type: string;
@@ -29,7 +29,7 @@ Notifications.setNotificationHandler({
 
 export async function getNotificationPreferences(): Promise<NotificationPreferences> {
   const stored = await AsyncStorage.getItem(NOTIFICATION_SETTINGS_KEY);
-  if (!stored) return { enabled: false, dailyBrief: true, inactivity: true, weekly: true };
+  if (!stored) return { enabled: false, dailyBrief: true, inactivity: true, weekly: true, community: true };
   try {
     const value = JSON.parse(stored);
     return {
@@ -37,9 +37,10 @@ export async function getNotificationPreferences(): Promise<NotificationPreferen
       dailyBrief: value.dailyBrief !== false,
       inactivity: value.inactivity !== false,
       weekly: value.weekly !== false,
+      community: value.community !== false,
     };
   } catch {
-    return { enabled: false, dailyBrief: true, inactivity: true, weekly: true };
+    return { enabled: false, dailyBrief: true, inactivity: true, weekly: true, community: true };
   }
 }
 
@@ -48,6 +49,7 @@ export type NotificationPreferences = {
   dailyBrief: boolean;
   inactivity: boolean;
   weekly: boolean;
+  community: boolean;
 };
 
 export async function hasPushNotificationPermission(): Promise<boolean> {
@@ -61,6 +63,7 @@ export async function saveNotificationPreferences(preferences: {
   dailyBrief: boolean;
   inactivity: boolean;
   weekly: boolean;
+  community: boolean;
 }) {
   await AsyncStorage.setItem(NOTIFICATION_SETTINGS_KEY, JSON.stringify(preferences));
   notifyAccountDataChanged();
@@ -79,6 +82,10 @@ export async function requestAndRegisterPushNotifications(preferences?: Notifica
   if (!permissions.granted) return { granted: false, token: null };
 
   if (Platform.OS === 'android') {
+    await Notifications.setNotificationChannelAsync('fxsnap-community', {
+      name: 'FXSnap Community',
+      importance: Notifications.AndroidImportance.DEFAULT,
+    });
     await Notifications.setNotificationChannelAsync('fxsnap-retention', {
       name: 'FXSnap updates',
       importance: Notifications.AndroidImportance.DEFAULT,
@@ -144,7 +151,7 @@ export function getNotificationResponseRoute(response: NotificationResponse | nu
 
 export function getNotificationRoute(data: Record<string, unknown> | undefined): NotificationRoute | null {
   const route = data?.route;
-  if (route === '/daily-brief' || route === '/analysis' || route === '/saved') return route;
+  if (route === '/daily-brief' || route === '/analysis' || route === '/saved' || route === '/community') return route;
   return null;
 }
 

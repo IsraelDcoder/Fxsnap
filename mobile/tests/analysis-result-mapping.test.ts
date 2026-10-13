@@ -342,6 +342,9 @@ test('recognizes model-generated unavailable phrases instead of displaying them 
   assert.equal(formatRiskReward('Not established'), '—');
   assert.equal(formatRiskReward('RR not calculable'), '—');
   assert.equal(formatRiskReward('1:2'), '1:2');
+  assert.equal(formatRiskReward(0.9393939393939916), '1:0.94');
+  assert.equal(formatRiskReward('1:0.9393939393939916'), '1:0.94');
+  assert.equal(formatRiskReward(0.004), '1:<0.01');
 });
 
 test('incomplete successful responses are presented as developing, not as established trades', () => {
@@ -436,6 +439,20 @@ test('a complete candidate with a low calculated R:R remains valid and reports t
   assert.equal(hasValidatedTradeSetup(result), true);
   assert.equal(getMissingTradeLevelsExplanation(result), null);
   assert.match(getMarketDevelopmentPlan(result), /R:R 1:0\.8/);
+
+  const floatingPointNoise = buildAnalysisResult(chartResult({
+    status: 'no_trade',
+    tradeStatus: 'waiting_for_confirmation',
+    trade_setup: {
+      type: 'buy',
+      entry_zone: '1.10000',
+      stop_loss: '1.09900',
+      take_profit: '1.10080',
+      take_profit_levels: ['1.10080'],
+      risk_reward: 0.9393939393939916,
+    },
+  }), 'EUR/USD');
+  assert.match(getMarketDevelopmentPlan(floatingPointNoise), /R:R 1:0\.94/);
 });
 
 test('waiting setups remain on hold and explain the confirmation trigger', () => {

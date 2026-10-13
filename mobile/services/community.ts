@@ -181,6 +181,16 @@ export async function getCommunityMe() {
   return request<{ rulesVersion: string; profile: CommunityProfile | null }>('/api/community/me');
 }
 
+export async function getCommunityBootstrap(options: {
+  feed: CommunityFeed;
+  category: CommunityCategory | null;
+  limit?: number;
+}) {
+  const query = new URLSearchParams({ feed: options.feed, limit: String(options.limit || 30) });
+  if (options.category) query.set('category', options.category);
+  return request<{ profile: CommunityProfile | null } & CommunityPage>(`/api/community/bootstrap?${query}`);
+}
+
 export async function checkCommunityUsername(username: string) {
   const query = new URLSearchParams({ value: username.trim().toLowerCase() });
   return request<{ available: boolean; reason: string | null }>(`/api/community/username?${query}`);
@@ -493,6 +503,27 @@ export function subscribeToCommunityChanges(onChange: (eventType: string | null)
       }
     });
   return () => { void getSupabaseClient().removeChannel(channel); };
+}
+
+export function subscribeToCommunityPresence(accountId: string, onCountChange: (count: number) => void) {
+  const client = getSupabaseClient();
+  const channel = client.channel('fxsnap-community-presence', {
+    config: { presence: { key: accountId } },
+  });
+  channel
+    .on('presence', { event: 'sync' }, () => {
+      onCountChange(Object.keys(channel.presenceState()).length);
+    })
+    .subscribe((status) => {
+      if (status === 'SUBSCRIBED') {
+        void channel.track({ online: true }).catch((error: unknown) => {
+          console.error('[Community] Could not publish online presence.', error);
+        });
+      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        console.error('[Community] Online presence subscription failed.', status);
+      }
+    });
+  return () => { void client.removeChannel(channel); };
 }
 
 export function createCommunityClientId() {

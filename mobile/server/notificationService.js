@@ -13,7 +13,7 @@ async function getExpoClient() {
 }
 
 const CAMPAIGN_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000;
-const ROUTES = new Set(['/daily-brief', '/analysis', '/saved']);
+const ROUTES = new Set(['/daily-brief', '/analysis', '/saved', '/community']);
 
 function getStartOfWeek(date) {
   const start = new Date(date);
@@ -33,6 +33,7 @@ async function registerPushToken(deviceId, payload) {
     dailyBrief: preferences.dailyBrief !== false,
     inactivity: preferences.inactivity !== false,
     weekly: preferences.weekly !== false,
+    community: preferences.community !== false,
   };
   await supabasePushStore.register(deviceId, payload.token, payload.platform, normalizedPreferences);
   return true;
@@ -113,4 +114,56 @@ async function sendScheduledCampaigns(now = new Date(), isPremium = async () => 
   return { sent: results.filter((result) => result.sent).length, results };
 }
 
-module.exports = { registerPushToken, unregisterPushToken, getRegisteredTokens, buildCampaign, sendCampaign, sendScheduledCampaigns };
+async function dispatchCommunityPushNotifications(objectId = null, limit = 100) {
+  if (!process.env.EXPO_ACCESS_TOKEN) throw new Error('EXPO_ACCESS_TOKEN is not configured.');
+  const events = await supabasePushStore.claimCommunityEvents(limit, objectId);
+  if (!events?.length) return { processed: 0, sent: 0, failed: 0 };
+
+  const entries = (await getRegisteredTokens())
+    .filter((entry) => entry.preferences?.community !== false);
+  const { expo } = await getExpoClient();
+  let sent = 0;
+  let failed = 0;
+
+  for (const event of events) {
+    try {
+      const activity = event.event_type === 'reply'
+        ? { title: 'New Community reply', body: 'There is a new reply in the FXSnap Community.' }
+        : event.event_type === 'reaction'
+          ? { title: 'New Community reaction', body: 'There is new reaction activity in the FXSnap Community.' }
+          : { title: 'New Community post', body: 'A new post is waiting in the FXSnap Community.' };
+      const messages = entries.map((entry) => ({
+        to: entry.token,
+        ...activity,
+        data: { type: 'community_activity', route: '/community', eventType: event.event_type },
+        channelId: 'fxsnap-community',
+        sound: 'default',
+        priority: 'default',
+      }));
+      for (const chunk of expo.chunkPushNotifications(messages)) {
+        await expo.sendPushNotificationsAsync(chunk);
+      }
+      await supabasePushStore.finishCommunityEvent(event.id);
+      sent += entries.length;
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : 'Unknown push delivery error.';
+      await supabasePushStore.finishCommunityEvent(event.id, detail);
+      console.error('[Notifications] Community activity push delivery failed.', {
+        eventId: event.id,
+        error: detail,
+      });
+      failed += 1;
+    }
+  }
+  return { processed: events.length, sent, failed };
+}
+
+module.exports = {
+  registerPushToken,
+  unregisterPushToken,
+  getRegisteredTokens,
+  buildCampaign,
+  sendCampaign,
+  sendScheduledCampaigns,
+  dispatchCommunityPushNotifications,
+};

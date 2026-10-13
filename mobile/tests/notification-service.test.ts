@@ -19,7 +19,7 @@ const baseEntry = {
   token: 'ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]',
   registeredAt: '2026-10-01T09:00:00.000Z',
   lastNotificationAt: null,
-  preferences: { dailyBrief: true, inactivity: true, weekly: true },
+  preferences: { dailyBrief: true, inactivity: true, weekly: true, community: true },
 };
 
 test('dormant subscribers receive premium-specific return content', () => {
@@ -51,7 +51,7 @@ test('campaigns respect disabled categories', () => {
   const entry = {
     ...baseEntry,
     registeredAt: now.toISOString(),
-    preferences: { dailyBrief: false, inactivity: false, weekly: false },
+    preferences: { dailyBrief: false, inactivity: false, weekly: false, community: true },
   };
   assert.equal(buildCampaign(entry, [], now, false), null);
 });
@@ -97,11 +97,11 @@ test('push tokens are bound to the authenticated device and can be removed', asy
     await registerPushToken(deviceId, {
       token: 'ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]',
       platform: 'android',
-      preferences: { enabled: true, dailyBrief: true, inactivity: false, weekly: true },
+      preferences: { enabled: true, dailyBrief: true, inactivity: false, weekly: true, community: false },
     });
     const registration = (await getRegisteredTokens()).find((entry) => entry.deviceId === deviceId);
     assert.equal(registration?.platform, 'android');
-    assert.deepEqual(registration?.preferences, { dailyBrief: true, inactivity: false, weekly: true });
+    assert.deepEqual(registration?.preferences, { dailyBrief: true, inactivity: false, weekly: true, community: false });
     await unregisterPushToken(deviceId);
     assert.equal((await getRegisteredTokens()).some((entry) => entry.deviceId === deviceId), false);
     assert.ok(calls.some((call) => call.includes('fxsnap_push_devices')));
