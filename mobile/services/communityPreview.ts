@@ -159,6 +159,22 @@ export async function handleCommunityPreviewRequest(path: string, init?: Request
   if (pathname === '/api/community/me' && method === 'GET') {
     return response(200, { rulesVersion: previewProfile.rulesVersion, profile: previewProfile });
   }
+  if (pathname === '/api/community/bootstrap' && method === 'GET') {
+    const category = url.searchParams.get('category');
+    const feed = url.searchParams.get('feed');
+    const visible = messages
+      .filter((item) => !item.replyTo && !item.removed && !blocked.has(item.authorUsername))
+      .filter((item) => !category || item.category === category)
+      .filter((item) => feed !== 'following' || following.has(item.authorUsername))
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return response(200, {
+      profile: previewProfile,
+      messages: visible.map(withCounts),
+      nextCursor: null,
+      hasMore: false,
+      followingEmpty: feed === 'following' && visible.length === 0,
+    });
+  }
   if (pathname === '/api/community/username' && method === 'GET') {
     return response(200, { available: true, reason: null });
   }

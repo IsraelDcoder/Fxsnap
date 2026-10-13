@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
-import { useReducedMotion } from 'react-native-reanimated';
+import Animated, { useAnimatedStyle, useReducedMotion, useSharedValue, withSequence, withSpring } from 'react-native-reanimated';
+import { BlurView } from 'expo-blur';
 import { Image } from 'expo-image';
 import { Feather } from '@expo/vector-icons';
 import { AnimatedTouchableOpacity as TouchableOpacity } from '@/components/AnimatedTouchableOpacity';
@@ -38,6 +39,7 @@ export default function CommunityPostCard({
   onFollow,
   onAuthorPress,
   compact = false,
+  feedStyle = false,
 }: {
   post: CommunityMessage;
   ownAccount: boolean;
@@ -49,6 +51,7 @@ export default function CommunityPostCard({
   onFollow: () => void;
   onAuthorPress?: () => void;
   compact?: boolean;
+  feedStyle?: boolean;
 }) {
   const colors = useColors();
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
@@ -57,13 +60,31 @@ export default function CommunityPostCard({
   const reactionAnchorRef = useRef<View>(null);
   const suppressTapRef = useRef(new CommunityReactionTapGuard());
   const suppressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reactionScale = useSharedValue(1);
+  const reactionAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: reactionScale.value }],
+  }));
   const [reactionPicker, setReactionPicker] = useState<{ left: number; top: number } | null>(null);
   const selectedReaction = post.reactions.find((item) => item.reacted);
   const selectedReactionInfo = COMMUNITY_REACTIONS.find((item) => item.id === selectedReaction?.reaction);
   const reactionCount = post.reactions
     .filter((item) => item.reaction !== 'like')
     .reduce((total, item) => total + item.count, 0);
+  const reactionState = `${post.id}:${selectedReaction?.reaction || ''}:${reactionCount}`;
+  const previousReactionState = useRef(reactionState);
   const pickerWidth = Math.min(256, windowWidth - 24);
+
+  useEffect(() => {
+    if (previousReactionState.current !== reactionState) {
+      previousReactionState.current = reactionState;
+      if (!reduceMotion) {
+        reactionScale.value = withSequence(
+          withSpring(1.3, { damping: 8, stiffness: 340 }),
+          withSpring(1, { damping: 11, stiffness: 300 }),
+        );
+      }
+    }
+  }, [reactionScale, reactionState, reduceMotion]);
 
   useEffect(() => () => {
     if (suppressTimerRef.current) clearTimeout(suppressTimerRef.current);
@@ -108,8 +129,33 @@ export default function CommunityPostCard({
     <View ref={shareableViewRef} collapsable={false} style={[
       styles.card,
       compact && styles.compactCard,
-      { backgroundColor: colors.card, borderColor: colors.cardBorder },
+      feedStyle && styles.feedCard,
+      {
+        backgroundColor: feedStyle
+          ? colors.text === '#FFFFFF' ? 'rgba(24, 28, 27, 0.72)' : 'rgba(255, 255, 255, 0.48)'
+          : colors.card,
+        borderColor: feedStyle
+          ? colors.text === '#FFFFFF' ? 'rgba(255, 255, 255, 0.16)' : 'rgba(255, 255, 255, 0.76)'
+          : colors.cardBorder,
+      },
     ]}>
+      {feedStyle ? (
+        <>
+          <BlurView
+            pointerEvents="none"
+            intensity={24}
+            tint={colors.text === '#FFFFFF' ? 'dark' : 'light'}
+            style={StyleSheet.absoluteFill}
+          />
+          <View
+            pointerEvents="none"
+            style={[
+              StyleSheet.absoluteFill,
+              { backgroundColor: colors.text === '#FFFFFF' ? 'rgba(17, 22, 20, 0.42)' : 'rgba(255, 255, 255, 0.22)' },
+            ]}
+          />
+        </>
+      ) : null}
       {post.pinnedAt ? (
         <View style={[styles.pinned, { backgroundColor: `${colors.buy}16` }]}>
           <Feather name="bookmark" size={12} color={colors.buy} />
@@ -154,7 +200,7 @@ export default function CommunityPostCard({
             </Text>
           </View>
         </TouchableOpacity>
-        {!compact && !ownAccount && !post.isOfficial ? (
+        {!compact && !feedStyle && !ownAccount && !post.isOfficial ? (
           <TouchableOpacity
             onPress={onFollow}
             accessibilityRole="button"
@@ -266,7 +312,7 @@ export default function CommunityPostCard({
       {post.kind === 'announcement' ? (
         <Text style={[styles.disclaimer, { color: colors.buy }]}>Official FXSnap event announcement</Text>
       ) : null}
-      <View style={[styles.actions, compact && styles.compactActions, { borderTopColor: colors.cardBorder }]}>
+      <View style={[styles.actions, compact && styles.compactActions, feedStyle && styles.feedActions, { borderTopColor: colors.cardBorder }]}>
         <View ref={reactionAnchorRef} collapsable={false}>
           <View style={styles.reactionControl}>
             <TouchableOpacity
@@ -274,7 +320,7 @@ export default function CommunityPostCard({
               onLongPress={openReactionPicker}
               delayLongPress={500}
               disabled={reactionBusy}
-              style={[styles.action, styles.reactionAction, compact && styles.compactAction]}
+              style={[styles.action, styles.reactionAction, compact && styles.compactAction, feedStyle && styles.feedAction]}
               accessibilityRole="button"
               accessibilityLabel={`${selectedReactionInfo?.label || 'Love'} reaction. ${reactionCount} total. Activate to toggle Love; long press for more reactions.`}
               accessibilityState={{ expanded: Boolean(reactionPicker), disabled: reactionBusy }}
@@ -285,48 +331,50 @@ export default function CommunityPostCard({
             >
               {reactionBusy
                 ? <ActivityIndicator size="small" color={colors.textSecondary} />
-                : <Text style={styles.reactionEmoji}>{selectedReactionInfo?.emoji || '❤️'}</Text>}
+                : <Animated.Text style={[styles.reactionEmoji, reactionAnimatedStyle]}>{selectedReactionInfo?.emoji || '❤️'}</Animated.Text>}
               <Text style={[
                 styles.actionLabel,
-                compact && styles.compactActionLabel,
+                (compact || feedStyle) && styles.compactActionLabel,
                 { color: selectedReaction ? colors.sell : colors.textSecondary },
               ]}>
                 {formatCompactCommunityCount(reactionCount)}
               </Text>
             </TouchableOpacity>
-            <TouchableOpacity
-              onPress={openReactionPicker}
-              disabled={reactionBusy}
-              style={[styles.moreReactionButton, compact && styles.compactMoreReactionButton]}
-              accessibilityRole="button"
-              accessibilityLabel="Choose a reaction"
-              accessibilityState={{ expanded: Boolean(reactionPicker), disabled: reactionBusy }}
-            >
-              <Feather name="more-horizontal" size={14} color={colors.textMuted} />
-            </TouchableOpacity>
+            {!feedStyle ? (
+              <TouchableOpacity
+                onPress={openReactionPicker}
+                disabled={reactionBusy}
+                style={[styles.moreReactionButton, compact && styles.compactMoreReactionButton]}
+                accessibilityRole="button"
+                accessibilityLabel="Choose a reaction"
+                accessibilityState={{ expanded: Boolean(reactionPicker), disabled: reactionBusy }}
+              >
+                <Feather name="more-horizontal" size={14} color={colors.textMuted} />
+              </TouchableOpacity>
+            ) : null}
           </View>
         </View>
-        <TouchableOpacity onPress={onComment} style={[styles.action, compact && styles.compactAction]} accessibilityRole="button" accessibilityLabel="Comment on post">
-          <Feather name="message-circle" size={compact ? 15 : 18} color={colors.textSecondary} />
-          <Text style={[styles.actionLabel, compact && styles.compactActionLabel, { color: colors.textSecondary }]}>
-            {compact ? formatCompactCommunityCount(post.commentCount) : `Discuss${post.commentCount ? ` · ${formatCompactCommunityCount(post.commentCount)}` : ''}`}
+        <TouchableOpacity onPress={onComment} style={[styles.action, compact && styles.compactAction, feedStyle && styles.feedAction]} accessibilityRole="button" accessibilityLabel="Comment on post">
+          <Feather name="message-circle" size={compact || feedStyle ? 16 : 18} color={colors.textSecondary} />
+          <Text style={[styles.actionLabel, (compact || feedStyle) && styles.compactActionLabel, { color: colors.textSecondary }]}>
+            {compact || feedStyle ? formatCompactCommunityCount(post.commentCount) : `Discuss${post.commentCount ? ` · ${formatCompactCommunityCount(post.commentCount)}` : ''}`}
           </Text>
         </TouchableOpacity>
-        <View style={[styles.engagementAction, compact && styles.compactAction]} accessible accessibilityLabel={`${post.viewCount} views`}>
-          <Feather name="eye" size={compact ? 14 : 17} color={colors.textSecondary} />
-          <Text style={[styles.actionLabel, compact && styles.compactActionLabel, { color: colors.textSecondary }]}>
+        <View style={[styles.engagementAction, compact && styles.compactAction, feedStyle && styles.feedAction]} accessible accessibilityLabel={`${post.viewCount} views`}>
+          <Feather name="eye" size={compact || feedStyle ? 15 : 17} color={colors.textSecondary} />
+          <Text style={[styles.actionLabel, (compact || feedStyle) && styles.compactActionLabel, { color: colors.textSecondary }]}>
             {ownAccount ? `Views ${post.viewCount.toLocaleString()}` : formatCompactCommunityCount(post.viewCount)}
           </Text>
         </View>
         <TouchableOpacity
           onPress={() => onShare(shareableViewRef.current)}
-          style={[styles.action, compact && styles.compactAction]}
+          style={[styles.action, compact && styles.compactAction, feedStyle && styles.feedAction]}
           accessibilityRole="button"
           accessibilityLabel={`Share post. ${formatCompactCommunityCount(post.shareCount)} shares.`}
         >
-          <Feather name="send" size={compact ? 14 : 17} color={colors.textSecondary} />
-          <Text style={[styles.actionLabel, compact && styles.compactActionLabel, { color: colors.textSecondary }]}>
-            {compact ? formatCompactCommunityCount(post.shareCount) : `Share${post.shareCount ? ` · ${formatCompactCommunityCount(post.shareCount)}` : ''}`}
+          <Feather name="share-2" size={compact || feedStyle ? 15 : 17} color={colors.textSecondary} />
+          <Text style={[styles.actionLabel, (compact || feedStyle) && styles.compactActionLabel, { color: colors.textSecondary }]}>
+            {compact || feedStyle ? formatCompactCommunityCount(post.shareCount) : `Share${post.shareCount ? ` · ${formatCompactCommunityCount(post.shareCount)}` : ''}`}
           </Text>
         </TouchableOpacity>
       </View>
@@ -404,6 +452,7 @@ function SignalValue({
 const styles = StyleSheet.create({
   card: { borderWidth: 1, borderRadius: 18, padding: 15, marginBottom: 12, gap: 12 },
   compactCard: { borderRadius: 17, padding: 10, marginBottom: 0, gap: 9 },
+  feedCard: { borderRadius: 17, padding: 13, marginBottom: 0, gap: 11, overflow: 'hidden' },
   pinned: { alignSelf: 'flex-start', borderRadius: 10, paddingHorizontal: 9, paddingVertical: 5, flexDirection: 'row', alignItems: 'center', gap: 6 },
   pinnedText: { fontSize: 9, fontFamily: 'Inter_700Bold', letterSpacing: 0.5 },
   authorRow: { flexDirection: 'row', alignItems: 'center', gap: 9 },
@@ -444,8 +493,10 @@ const styles = StyleSheet.create({
   compactPostImage: { borderRadius: 12 },
   actions: { borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 11, flexDirection: 'row', justifyContent: 'space-around' },
   compactActions: { borderTopWidth: 0, paddingTop: 0, justifyContent: 'space-between', gap: 2 },
+  feedActions: { borderTopWidth: 0, paddingTop: 1, justifyContent: 'space-between', gap: 4 },
   action: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 36, paddingHorizontal: 6 },
   compactAction: { minHeight: 32, gap: 3, paddingHorizontal: 2 },
+  feedAction: { minHeight: 34, gap: 5, paddingHorizontal: 3 },
   reactionControl: { flexDirection: 'row', alignItems: 'center' },
   reactionAction: { borderRadius: 12 },
   moreReactionButton: { width: 28, minHeight: 36, alignItems: 'center', justifyContent: 'center' },

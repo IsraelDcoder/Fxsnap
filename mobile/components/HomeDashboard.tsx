@@ -112,7 +112,7 @@ export default function HomeDashboard() {
   const openStrategy = () => openProtectedFeature('STRATEGY_GENERATOR', '/strategy');
 
   const showSessions = () => setSessionModalVisible(true);
-  const support = () => router.push('/support-chat');
+  const support = () => Alert.alert('Coming soon', 'Help & Support will be available in a future update.');
   const openCommunity = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     router.push('/community');

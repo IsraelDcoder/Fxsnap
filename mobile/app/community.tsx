@@ -15,6 +15,7 @@ import {
   type ViewToken,
 } from 'react-native';
 import { AnimatedTouchableOpacity as TouchableOpacity } from '@/components/AnimatedTouchableOpacity';
+import Animated, { FadeIn, FadeInDown, LinearTransition, useReducedMotion } from 'react-native-reanimated';
 import { Feather } from '@expo/vector-icons';
 import { FlashList, type FlashListRef } from '@shopify/flash-list';
 import { router, useLocalSearchParams } from 'expo-router';
@@ -127,6 +128,7 @@ function ageLabel(isoDate: string) {
 
 export default function CommunityScreen() {
   const colors = useColors();
+  const reduceMotion = useReducedMotion();
   const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{ postId?: string; shareAnalysisId?: string; category?: string }>();
   const postIdParam = firstParam(params.postId);
@@ -837,8 +839,11 @@ export default function CommunityScreen() {
 
   const openHeaderMenu = () => {
     Alert.alert('Community', undefined, [
+      { text: 'Create chart post', onPress: () => openComposer('text', 'chart_analysis') },
+      { text: 'Share trading signal', onPress: () => openComposer('signal', 'chart_analysis') },
+      ...(profile?.isAdmin ? [{ text: 'Post announcement', onPress: () => openComposer('text', 'events') }] : []),
       { text: 'Manage blocked traders', onPress: () => void openBlockedMembers() },
-      { text: 'Contact FXSnap support', onPress: () => router.push('/community-support') },
+      { text: 'Contact FXSnap support', onPress: () => Alert.alert('Coming soon', 'Help & Support will be available in a future update.') },
       ...(profile?.isAdmin ? [{ text: 'Moderation tools', onPress: () => router.push('/community-admin') }] : []),
       { text: 'Cancel', style: 'cancel' },
     ]);
@@ -854,11 +859,15 @@ export default function CommunityScreen() {
     }
   };
 
-  const renderPost = ({ item }: { item: CommunityMessage }) => (
-    <View style={styles.masonryCell}>
+  const renderPost = ({ item, index }: { item: CommunityMessage; index: number }) => (
+    <Animated.View
+      entering={reduceMotion ? undefined : FadeInDown.delay(Math.min(index * 45, 180)).duration(320).springify().damping(20)}
+      layout={reduceMotion ? undefined : LinearTransition.duration(180)}
+      style={styles.feedPostCell}
+    >
       <CommunityPostCard
         post={item}
-        compact
+        feedStyle
         reactionBusy={reactionBusyIds.has(item.id)}
         ownAccount={item.authorUsername === profile?.username}
         onReact={(reaction) => void handleReaction(item, reaction)}
@@ -868,7 +877,7 @@ export default function CommunityScreen() {
         onFollow={() => void handleFollow(item)}
         onAuthorPress={() => router.push({ pathname: '/community-member', params: { username: item.authorUsername } })}
       />
-    </View>
+    </Animated.View>
   );
 
   const unreadCount = notifications.filter((notification) => !notification.read_at).length;
@@ -1045,7 +1054,10 @@ export default function CommunityScreen() {
 
   return (
     <View style={[styles.screen, { backgroundColor: colors.background }]}>
-      <View style={[styles.header, { paddingTop: insets.top + 8, borderBottomColor: colors.cardBorder }]}>
+      <Animated.View
+        entering={reduceMotion ? undefined : FadeIn.duration(260)}
+        style={[styles.header, { paddingTop: insets.top + 8, borderBottomColor: colors.cardBorder }]}
+      >
         <TouchableOpacity onPress={() => router.back()} style={styles.headerIcon} accessibilityLabel="Go back">
           <Feather name="arrow-left" size={20} color={colors.text} />
         </TouchableOpacity>
@@ -1063,17 +1075,14 @@ export default function CommunityScreen() {
         <TouchableOpacity onPress={openHeaderMenu} style={styles.headerIcon} accessibilityLabel="More Community options">
           <Feather name="more-horizontal" size={20} color={colors.text} />
         </TouchableOpacity>
-      </View>
+      </Animated.View>
       <FlashList
         ref={flatListRef}
         data={posts}
         keyExtractor={(item) => item.id}
         renderItem={renderPost}
-        numColumns={2}
-        masonry
         viewabilityConfig={COMMUNITY_VIEWABILITY_CONFIG}
         onViewableItemsChanged={onViewableItemsChanged}
-        optimizeItemArrangement={false}
         drawDistance={600}
         extraData={profile?.username}
         contentContainerStyle={[styles.feedContent, { paddingBottom: insets.bottom + 112 }]}
@@ -1093,61 +1102,67 @@ export default function CommunityScreen() {
         ListHeaderComponent={
           <>
             <CommunityPreviewNotice />
-            <View style={[styles.onlineBanner, { backgroundColor: colors.card, borderColor: colors.cardBorder }]} accessibilityRole="summary">
-              <View style={[styles.onlineDot, { backgroundColor: onlineMemberCount == null ? colors.textMuted : colors.buy }]} />
-              <Text style={[styles.onlineLabel, { color: colors.textSecondary }]}>
-                {onlineMemberCount == null ? 'Community members online' : `${onlineMemberCount} ${onlineMemberCount === 1 ? 'member' : 'members'} online`}
-              </Text>
-              <Feather name="radio" size={13} color={onlineMemberCount == null ? colors.textMuted : colors.buy} />
-            </View>
-            <View style={styles.feedTabs}>
-              {(['global', 'following'] as const).map((item) => (
-                <TouchableOpacity
-                  key={item}
-                  onPress={() => setFeed(item)}
-                  style={[styles.feedTab, { borderColor: feed === item ? colors.buy : colors.cardBorder, backgroundColor: feed === item ? `${colors.buy}15` : colors.card }]}
-                >
-                  <Text style={[styles.feedTabText, { color: feed === item ? colors.buy : colors.textSecondary }]}>{item === 'global' ? 'For you' : 'Following'}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categories}>
-              <TouchableOpacity
-                onPress={() => setCategory(null)}
-                style={[styles.categoryChip, { backgroundColor: category === null ? colors.buy : colors.card, borderColor: category === null ? colors.buy : colors.cardBorder }]}
-              >
-                <Text style={[styles.categoryText, { color: category === null ? colors.primaryForeground : colors.textSecondary }]}>All topics</Text>
-              </TouchableOpacity>
-              {visibleCategories.map((item) => (
-                <TouchableOpacity
-                  key={item.id}
-                  onPress={() => setCategory(item.id)}
-                  style={[styles.categoryChip, { backgroundColor: category === item.id ? colors.buy : colors.card, borderColor: category === item.id ? colors.buy : colors.cardBorder }]}
-                >
-                  <Text style={[styles.categoryText, { color: category === item.id ? colors.primaryForeground : colors.textSecondary }]}>{item.label}</Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-            <TouchableOpacity
-              onPress={() => openComposer('text')}
-              style={[styles.composePrompt, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}
-              accessibilityLabel="Create a community post"
+            <Animated.View
+              entering={reduceMotion ? undefined : FadeInDown.delay(50).duration(300)}
+              style={styles.feedTabRow}
             >
-              {profile?.pictureUrl
-                ? <Image source={{ uri: profile.pictureUrl }} style={styles.composeAvatar} resizeMode="cover" accessibilityLabel="Your profile picture" />
-                : (
-                  <View style={[styles.composeAvatar, { backgroundColor: colors.buy }]}>
-                    <Text style={[styles.composeAvatarText, { color: colors.primaryForeground }]}>{profile?.username.slice(0, 1).toUpperCase()}</Text>
-                  </View>
-                )}
-              <Text style={[styles.composePlaceholder, { color: colors.textMuted }]}>What are you learning in the markets?</Text>
-              <Feather name="edit-3" size={17} color={colors.buy} />
-            </TouchableOpacity>
-            <View style={styles.quickPostActions}>
-              <QuickAction label="Chart post" icon="image" colors={colors} onPress={() => openComposer('text', 'chart_analysis')} />
-              <QuickAction label="Share signal" icon="activity" colors={colors} onPress={() => openComposer('signal', 'chart_analysis')} />
-              {profile?.isAdmin ? <QuickAction label="Announcement" icon="volume-2" colors={colors} onPress={() => openComposer('text', 'events')} /> : null}
-            </View>
+              <View style={styles.feedTabs}>
+                {(['global', 'following'] as const).map((item) => (
+                  <TouchableOpacity
+                    key={item}
+                    onPress={() => setFeed(item)}
+                    style={[styles.feedTab, {
+                      borderColor: feed === item ? colors.buy : colors.cardBorder,
+                      backgroundColor: feed === item ? colors.buy : colors.card,
+                    }]}
+                  >
+                    <Text style={[styles.feedTabText, { color: feed === item ? colors.primaryForeground : colors.textSecondary }]}>{item === 'global' ? 'For you' : 'Following'}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <View style={styles.onlineBanner} accessibilityRole="summary">
+                <View style={[styles.onlineDot, { backgroundColor: onlineMemberCount == null ? colors.textMuted : colors.buy }]} />
+                <Text style={[styles.onlineLabel, { color: colors.textSecondary }]}>
+                  {onlineMemberCount == null ? 'Live' : `${onlineMemberCount} online`}
+                </Text>
+              </View>
+            </Animated.View>
+            <Animated.View entering={reduceMotion ? undefined : FadeInDown.delay(100).duration(300)}>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categories}>
+                <TouchableOpacity
+                  onPress={() => setCategory(null)}
+                  style={[styles.categoryChip, { backgroundColor: category === null ? colors.buy : colors.card, borderColor: category === null ? colors.buy : colors.cardBorder }]}
+                >
+                  <Text style={[styles.categoryText, { color: category === null ? colors.primaryForeground : colors.textSecondary }]}>All topics</Text>
+                </TouchableOpacity>
+                {visibleCategories.map((item) => (
+                  <TouchableOpacity
+                    key={item.id}
+                    onPress={() => setCategory(item.id)}
+                    style={[styles.categoryChip, { backgroundColor: category === item.id ? colors.buy : colors.card, borderColor: category === item.id ? colors.buy : colors.cardBorder }]}
+                  >
+                    <Text style={[styles.categoryText, { color: category === item.id ? colors.primaryForeground : colors.textSecondary }]}>{item.label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </Animated.View>
+            <Animated.View entering={reduceMotion ? undefined : FadeInDown.delay(150).duration(320)}>
+              <TouchableOpacity
+                onPress={() => openComposer('text')}
+                style={[styles.composePrompt, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}
+                accessibilityLabel="Create a community post"
+              >
+                {profile?.pictureUrl
+                  ? <Image source={{ uri: profile.pictureUrl }} style={styles.composeAvatar} resizeMode="cover" accessibilityLabel="Your profile picture" />
+                  : (
+                    <View style={[styles.composeAvatar, { backgroundColor: colors.buy }]}>
+                      <Text style={[styles.composeAvatarText, { color: colors.primaryForeground }]}>{profile?.username.slice(0, 1).toUpperCase()}</Text>
+                    </View>
+                  )}
+                <Text style={[styles.composePlaceholder, { color: colors.textMuted }]}>What are you learning in the markets?</Text>
+                <Feather name="edit-3" size={17} color={colors.buy} />
+              </TouchableOpacity>
+            </Animated.View>
             {feedError ? (
               <View style={[styles.inlineError, { backgroundColor: `${colors.sell}10` }]}>
                 <Text style={[styles.errorText, { color: colors.sell }]}>{feedError}</Text>
@@ -1449,15 +1464,6 @@ function RuleLine({ text, colors }: { text: string; colors: ReturnType<typeof us
   return <View style={styles.ruleLine}><Feather name="check" size={14} color={colors.buy} /><Text style={[styles.ruleText, { color: colors.textSecondary }]}>{text}</Text></View>;
 }
 
-function QuickAction({ label, icon, colors, onPress }: { label: string; icon: React.ComponentProps<typeof Feather>['name']; colors: ReturnType<typeof useColors>; onPress: () => void }) {
-  return (
-    <TouchableOpacity onPress={onPress} style={[styles.quickAction, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
-      <Feather name={icon} size={14} color={colors.buy} />
-      <Text style={[styles.quickActionText, { color: colors.textSecondary }]}>{label}</Text>
-    </TouchableOpacity>
-  );
-}
-
 function CommentCard({
   comment,
   colors,
@@ -1524,24 +1530,22 @@ const styles = StyleSheet.create({
   username: { fontSize: 12, fontFamily: 'Inter_700Bold' },
   headerSubtitle: { fontSize: 10, fontFamily: 'Inter_400Regular', marginTop: 2 },
   notificationDot: { width: 8, height: 8, borderRadius: 4, position: 'absolute', right: 8, top: 7 },
-  feedContent: { paddingHorizontal: 7, paddingTop: 6 },
-  onlineBanner: { minHeight: 36, flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, borderRadius: 12, paddingHorizontal: 11, marginTop: 6 },
+  feedContent: { paddingHorizontal: 12, paddingTop: 7 },
+  feedTabRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 9, marginBottom: 2 },
+  onlineBanner: { minHeight: 30, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 5 },
   onlineDot: { width: 7, height: 7, borderRadius: 4 },
-  onlineLabel: { flex: 1, fontSize: 10, fontFamily: 'Inter_600SemiBold' },
-  masonryCell: { paddingHorizontal: 4, paddingVertical: 4 },
-  feedTabs: { flexDirection: 'row', gap: 7, marginTop: 8, marginBottom: 3 },
-  feedTab: { minHeight: 34, justifyContent: 'center', borderWidth: 1, borderRadius: 17, paddingHorizontal: 15 },
-  feedTabText: { fontSize: 11, fontFamily: 'Inter_600SemiBold' },
-  categories: { alignItems: 'center', gap: 7, paddingVertical: 6, paddingRight: 8 },
-  categoryChip: { minHeight: 31, justifyContent: 'center', borderWidth: 1, borderRadius: 17, paddingHorizontal: 12 },
+  onlineLabel: { fontSize: 10, fontFamily: 'Inter_600SemiBold' },
+  feedPostCell: { paddingVertical: 5 },
+  feedTabs: { flexDirection: 'row', gap: 8 },
+  feedTab: { minHeight: 36, justifyContent: 'center', borderWidth: 1, borderRadius: 18, paddingHorizontal: 18 },
+  feedTabText: { fontSize: 11, fontFamily: 'Inter_700Bold' },
+  categories: { alignItems: 'center', gap: 8, paddingVertical: 8, paddingRight: 8 },
+  categoryChip: { minHeight: 33, justifyContent: 'center', borderWidth: 1, borderRadius: 17, paddingHorizontal: 13 },
   categoryText: { fontSize: 10, fontFamily: 'Inter_600SemiBold' },
-  composePrompt: { minHeight: 49, flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 1, borderRadius: 15, paddingHorizontal: 12, marginTop: 3 },
+  composePrompt: { minHeight: 54, flexDirection: 'row', alignItems: 'center', gap: 11, borderWidth: 1, borderRadius: 16, paddingHorizontal: 13, marginTop: 2 },
   composeAvatar: { width: 31, height: 31, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
   composeAvatarText: { fontSize: 12, fontFamily: 'Inter_700Bold' },
-  composePlaceholder: { flex: 1, fontSize: 11, fontFamily: 'Inter_400Regular' },
-  quickPostActions: { flexDirection: 'row', gap: 7, marginTop: 6, marginBottom: 8 },
-  quickAction: { minHeight: 33, flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1, borderRadius: 12, paddingHorizontal: 9 },
-  quickActionText: { fontSize: 9, fontFamily: 'Inter_600SemiBold' },
+  composePlaceholder: { flex: 1, fontSize: 12, fontFamily: 'Inter_400Regular' },
   feedLoading: { minHeight: 100, alignItems: 'center', justifyContent: 'center', gap: 9 },
   emptyCard: { alignItems: 'center', gap: 9, borderWidth: 1, borderRadius: 18, padding: 22, marginTop: 8, marginBottom: 14 },
   emptyTitle: { fontSize: 14, textAlign: 'center', fontFamily: 'Inter_700Bold' },

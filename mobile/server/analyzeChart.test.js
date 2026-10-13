@@ -414,6 +414,7 @@ test('two-sided follow-up prompt sends the same chart and evaluates both directi
   const messages = buildCandidateLevelFollowupMessages('image-data', 'image/jpeg', 'BTCUSD', directionalChartWithoutLevels);
 
   assert.equal(messages.length, 2);
+  assert.ok(messages[0].content.length < 2600, `Expected a compact follow-up prompt, got ${messages[0].content.length} characters`);
   assert.match(messages[0].content, /Evaluate BUY and SELL separately/i);
   assert.match(messages[0].content, /conditional candidates, not actionable trades/i);
   assert.match(messages[1].content[0].text, /BTCUSD/);
@@ -849,30 +850,25 @@ test('recognizable low-quality charts are analyzed conservatively instead of rej
 
 test('vision instructions reserve invalid_image for clearly non-chart or unrecognizable images', () => {
   const prompt = getTraderSystemPrompt();
-  assert.match(prompt, /invalid_image" only when the image is clearly not a trading chart/i);
-  assert.match(prompt, /chart is recognizable.*no_trade/i);
-  assert.match(prompt, /forex, cryptocurrency, metals, indices, and commodities/i);
-  assert.match(prompt, /do not assume forex pip conventions/i);
-  assert.match(prompt, /up to two take-profit targets/i);
-  assert.match(prompt, /first take-profit target/i);
-  assert.match(prompt, /no win probability has been established/i);
-  assert.match(prompt, /do not call a move a breakout unless a candle close is visibly beyond a prior level/i);
-  assert.match(prompt, /start at the right edge and analyze the latest visible candles/i);
-  assert.match(prompt, /never substitute an older candle close/i);
-  assert.match(prompt, /setup_status: "valid"/i);
-  assert.match(prompt, /screenshot-derived price is not a verified live quote/i);
-  assert.match(prompt, /NO TRADE means no validated entry, not necessarily no directional bias/i);
-  assert.match(prompt, /return the complete trade_setup object with all canonical keys/i);
-  assert.match(prompt, /Use trade_setup.type="none".*direction is unclear/i);
-  assert.match(prompt, /Context: instrument, timeframe, chart quality/i);
-  assert.match(prompt, /selected in the app as an unverified hint only/i);
-  assert.match(prompt, /never let the selected pair determine direction/i);
-  assert.match(prompt, /Structure: visible swing sequence and directional bias/i);
-  assert.match(prompt, /Decision: BUY, SELL, or NO TRADE/i);
-  assert.match(prompt, /all canonical keys: type.*entry_zone.*stop_loss.*take_profit/i);
-  assert.match(prompt, /status="no_trade" must not remove its candidate levels/i);
-  assert.match(prompt, /analysis.reasoning.*explain the chart evidence anchoring each returned entry, stop, and target/i);
-  assert.match(prompt, /"risk_reward": 2\.0/);
+  assert.ok(prompt.length < 6000, `Expected a compact prompt, got ${prompt.length} characters`);
+  assert.match(prompt, /Pair: use the chart label/i);
+  assert.match(prompt, /Timeframe: use the chart label/i);
+  assert.match(prompt, /Indicators: report only clearly visible ones/i);
+  assert.match(prompt, /Cover forex, crypto, metals, indices and commodities/i);
+  assert.match(prompt, /rightmost candle against a legible scale/i);
+  assert.match(prompt, /never use an earlier close/i);
+  assert.match(prompt, /forming, completed or unknown/i);
+  assert.match(prompt, /screenshot is live/i);
+  assert.match(prompt, /invalid_image only for a clearly non-chart/i);
+  assert.match(prompt, /chart_quality=poor and no_trade/i);
+  assert.match(prompt, /status=no_trade/i);
+  assert.match(prompt, /candidate levels/i);
+  assert.match(prompt, /entry, SL and TP1/i);
+  assert.match(prompt, /Calculate risk_reward from the same entry, SL and TP1/i);
+  assert.match(prompt, /server validates actionability and recalculates R:R/i);
+  assert.match(prompt, /"take_profit_levels":\["TP1","optional TP2"\]/);
+  assert.match(prompt, /"setup_status":"valid\|missed\|invalidated\|unclear\|unknown"/);
+  assert.match(prompt, /"risk_reward":null/);
 });
 
 test('missing chart visibility metadata is not treated as positive evidence', () => {

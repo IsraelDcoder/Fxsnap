@@ -49,10 +49,13 @@ The mobile app targets `https://fxsnap.vercel.app` for all API requests. Deploy 
 
 ### Push notifications
 
-1. Configure Android and iOS push credentials for the Expo project in EAS. Remote pushes require an EAS development or production build; they are not supported by Expo Go on Android.
-2. Set `EXPO_ACCESS_TOKEN` and `NOTIFICATION_CRON_SECRET` in the backend's production environment. Do not add either value to an `EXPO_PUBLIC_*` variable.
-3. Configure an external cron service to send a `POST` request to `/api/notifications/dispatch` at least once per minute with the `x-notification-secret` header set to `NOTIFICATION_CRON_SECRET`. This retries queued Community activity notifications; scheduled retention campaigns remain limited to one per device in each seven-day period.
-4. Users opt in from Settings and must grant OS notification permission. Community activity notifications are enabled by default for push-enabled devices and can be disabled separately; each new post, reply, and reaction is sent to every registered device that has Community notifications enabled.
+1. In Firebase, create an Android app with package name `com.fxsnap.mobile` and download its `google-services.json`.
+2. Provide that file to EAS as a **file-type** environment variable named `GOOGLE_SERVICES_JSON` for each build environment. `app.config.js` adds the file to the Android build without storing it in source control. For local Android builds, set `GOOGLE_SERVICES_JSON` to the local file path; `google-services.json` is ignored by Git.
+3. In EAS project credentials, configure Firebase Cloud Messaging V1 with a service-account JSON from the same Firebase project. The Android app's Firebase configuration file and FCM V1 service account are separate required build credentials.
+4. Build and distribute a new development or production app after configuring credentials, then install that build and test there. Expo Go uses Expo's own native app configuration and does not verify this app's Firebase credentials. Remote pushes on Android require an EAS development or production build.
+5. Set `EXPO_ACCESS_TOKEN` and `NOTIFICATION_CRON_SECRET` in the backend's production environment. Do not add either value to an `EXPO_PUBLIC_*` variable.
+6. Configure an external cron service to send a `POST` request to `/api/notifications/dispatch` at least once per minute with the `x-notification-secret` header set to `NOTIFICATION_CRON_SECRET`. This retries queued Community activity notifications; scheduled retention campaigns remain limited to one per device in each seven-day period.
+7. Users opt in from Settings and must grant OS notification permission. Community activity notifications are enabled by default for push-enabled devices and can be disabled separately; each new post, reply, and reaction is sent to every registered device that has Community notifications enabled.
 
 ### Supabase storage setup
 

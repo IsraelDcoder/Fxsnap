@@ -241,7 +241,7 @@ export default function SettingsScreen() {
     });
   };
 
-  const openHelpAndSupport = () => router.push('/support-chat');
+  const openHelpAndSupport = () => Alert.alert('Coming soon', 'Help & Support will be available in a future update.');
 
   const openSubscriptionOptions = async () => {
     if (!isSubscribed && subscriptionDetails?.status !== 'active') {
