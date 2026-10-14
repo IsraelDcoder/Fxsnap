@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { normalizeChartTradeSetup, normalizeLatestVisiblePrice, type ChartAnalysisResult } from '../services/chartDetection';
-import { buildAnalysisResult, formatDevelopingNote, formatRiskReward, formatTradeReadiness, getMarketDevelopmentPlan, getMissingTradeLevelsExplanation, getTradeReadinessLabel, hasValidatedTradeSetup, isUnavailableAnalysisValue } from '../services/analysisResult';
+import { buildAnalysisResult, formatDevelopingNote, formatRiskReward, formatTradeReadiness, getDirectionalCallLabel, getMarketDevelopmentPlan, getMissingTradeLevelsExplanation, getTradeReadinessLabel, hasValidatedTradeSetup, isUnavailableAnalysisValue } from '../services/analysisResult';
 
 function chartResult(overrides: Partial<ChartAnalysisResult> = {}): ChartAnalysisResult {
   return {
@@ -273,6 +273,13 @@ test('renders a directional market read when analysis has no established trade l
   assert.equal(result.tradeSetup?.takeProfit, 'none');
   assert.equal(result.confidence, 71);
   assert.deepEqual(result.reasoning, apiPayload.reasoning);
+  assert.equal(getTradeReadinessLabel(
+    result.tradeStatus,
+    result.tradeSetup?.entryZone ?? 'none',
+    result.tradeSetup?.stopLoss ?? 'none',
+    result.tradeSetup?.takeProfit ?? 'none',
+    result.direction,
+  ), 'SELL BIAS');
 });
 
 test('explains missing no-trade levels as a hold while the market develops', () => {
@@ -478,8 +485,10 @@ test('waiting setups remain on hold and explain the confirmation trigger', () =>
 test('trade readiness distinguishes conditional setup direction from an actionable signal', () => {
   assert.equal(
     getTradeReadinessLabel('no_setup', '158.23000', '158.15500', '158.29000', 'BUY', 0.8),
-    'WAIT FOR CONFIRMATION',
+    'BUY BIAS',
   );
+  assert.equal(getTradeReadinessLabel('no_setup', 'Not established', 'Not established', 'Not established', 'SELL'), 'SELL BIAS');
+  assert.equal(getTradeReadinessLabel('no_setup', 'Not established', 'Not established', 'Not established'), 'WAIT FOR CONFIRMATION');
   assert.equal(
     getTradeReadinessLabel(undefined, '1.10000', 'Not established', 'Not established'),
     'WAIT FOR CONFIRMATION',
@@ -497,10 +506,16 @@ test('trade readiness distinguishes conditional setup direction from an actionab
   assert.equal(getTradeReadinessLabel('waiting_for_breakout', '1.10', 'Not established', '1.12', 'BUY', 2), 'BUY BIAS');
 });
 
+test('directional call label says BUY or SELL even when setup confirmation is pending', () => {
+  assert.equal(getDirectionalCallLabel('BUY BIAS'), 'BUY');
+  assert.equal(getDirectionalCallLabel('SELL SETUP'), 'SELL');
+  assert.equal(getDirectionalCallLabel('WAIT FOR CONFIRMATION'), 'WAIT FOR CONFIRMATION');
+});
+
 test('trade readiness is not obscured by readiness percentages', () => {
   assert.equal(
     formatTradeReadiness(0, 'no_setup', '158.23000', '158.15500', '158.29000', 'BUY', 0.8),
-    'WAIT FOR CONFIRMATION',
+    'BUY BIAS',
   );
   assert.equal(
     formatTradeReadiness(64, 'waiting_for_confirmation', '1.10', '1.09', '1.12', 'BUY', 2),

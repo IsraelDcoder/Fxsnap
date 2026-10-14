@@ -31,6 +31,7 @@ const {
   holdSetupForPriceValidation,
   buildPriceConsistencyRetryMessages,
   retryPriceConsistencyOnce,
+  isDevelopmentAnalysisPremiumBypassEnabled,
 } = require('./serve');
 
 const directionalChartWithoutLevels = {
@@ -59,6 +60,25 @@ const directionalChartWithoutLevels = {
   dataLimitations: [],
   reasons: [],
 };
+
+test('development analysis premium bypass requires explicit opt-in and development mode', () => {
+  const previousNodeEnv = process.env.NODE_ENV;
+  const previousBypass = process.env.FXSNAP_DEV_ANALYSIS_PREMIUM_BYPASS;
+  try {
+    process.env.NODE_ENV = 'development';
+    delete process.env.FXSNAP_DEV_ANALYSIS_PREMIUM_BYPASS;
+    assert.equal(isDevelopmentAnalysisPremiumBypassEnabled(), false);
+    process.env.FXSNAP_DEV_ANALYSIS_PREMIUM_BYPASS = 'true';
+    assert.equal(isDevelopmentAnalysisPremiumBypassEnabled(), true);
+    process.env.NODE_ENV = 'production';
+    assert.equal(isDevelopmentAnalysisPremiumBypassEnabled(), false);
+  } finally {
+    if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previousNodeEnv;
+    if (previousBypass === undefined) delete process.env.FXSNAP_DEV_ANALYSIS_PREMIUM_BYPASS;
+    else process.env.FXSNAP_DEV_ANALYSIS_PREMIUM_BYPASS = previousBypass;
+  }
+});
 
 test('one conditional review is requested for readable charts with incomplete levels regardless of first-pass bias', () => {
   assert.equal(shouldRequestCandidateLevelFollowup(directionalChartWithoutLevels), true);
@@ -418,6 +438,7 @@ test('two-sided follow-up prompt sends the same chart and evaluates both directi
   assert.match(messages[0].content, /Evaluate BUY and SELL separately/i);
   assert.match(messages[0].content, /Do not return unsupported just because trend, consolidation or entry trigger is unclear/i);
   assert.match(messages[0].content, /mark setup_status=unclear.*entry_status=waiting_for_trigger/i);
+  assert.match(messages[0].content, /State the specific visible confirmation to wait for in entry_trigger/i);
   assert.match(messages[0].content, /retain BUY\/SELL setup direction while the trigger is pending/i);
   assert.match(messages[0].content, /prefer the direction supported by the established bias/i);
   assert.match(messages[1].content[0].text, /BTCUSD/);
@@ -432,6 +453,7 @@ test('valid follow-up levels fill missing fields but remain a non-actionable no-
     stop_loss: '1.0900',
     take_profit_levels: ['1.1200', '1.1300'],
     setup_status: 'valid',
+    entry_trigger: 'bullish rejection at support',
     reason: 'Entry is at visible support; stop is below the swing low.',
   });
 
@@ -445,6 +467,7 @@ test('valid follow-up levels fill missing fields but remain a non-actionable no-
   assert.equal(result.tradeStatus, 'waiting_for_confirmation');
   assert.equal(result.entryReadiness, 0);
   assert.equal(result.levelFollowupStatus, 'completed');
+  assert.match(result.tradeTrigger, /Wait for this chart-supported trigger: bullish rejection at support/i);
 });
 
 test('unclear trend retains complete support/resistance levels and returns WAIT for confirmation', () => {
@@ -1073,6 +1096,7 @@ function twoSidedCandidate(direction, overrides = {}) {
     setup_status: 'valid',
     entry_status: 'waiting_for_trigger',
     entry_type: buy ? 'limit_zone' : 'rejection',
+    entry_trigger: buy ? 'bullish rejection at support' : 'bearish rejection at resistance',
     evidence: {
       trend: direction,
       structure: direction,
@@ -1104,6 +1128,7 @@ test('two-sided review identifies independent BUY and SELL candidates with exact
     assert.equal(result.trade_setup.entry_zone, '1.10000');
     assert.ok(Math.abs(result.trade_setup.risk_reward - 2) < 1e-9);
     assert.equal(result.tradeStatus, 'waiting_for_confirmation');
+    assert.match(result.tradeTrigger, new RegExp(direction === 'buy' ? 'bullish rejection at support' : 'bearish rejection at resistance'));
     assert.equal(result.candidateReview.status, 'selected');
   }
 });
@@ -1269,6 +1294,7 @@ test('triggered two-sided candidate becomes actionable only after all screenshot
   assert.equal(final.status, 'success');
   assert.equal(final.tradeDecision, 'BUY');
   assert.equal(final.tradeStatus, 'actionable');
+  assert.match(final.tradeTrigger, /screenshot shows this trigger.*verify it against current market data/i);
   assert.ok(Math.abs(final.trade_setup.risk_reward - 2) < 1e-9);
 });
 
@@ -1721,6 +1747,8 @@ test('support and resistance candidate returns entry, opposing target, and serve
       take_profit_levels: ['1.1200'],
       risk_reward: null,
       setup_status: 'valid',
+      entry_status: 'waiting_for_trigger',
+      entry_trigger: 'bullish rejection at support',
     },
     confidence: 60,
     reasoning: ['Support 1.0950 is the conditional entry.', 'Resistance 1.1200 is TP1.'],
@@ -1735,6 +1763,7 @@ test('support and resistance candidate returns entry, opposing target, and serve
   assert.equal(result.trade_setup.take_profit, '1.1200');
   assert.ok(Math.abs(result.trade_setup.risk_reward - 5) < 1e-8);
   assert.equal(result.trade_setup.setup_status, 'valid');
+  assert.match(result.tradeTrigger, /Wait for this chart-supported trigger: bullish rejection at support/i);
 });
 
 test('validated candidate levels survive status downgrade and retain both take-profit targets', () => {

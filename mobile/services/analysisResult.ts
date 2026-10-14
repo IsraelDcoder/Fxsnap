@@ -161,6 +161,7 @@ export function getTradeReadinessLabel(
   if (tradeStatus && tradeStatus.startsWith('waiting_')) {
     return hasCompleteSetup ? `${normalizedDirection} SETUP` : `${normalizedDirection} BIAS`;
   }
+  if (tradeStatus === 'no_setup') return `${normalizedDirection} BIAS`;
   return 'WAIT FOR CONFIRMATION';
 }
 
@@ -174,6 +175,12 @@ export function formatTradeReadiness(
   riskReward?: number | string,
 ): string {
   return getTradeReadinessLabel(tradeStatus, entry, stopLoss, takeProfit, direction, riskReward);
+}
+
+export function getDirectionalCallLabel(readinessLabel: string): string {
+  if (readinessLabel.startsWith('BUY')) return 'BUY';
+  if (readinessLabel.startsWith('SELL')) return 'SELL';
+  return readinessLabel;
 }
 
 export function buildAnalysisResult(chart: ChartAnalysisResult, pair: string, imageUri?: string): AnalysisResult {

@@ -44,7 +44,7 @@ import { canViewFullAnalysis } from '@/services/featureAccess';
 import { getInstrument } from '@/services/instruments';
 import { shareAnalysisCardOnWeb } from '@/services/shareAnalysisCard';
 import { resolveAnalysisDirection } from '@/services/analysisDirection';
-import { formatDevelopingNote, formatRiskReward, formatTradeReadiness, hasValidatedTradeSetup, isUnavailableAnalysisValue } from '@/services/analysisResult';
+import { formatDevelopingNote, formatRiskReward, formatTradeReadiness, getDirectionalCallLabel, hasValidatedTradeSetup, isUnavailableAnalysisValue } from '@/services/analysisResult';
 import { formatInstrumentPriceText } from '@/services/priceFormatting';
 
 type ResultTab = 'analysis' | 'insights';
@@ -288,6 +288,9 @@ export default function AnalysisResultScreen() {
     : riskReward.includes(':') ? riskReward : `1:${riskReward}`;
   const confidence = currentAnalysis?.marketConfidence ?? currentAnalysis?.confidence ?? 0;
   const entryReadiness = Math.round(Math.max(0, Math.min(100, currentAnalysis?.entryReadiness ?? 0)));
+  const readinessDirection = hasDirectionalCandidate
+    ? currentAnalysis?.tradeSetup?.type?.toUpperCase()
+    : displayDirection;
   const readinessText = isAnalysisUnavailable
     ? 'WAIT FOR CONFIRMATION'
     : formatTradeReadiness(
@@ -296,14 +299,15 @@ export default function AnalysisResultScreen() {
       entryLevel,
       stopLevel,
       tp1Level,
-      currentAnalysis?.tradeSetup?.type?.toUpperCase(),
+      readinessDirection,
       currentAnalysis?.tradeSetup?.riskReward,
     );
+  const directionalCallLabel = getDirectionalCallLabel(readinessText);
   const isBuySignal = readinessText.startsWith('BUY');
   const isSellSignal = readinessText.startsWith('SELL');
   const signalColor = isBuySignal ? '#00E676'
     : isSellSignal ? '#FF5252' : '#FFC857';
-  const directionLabel = readinessText;
+  const directionLabel = directionalCallLabel;
   const currentPrice = currentAnalysis?.latestVisiblePrice;
   const marketEntryText = currentPrice != null
     ? formatInstrumentPriceText(currentPrice, pair)
@@ -317,6 +321,18 @@ export default function AnalysisResultScreen() {
     currentAnalysis.zones?.resistance && !isUnavailableAnalysisValue(currentAnalysis.zones.resistance) ? `Resistance is near ${currentAnalysis.zones.resistance}.` : '',
     currentAnalysis.analysis?.notes || currentAnalysis.multiTimeframe?.summary || '',
   ].filter(Boolean).slice(0, 5) : [];
+  const displayReasoning = reasoning.map((reason) => {
+    if (!readinessText.endsWith('BIAS') || !/^Decision:\s*WAIT\b/i.test(reason)) return reason;
+    const explanation = reason
+      .replace(/^Decision:\s*WAIT(?:\s+FOR\s+CONFIRMATION)?\s*/i, '')
+      .replace(/^(?:due to|because)\s+/i, '')
+      .replace(/^[,;—:\s]+/, '')
+      .replace(/[.?!]+$/, '');
+    return `Decision: ${directionalCallLabel} directional call; no complete entry plan was validated.${explanation ? ` Stated reason: ${explanation}.` : ''}`;
+  });
+  const hasDirectionalBiasOnly = !hasDirectionalCandidate
+    && canShowMarketRead
+    && (marketReadDirection === 'BUY' || marketReadDirection === 'SELL');
   const availableSupport = currentAnalysis?.supportResistance?.support?.filter((value) => !isUnavailableAnalysisValue(value)) ?? [];
   const availableResistance = currentAnalysis?.supportResistance?.resistance?.filter((value) => !isUnavailableAnalysisValue(value)) ?? [];
   const supportLevels = currentAnalysis?.supportResistance?.support?.length
@@ -712,8 +728,13 @@ export default function AnalysisResultScreen() {
         {activeTab === 'analysis' ? (
           <>
             <Animated.View entering={FadeInUp.duration(350)} style={[styles.verdictCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
-              <View style={styles.verdictTop}><Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>{hasDirectionalCandidate ? 'TRADE SETUP' : 'TRADE SIGNAL'}</Text><View style={[styles.verdictBadge, { backgroundColor: `${signalColor}20` }]}><View style={[styles.verdictDot, { backgroundColor: signalColor }]} /><Text style={[styles.verdictText, { color: signalColor }]}>{readinessText}</Text></View></View>
-              {hasDirectionalCandidate && !isValidatedActionable ? <Text style={[styles.bodyMuted, { color: colors.textSecondary }]}>Conditional plan only. Wait for the entry trigger; do not enter yet.</Text> : null}
+              <View style={styles.verdictTop}><Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>{hasDirectionalCandidate ? 'TRADE SETUP' : hasDirectionalBiasOnly ? 'DIRECTIONAL CALL' : 'TRADE SIGNAL'}</Text><View style={[styles.verdictBadge, { backgroundColor: `${signalColor}20` }]}><View style={[styles.verdictDot, { backgroundColor: signalColor }]} /><Text style={[styles.verdictText, { color: signalColor }]}>{directionalCallLabel}</Text></View></View>
+              {hasDirectionalCandidate && !isValidatedActionable ? (
+                <Text style={[styles.bodyMuted, { color: colors.textSecondary }]}>
+                  Conditional plan only. {currentAnalysis.tradeTrigger || 'Wait for the chart-supported entry trigger.'} Do not enter yet.
+                </Text>
+              ) : null}
+              {hasDirectionalBiasOnly ? <Text style={[styles.bodyMuted, { color: colors.textSecondary }]}>{`Directional call: ${directionalCallLabel}. The chart supports this direction, but entry, stop-loss, and take-profit levels are not validated. Do not enter until a valid setup and trigger are confirmed.`}</Text> : null}
               {currentPrice != null ? <View style={styles.confidenceLine}><Text style={[styles.bodyMuted, { color: colors.textSecondary }]}>Latest visible price (screenshot)</Text><Text style={[styles.confidenceText, { color: colors.text }]}>{marketEntryText}</Text></View> : null}
             </Animated.View>
             {hasCompleteDirectionalSetup ? (
@@ -744,9 +765,9 @@ export default function AnalysisResultScreen() {
                 <Feather name={hasFullAnalysisAccess && analysisExpanded ? 'chevron-up' : 'chevron-down'} size={18} color={colors.textSecondary} />
               </TouchableOpacity>
               {hasFullAnalysisAccess && analysisExpanded ? (
-                <View style={styles.reasoningList}>{(reasoning.length ? reasoning : ['No additional reasoning was provided for this setup.']).map((reason, index) => <View key={`${index}-${reason}`} style={styles.reasoningRow}><View style={[styles.reasoningBullet, { backgroundColor: colors.buy }]} /><Text style={[styles.reasoningText, { color: colors.textSecondary }]}>{formatDevelopingNote(reason)}</Text></View>)}</View>
+                <View style={styles.reasoningList}>{(displayReasoning.length ? displayReasoning : ['No additional reasoning was provided for this setup.']).map((reason, index) => <View key={`${index}-${reason}`} style={styles.reasoningRow}><View style={[styles.reasoningBullet, { backgroundColor: colors.buy }]} /><Text style={[styles.reasoningText, { color: colors.textSecondary }]}>{formatDevelopingNote(reason)}</Text></View>)}</View>
               ) : !hasFullAnalysisAccess ? (
-                <View style={styles.lockedReasoning}><View pointerEvents="none" style={styles.lockedReasoningPreview}>{(reasoning.length ? reasoning.slice(0, 3) : ['Trend and structure analysis', 'Key levels and confluence']).map((reason, index) => <Text key={`${index}-${reason}`} numberOfLines={1} style={[styles.reasoningText, { color: colors.textSecondary }]}>{`• ${formatDevelopingNote(reason)}`}</Text>)}<BlurView intensity={36} tint={colors.text === '#FFFFFF' ? 'dark' : 'light'} style={StyleSheet.absoluteFill} /></View><TouchableOpacity style={[styles.unlockButton, { backgroundColor: colors.primary }]} onPress={() => openLockedContent('ai-analysis')}><Feather name="lock" size={14} color={colors.primaryForeground} /><Text style={[styles.unlockButtonText, { color: colors.primaryForeground }]}>Unlock full analysis</Text></TouchableOpacity></View>
+                <View style={styles.lockedReasoning}><View pointerEvents="none" style={styles.lockedReasoningPreview}>{(displayReasoning.length ? displayReasoning.slice(0, 3) : ['Trend and structure analysis', 'Key levels and confluence']).map((reason, index) => <Text key={`${index}-${reason}`} numberOfLines={1} style={[styles.reasoningText, { color: colors.textSecondary }]}>{`• ${formatDevelopingNote(reason)}`}</Text>)}<BlurView intensity={36} tint={colors.text === '#FFFFFF' ? 'dark' : 'light'} style={StyleSheet.absoluteFill} /></View><TouchableOpacity style={[styles.unlockButton, { backgroundColor: colors.primary }]} onPress={() => openLockedContent('ai-analysis')}><Feather name="lock" size={14} color={colors.primaryForeground} /><Text style={[styles.unlockButtonText, { color: colors.primaryForeground }]}>Unlock full analysis</Text></TouchableOpacity></View>
               ) : null}
             </View>
           </>

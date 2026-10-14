@@ -98,6 +98,8 @@ cd mobile
 npm run dev -- --web
 ```
 
+For local Premium chart-analysis testing without an active subscription, run the API and app in separate terminals. Set `NODE_ENV=development` and `FXSNAP_DEV_ANALYSIS_PREMIUM_BYPASS=true` only on the local API process; set `EXPO_PUBLIC_DEV_PREMIUM_BYPASS=true` and `EXPO_PUBLIC_API_BASE_URL=http://localhost:3000` for the Expo dev server. The API still requires a configured `OPENROUTER_API_KEY`. The bypass applies only to chart analysis, is disabled outside development builds/server mode, and does not unlock strategy generation or affect production.
+
 Configure local values from [`mobile/.env.example`](./mobile/.env.example). Keep real API keys and server credentials in an untracked local environment file or deployment secret manager; never put server secrets in `EXPO_PUBLIC_*` variables or commit them.
 
 Useful commands from `mobile/`:

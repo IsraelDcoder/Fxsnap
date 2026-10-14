@@ -346,6 +346,8 @@ const TradeAnalysisSchema = z.object({
     take_profit_levels: z.array(z.string().trim().max(200)).max(2).optional(),
     risk_reward: z.number().nullable(),
     setup_status: z.enum(['valid', 'missed', 'invalidated', 'unclear', 'unknown']),
+    entry_status: z.enum(['waiting_for_trigger', 'trigger_observed', 'missed', 'unverified']).optional(),
+    entry_trigger: z.string().trim().max(200).nullable().optional(),
   }),
   confidence: z.number().min(0).max(100),
   reasons: z.array(z.string().trim().max(300)),
@@ -366,6 +368,7 @@ const CandidateLevelFollowupSchema = z.object({
   setup_status: z.enum(['valid', 'missed', 'invalidated', 'unclear']).optional(),
   entry_status: z.enum(['waiting_for_trigger', 'trigger_observed', 'missed', 'unverified']).optional(),
   entry_type: z.enum(['limit_zone', 'breakout', 'rejection', 'other', 'unspecified']).optional(),
+  entry_trigger: z.string().trim().min(1).max(200).optional(),
   reason: z.string().trim().max(300).optional(),
 });
 const DirectionalEvidenceSchema = z.enum(['buy', 'sell', 'neutral', 'unavailable']);
@@ -377,6 +380,7 @@ const TwoSidedCandidateSchema = z.object({
   setup_status: z.enum(['valid', 'missed', 'invalidated', 'unclear']).optional(),
   entry_status: z.enum(['waiting_for_trigger', 'trigger_observed', 'missed', 'unverified']).optional(),
   entry_type: z.enum(['limit_zone', 'breakout', 'rejection', 'other', 'unspecified']).optional(),
+  entry_trigger: z.string().trim().min(1).max(200).optional(),
   evidence: z.object({
     trend: DirectionalEvidenceSchema,
     structure: DirectionalEvidenceSchema,
@@ -468,6 +472,12 @@ function normalizeCandidateLevelFollowup(raw) {
       ['limit_zone', 'breakout', 'rejection', 'other', 'unspecified'],
       undefined,
     ),
+    entry_trigger: boundedString(
+      setup.entry_trigger ?? setup.entryTrigger ?? raw.entry_trigger ?? raw.entryTrigger
+        ?? raw.trigger_description ?? raw.triggerDescription,
+      '',
+      200,
+    ) || undefined,
     reason: boundedString(raw.reason ?? raw.explanation ?? raw.rationale, '', 300) || undefined,
   };
 }
@@ -1069,6 +1079,17 @@ function canonicalizeRawAnalysis(raw) {
     unclear: 'unclear',
     unknown: 'unknown',
   }, ['valid', 'missed', 'invalidated', 'unclear', 'unknown'], 'unknown');
+  const entryStatus = canonicalizeEnumOr(tradeRaw.entry_status ?? tradeRaw.entryStatus, {
+    waiting_for_trigger: 'waiting_for_trigger',
+    trigger_observed: 'trigger_observed',
+    missed: 'missed',
+    unverified: 'unverified',
+  }, ['waiting_for_trigger', 'trigger_observed', 'missed', 'unverified'], undefined);
+  const entryTrigger = boundedString(
+    tradeRaw.entry_trigger ?? tradeRaw.entryTrigger ?? raw.entry_trigger ?? raw.entryTrigger,
+    '',
+    200,
+  );
 
   const marketStructure = ensureString(analysisRaw.market_structure, ensureString(analysisRaw.structure, ''));
   const structureBias = canonicalizeEnumOr(analysisRaw.structure_bias, {
@@ -1199,6 +1220,8 @@ function canonicalizeRawAnalysis(raw) {
       take_profit_levels: takeProfitLevels,
       risk_reward: riskReward,
       setup_status: setupStatus,
+      ...(entryStatus ? { entry_status: entryStatus } : {}),
+      ...(entryTrigger ? { entry_trigger: entryTrigger } : {}),
     },
     confidence: parseConfidence(raw.confidence),
     reasons,
@@ -1837,6 +1860,11 @@ function applyMentorStrategy(normalized) {
   response.marketBiasConfidence = explain.marketBiasConfidence;
   response.tradeStatus = explain.tradeStatus;
   response.tradeTrigger = explain.tradeTrigger;
+  if (normalized.trade_setup?.entry_trigger && response.trade_setup.type !== 'none') {
+    response.tradeTrigger = normalized.trade_setup.entry_status === 'trigger_observed'
+      ? `The screenshot shows this trigger: ${normalized.trade_setup.entry_trigger}. Verify it against current market data before acting.`
+      : `Wait for this chart-supported trigger: ${normalized.trade_setup.entry_trigger}.`;
+  }
   response.tradeType = response.trade_setup.type === 'buy' ? 'BUY' : response.trade_setup.type === 'sell' ? 'SELL' : 'NONE';
   response.analysis.marketBias = explain.marketBias;
   response.analysis.marketStructure = explain.marketStructure;
@@ -1888,12 +1916,12 @@ Read the right edge first. Use only the visible current-price marker or rightmos
 
 Recognizable but cropped, obscured or poor-quality charts are charts: set is_chart=true, chart_quality=poor and no_trade when evidence is insufficient. Use invalid_image only for a clearly non-chart, blank, corrupted or unrecognizable image. If evidence conflicts or is insufficient, choose no_trade; do not claim a win probability.
 
-Support and resistance define setup direction; confirmation defines whether to enter now. When a readable chart supports a demand/support or supply/resistance setup, return the best supported conditional BUY or SELL plan with exact chart-grounded levels, even if its trigger is not confirmed: buy entry at/near support, SL beyond the visible support-side swing, TP1 at resistance; or sell entry at/near resistance, SL beyond the visible resistance-side swing, TP1 at support. Anchor entry to the level/retest, never midrange. If current price is between boundaries, plan from the nearer boundary and use visible trend/structure to choose the side. Do not require consolidation or a confirmed trend to describe a candidate. Mark an untriggered plan as waiting_for_confirmation/no_trade, retain its direction and levels, and explain the trigger still needed; reserve an actionable BUY/SELL decision for setups whose trigger and current-price checks pass. Use visible swing invalidation for SL; no arbitrary buffers. Compute R:R from these exact entry/SL/TP1 levels. If a directional setup or defensible level truly cannot be supported, do not invent it; explain the limitation and return no_trade.
+Support and resistance define setup direction; confirmation defines whether to enter now. When a readable chart supports a demand/support or supply/resistance setup, return the best supported conditional BUY or SELL plan with exact chart-grounded levels, even if its trigger is not confirmed: buy entry at/near support, SL beyond the visible support-side swing, TP1 at resistance; or sell entry at/near resistance, SL beyond the visible resistance-side swing, TP1 at support. Anchor entry to the level/retest, never midrange. If current price is between boundaries, plan from the nearer boundary and use visible trend/structure to choose the side. Do not require consolidation or a confirmed trend to describe a candidate. Mark an untriggered plan as waiting_for_confirmation/no_trade, retain its direction and levels, and provide a specific visible entry_trigger plus entry_status=waiting_for_trigger, trigger_observed, missed or unverified; reserve an actionable BUY/SELL decision for setups whose trigger and current-price checks pass. Use visible swing invalidation for SL; no arbitrary buffers. Compute R:R from these exact entry/SL/TP1 levels. If a directional setup or defensible level truly cannot be supported, do not invent it; explain the limitation and return no_trade.
 
 Also assess trend, swing structure, visible liquidity, volatility, volume, indicators and price action. Keep directional bias, conditional candidate and actionability separate. Preserve supported candidate levels with status=no_trade; use type=none only if no direction/setup can be supported. Explain evidence for entry, SL and TP1; include TP2 only if independently supported. A candidate is valid while current visible structure holds and price has not missed entry, reached TP or invalidated SL/structure; waiting for its trigger may be valid. Otherwise use missed, invalidated, unclear or unknown. Only call it actionable when current-price/candle checks and a clear entry, logical SL, supported TP and no-conflict checks pass. Calculate risk_reward from the same entry, SL and TP1; use null if unreliable. The server validates actionability and recalculates R:R; do not force a minimum.
 
 Return only strict JSON with all keys and value types shown. Use null/empty arrays where appropriate and strings for price levels:
-{"status":"success|no_trade|invalid_image","chart":{"is_chart":true,"timeframe":"visible timeframe or empty string","chart_quality":"good|acceptable|poor","price_scale_visible":true,"candles_visible":true,"has_enough_candles":true,"latest_visible_price":"exact visible price or null","current_price_source":"visible_price_marker|latest_candle_scale_read|unreadable","current_candle_status":"forming|completed|unknown","latest_candle_timestamp":"ISO-8601 timestamp or null"},"analysis":{"trend":"bullish|bearish|neutral","structure":"short description","volatility":"low|moderate|high","volume":"low|moderate|high|not_visible","sentiment":"bullish|bearish|neutral","indicators":"visible indicators or none","notes":"short explanation","reasoning":["3-5 concise evidence-based points"]},"zones":{"support":"price zone or description","resistance":"price zone or description","liquidity":"description or not_clear"},"support_resistance":{"support":["visible support level or zone"],"resistance":["visible resistance level or zone"]},"reasoning":["Context: instrument, timeframe, chart quality and limitations","Structure: visible swings and bias","Levels: visible support/resistance and price readability","Decision: BUY, SELL or NO TRADE and why","Limitations: conflicts or unavailable information"],"trade_setup":{"type":"buy|sell|none","entry_zone":"price/range string or none","stop_loss":"price string or none","take_profit":"TP1 price string or none","take_profit_levels":["TP1","optional TP2"],"risk_reward":null,"setup_status":"valid|missed|invalidated|unclear|unknown"},"confidence":50}
+{"status":"success|no_trade|invalid_image","chart":{"is_chart":true,"timeframe":"visible timeframe or empty string","chart_quality":"good|acceptable|poor","price_scale_visible":true,"candles_visible":true,"has_enough_candles":true,"latest_visible_price":"exact visible price or null","current_price_source":"visible_price_marker|latest_candle_scale_read|unreadable","current_candle_status":"forming|completed|unknown","latest_candle_timestamp":"ISO-8601 timestamp or null"},"analysis":{"trend":"bullish|bearish|neutral","structure":"short description","volatility":"low|moderate|high","volume":"low|moderate|high|not_visible","sentiment":"bullish|bearish|neutral","indicators":"visible indicators or none","notes":"short explanation","reasoning":["3-5 concise evidence-based points"]},"zones":{"support":"price zone or description","resistance":"price zone or description","liquidity":"description or not_clear"},"support_resistance":{"support":["visible support level or zone"],"resistance":["visible resistance level or zone"]},"reasoning":["Context: instrument, timeframe, chart quality and limitations","Structure: visible swings and bias","Levels: visible support/resistance and price readability","Decision: BUY, SELL or NO TRADE and why","Limitations: conflicts or unavailable information"],"trade_setup":{"type":"buy|sell|none","entry_zone":"price/range string or none","stop_loss":"price string or none","take_profit":"TP1 price string or none","take_profit_levels":["TP1","optional TP2"],"risk_reward":null,"setup_status":"valid|missed|invalidated|unclear|unknown","entry_status":"waiting_for_trigger|trigger_observed|missed|unverified","entry_trigger":"specific visible confirmation or null"},"confidence":50}
 
 Keep confidence evidence-based; it is not win probability. Keep reasoning concise and consistent. Return no extra text.`;
 }
@@ -2929,8 +2957,8 @@ function buildCandidateLevelFollowupMessages(imageBase64, mimeType, pair, result
   return [
     {
       role: 'system',
-      content: `Evaluate BUY and SELL separately using visible chart evidence; first-pass analysis is context, not proof. When support and resistance are both clear and numeric, provide complete conditional candidates from the boundaries: buy at/near support, SL beyond its visible swing, TP at resistance; sell at/near resistance, SL beyond its visible swing, TP at support. Use the nearer boundary when price is between them. Do not return unsupported just because trend, consolidation or entry trigger is unclear; mark setup_status=unclear (or valid if structure holds), entry_status=waiting_for_trigger. These are setup directions, not instructions to enter immediately. Only reject a side if levels/defensible SL are genuinely unreadable, structure is invalidated/missed, or multi-timeframe evidence conflicts. No invented prices/buffers. For each side report trend, structure, zone, trigger, higher-timeframe, liquidity and RSI as buy, sell, neutral or unavailable. Entry status: waiting_for_trigger, trigger_observed, missed or unverified. Entry type: limit_zone, breakout, rejection, other or unspecified. A candidate is conditional, not an actionable trade; retain BUY/SELL setup direction while the trigger is pending. For multi-timeframe mode require aligned H4/M15 evidence and M15 trigger before calling a setup actionable, but retain candidate levels and direction while confirmation is pending. When both candidates have equal evidence, prefer the direction supported by the established bias; otherwise prefer the valid entry zone nearer the latest visible price. If both remain equally supported and equally near, do not invent a preference; the server will retain the ambiguity. The server validates actionability and recalculates R:R. Return only:
-{"status":"reviewed","buy":{"status":"candidate|unsupported","entry_zone":"price/range or omit","stop_loss":"price or omit","take_profit_levels":["TP1","optional TP2"],"setup_status":"valid|missed|invalidated|unclear","entry_status":"waiting_for_trigger|trigger_observed|missed|unverified","entry_type":"limit_zone|breakout|rejection|other|unspecified","evidence":{"trend":"buy|sell|neutral|unavailable","structure":"buy|sell|neutral|unavailable","zone":"support|resistance|neutral|unavailable","trigger":"buy|sell|neutral|unavailable","higher_timeframe":"buy|sell|neutral|unavailable","liquidity":"buy|sell|neutral|unavailable","rsi":"buy|sell|neutral|unavailable"},"reason":"visible evidence or why unsupported"},"sell":{"status":"candidate|unsupported","entry_zone":"price/range or omit","stop_loss":"price or omit","take_profit_levels":["TP1","optional TP2"],"setup_status":"valid|missed|invalidated|unclear","entry_status":"waiting_for_trigger|trigger_observed|missed|unverified","entry_type":"limit_zone|breakout|rejection|other|unspecified","evidence":{"trend":"buy|sell|neutral|unavailable","structure":"buy|sell|neutral|unavailable","zone":"support|resistance|neutral|unavailable","trigger":"buy|sell|neutral|unavailable","higher_timeframe":"buy|sell|neutral|unavailable","liquidity":"buy|sell|neutral|unavailable","rsi":"buy|sell|neutral|unavailable"},"reason":"visible evidence or why unsupported"}}`,
+      content: `Evaluate BUY and SELL separately using visible chart evidence; first-pass analysis is context, not proof. When support and resistance are both clear and numeric, provide complete conditional candidates from the boundaries: buy at/near support, SL beyond its visible swing, TP at resistance; sell at/near resistance, SL beyond its visible swing, TP at support. Use the nearer boundary when price is between them. Do not return unsupported just because trend, consolidation or entry trigger is unclear; mark setup_status=unclear (or valid if structure holds), entry_status=waiting_for_trigger. State the specific visible confirmation to wait for in entry_trigger; do not invent a trigger. These are setup directions, not instructions to enter immediately. Only reject a side if levels/defensible SL are genuinely unreadable, structure is invalidated/missed, or multi-timeframe evidence conflicts. No invented prices/buffers. A candidate is conditional, not an actionable trade; retain BUY/SELL setup direction while the trigger is pending. For multi-timeframe mode require aligned H4/M15 evidence and M15 trigger before calling a setup actionable, but retain candidate levels and direction while confirmation is pending. When both candidates have equal evidence, prefer the direction supported by the established bias; otherwise prefer the valid entry zone nearer the latest visible price. If both remain equally supported and equally near, do not invent a preference; the server will retain the ambiguity. The server validates actionability and recalculates R:R. Return only:
+{"status":"reviewed","buy":{"status":"candidate|unsupported","entry_zone":"price/range or omit","stop_loss":"price or omit","take_profit_levels":["TP1","optional TP2"],"setup_status":"valid|missed|invalidated|unclear","entry_status":"waiting_for_trigger|trigger_observed|missed|unverified","entry_type":"limit_zone|breakout|rejection|other|unspecified","entry_trigger":"specific visible trigger to wait for, or omit if unavailable","evidence":{"trend":"buy|sell|neutral|unavailable","structure":"buy|sell|neutral|unavailable","zone":"support|resistance|neutral|unavailable","trigger":"buy|sell|neutral|unavailable","higher_timeframe":"buy|sell|neutral|unavailable","liquidity":"buy|sell|neutral|unavailable","rsi":"buy|sell|neutral|unavailable"},"reason":"visible evidence or why unsupported"},"sell":{"status":"candidate|unsupported","entry_zone":"price/range or omit","stop_loss":"price or omit","take_profit_levels":["TP1","optional TP2"],"setup_status":"valid|missed|invalidated|unclear","entry_status":"waiting_for_trigger|trigger_observed|missed|unverified","entry_type":"limit_zone|breakout|rejection|other|unspecified","entry_trigger":"specific visible trigger to wait for, or omit if unavailable","evidence":{"trend":"buy|sell|neutral|unavailable","structure":"buy|sell|neutral|unavailable","zone":"support|resistance|neutral|unavailable","trigger":"buy|sell|neutral|unavailable","higher_timeframe":"buy|sell|neutral|unavailable","liquidity":"buy|sell|neutral|unavailable","rsi":"buy|sell|neutral|unavailable"},"reason":"visible evidence or why unsupported"}}`,
     },
     {
       role: 'user',
@@ -3032,7 +3060,7 @@ async function retryPriceConsistencyOnce(result, pairHint, retryMessages, isMult
           setupStatus: 'CONFIRMED',
           tradeStatus: 'actionable',
           entryReadiness: 100,
-          tradeTrigger: 'The entry trigger was observed and the candidate passed the screenshot, level, freshness, and risk checks.',
+          tradeTrigger: `${result.tradeTrigger || 'The entry trigger was observed.'} The candidate passed screenshot, level, freshness, and risk checks. Confirm current live price and candle conditions before entering; screenshot prices are not live quotes.`,
         };
       }
       return result;
@@ -3247,7 +3275,11 @@ function applyCandidateLevelFollowup(result, rawFollowup) {
     setupStatus: isVisuallyValid ? 'DEVELOPING' : 'NO_SETUP',
     entryReadiness: 0,
     setupConfidence: 0,
-    tradeTrigger: 'Candidate levels are for analysis only; this result is not a validated or actionable trade setup.',
+    tradeTrigger: candidate.entry_trigger
+      ? candidate.entry_status === 'trigger_observed'
+        ? `The screenshot shows this trigger: ${candidate.entry_trigger}. Verify it against current market data before acting.`
+        : `Wait for this chart-supported trigger: ${candidate.entry_trigger}.`
+      : 'Candidate levels are for analysis only; this result is not a validated or actionable trade setup.',
     reasoning: mergeUniqueStrings([...(result.reasoning || []), candidateReason]).slice(0, 5),
     reasons: mergeUniqueStrings([
       ...(Array.isArray(result.reasons) ? result.reasons : []),
@@ -3391,6 +3423,7 @@ function applyTwoSidedCandidateReview(result, rawReview) {
       setup_status: candidate.setup_status,
       entry_status: candidate.entry_status,
       entry_type: candidate.entry_type,
+      entry_trigger: candidate.entry_trigger,
       reason: candidate.reason,
     });
     const setup = candidateResult.trade_setup || DEFAULT_TRADE_SETUP;
@@ -3441,7 +3474,11 @@ function applyTwoSidedCandidateReview(result, rawReview) {
         },
         entryStatus: candidate.entry_status || (candidateHasEntryTrigger ? 'trigger_observed' : 'waiting_for_trigger'),
         setupType: candidate.entry_type || 'unspecified',
-        tradeTrigger: candidateReadinessReason || 'Entry trigger observed; screenshot and price checks passed.',
+        tradeTrigger: candidate.entry_trigger
+          ? candidate.entry_status === 'trigger_observed'
+            ? `The screenshot shows this trigger: ${candidate.entry_trigger}. Verify it against current market data before acting.`
+            : `Wait for this chart-supported trigger: ${candidate.entry_trigger}.`
+          : candidateReadinessReason || 'Entry trigger observed; screenshot and price checks passed.',
       },
     };
   });
@@ -3658,7 +3695,7 @@ async function analyzeChart(req, res) {
     if (!['image/jpeg', 'image/png', 'image/webp'].includes(mime)) {
       return sendJson(res, 400, { error: 'Only JPEG, PNG, and WebP chart images are supported.' });
     }
-    if (!(await requirePremiumSubscription(deviceId, res))) return;
+    if (!(await requirePremiumSubscription(deviceId, res, true))) return;
     const hasOpenRouter = Boolean(process.env.OPENROUTER_API_KEY && !process.env.OPENROUTER_API_KEY.startsWith('replace_'));
     if (!hasOpenRouter) {
       return sendJson(res, 200, aiUnavailableResponse(input, 'Chart AI is not configured on the server. Set OPENROUTER_API_KEY.'));
@@ -3813,7 +3850,7 @@ async function analyzeMultiTimeframeCharts(req, res) {
   }
   const input = inputResult.data;
 
-  if (!(await requirePremiumSubscription(deviceId, res))) return;
+  if (!(await requirePremiumSubscription(deviceId, res, true))) return;
   const hasOpenRouter = Boolean(process.env.OPENROUTER_API_KEY && !process.env.OPENROUTER_API_KEY.startsWith('replace_'));
   if (!hasOpenRouter) return sendJson(res, 200, aiUnavailableResponse(input, 'Chart AI is not configured on the server. Set OPENROUTER_API_KEY.'));
 
@@ -3933,6 +3970,11 @@ async function getEntitlement(req, res) {
   } catch (error) { return sendJson(res, 504, { error: error.name === 'AbortError' ? 'RevenueCat lookup timed out.' : 'RevenueCat lookup failed.' }); }
 }
 
+function isDevelopmentAnalysisPremiumBypassEnabled() {
+  return process.env.FXSNAP_DEV_ANALYSIS_PREMIUM_BYPASS === 'true'
+    && process.env.NODE_ENV === 'development';
+}
+
 async function getRevenueCatPremiumStatus(deviceId) {
   const secret = process.env.REVENUECAT_SECRET_API_KEY;
   const entitlementIds = getRevenueCatEntitlementCandidates();
@@ -3952,7 +3994,8 @@ async function getRevenueCatPremiumStatus(deviceId) {
   }
 }
 
-async function requirePremiumSubscription(deviceId, res) {
+async function requirePremiumSubscription(deviceId, res, allowDevelopmentAnalysisBypass = false) {
+  if (allowDevelopmentAnalysisBypass && isDevelopmentAnalysisPremiumBypassEnabled()) return true;
   const active = await getRevenueCatPremiumStatus(deviceId);
   if (active === true) return true;
   if (active === false) {
@@ -3973,6 +4016,7 @@ async function requirePremiumSubscription(deviceId, res) {
 
 async function getAnalysisAccess(req, res) {
   const deviceId = requireAuth(req, res); if (!deviceId) return;
+  if (isDevelopmentAnalysisPremiumBypassEnabled()) return sendJson(res, 200, { canAnalyze: true });
   const premium = await getRevenueCatPremiumStatus(deviceId);
   if (premium === null) return sendJson(res, 503, { error: 'Unable to verify your subscription.' });
   return sendJson(res, 200, { canAnalyze: premium });
@@ -4351,3 +4395,4 @@ module.exports.recoverCandidateLevels = recoverCandidateLevels;
 module.exports.CandidateLevelFollowupSchema = CandidateLevelFollowupSchema;
 module.exports.summarizeAnalysisPayload = summarizeAnalysisPayload;
 module.exports.sanitizeDiagnosticText = sanitizeDiagnosticText;
+module.exports.isDevelopmentAnalysisPremiumBypassEnabled = isDevelopmentAnalysisPremiumBypassEnabled;

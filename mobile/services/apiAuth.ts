@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-export const API_BASE_URL = 'https://fxsnap.vercel.app';
+export const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL?.trim() || 'https://fxsnap.vercel.app';
 
 export function resolveApiBaseUrl(): string {
   return API_BASE_URL;
