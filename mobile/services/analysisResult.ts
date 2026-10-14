@@ -32,9 +32,59 @@ function getRiskRewardRatio(value: unknown): number | null {
   return Number.isFinite(number) && number > 0 ? number : null;
 }
 
+function parsePriceBounds(value: unknown): { low: number; high: number } | null {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) && value > 0 ? { low: value, high: value } : null;
+  }
+  if (typeof value !== 'string' || isUnavailableAnalysisValue(value)) return null;
+  const price = String.raw`(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?`;
+  const match = value.trim().match(new RegExp(`^(${price})(?:\\s*(?:-|–|—|to)\\s*(${price}))?$`, 'i'));
+  if (!match) return null;
+  const first = Number(match[1].replace(/,/g, ''));
+  const second = match[2] ? Number(match[2].replace(/,/g, '')) : first;
+  if (!Number.isFinite(first) || !Number.isFinite(second) || first <= 0 || second <= 0) return null;
+  return { low: Math.min(first, second), high: Math.max(first, second) };
+}
+
+export function calculateRiskRewardFromLevels(
+  entry: unknown,
+  stopLoss: unknown,
+  takeProfit: unknown,
+  direction: unknown,
+): number | null {
+  const entryBounds = parsePriceBounds(entry);
+  const stopBounds = parsePriceBounds(stopLoss);
+  const targetBounds = parsePriceBounds(takeProfit);
+  if (!entryBounds || !stopBounds || !targetBounds) return null;
+
+  const normalizedDirection = typeof direction === 'string' ? direction.trim().toLowerCase() : '';
+  const risk = normalizedDirection === 'buy'
+    ? entryBounds.high - stopBounds.low
+    : normalizedDirection === 'sell'
+      ? stopBounds.high - entryBounds.low
+      : 0;
+  const reward = normalizedDirection === 'buy'
+    ? targetBounds.low - entryBounds.high
+    : normalizedDirection === 'sell'
+      ? entryBounds.low - targetBounds.high
+      : 0;
+  const levelsAreConsistent = normalizedDirection === 'buy'
+    ? stopBounds.high < entryBounds.low && targetBounds.low > entryBounds.high
+    : normalizedDirection === 'sell'
+      ? stopBounds.low > entryBounds.high && targetBounds.high < entryBounds.low
+      : false;
+  return levelsAreConsistent && risk > 0 && reward > 0 ? reward / risk : null;
+}
+
 export function hasValidatedTradeSetup(analysis: Pick<AnalysisResult, 'tradeSetup' | 'takeProfitLevels'>): boolean {
   const target = (analysis.takeProfitLevels ?? []).find(isValidPrice) ?? analysis.tradeSetup?.takeProfit;
-  const riskReward = getRiskRewardRatio(analysis.tradeSetup?.riskReward);
+  const riskReward = getRiskRewardRatio(analysis.tradeSetup?.riskReward)
+    ?? calculateRiskRewardFromLevels(
+      analysis.tradeSetup?.entryZone,
+      analysis.tradeSetup?.stopLoss,
+      target,
+      analysis.tradeSetup?.type,
+    );
   return isValidPrice(analysis.tradeSetup?.entryZone)
     && isValidPrice(analysis.tradeSetup?.stopLoss)
     && isValidPrice(target)
@@ -58,7 +108,13 @@ export function getMarketDevelopmentPlan(
   if (isConditionalCandidate) {
     const direction = analysis.tradeSetup!.type.toUpperCase();
     const target = (analysis.takeProfitLevels ?? []).find(isValidPrice) ?? analysis.tradeSetup!.takeProfit;
-    const ratio = getRiskRewardRatio(analysis.tradeSetup!.riskReward);
+    const ratio = getRiskRewardRatio(analysis.tradeSetup!.riskReward)
+      ?? calculateRiskRewardFromLevels(
+        analysis.tradeSetup!.entryZone,
+        analysis.tradeSetup!.stopLoss,
+        target,
+        analysis.tradeSetup!.type,
+      );
     const hasCompleteCandidate = isValidPrice(analysis.tradeSetup!.entryZone)
       && isValidPrice(analysis.tradeSetup!.stopLoss)
       && isValidPrice(target)
@@ -153,13 +209,14 @@ export function getTradeReadinessLabel(
   const hasCompleteSetup = isValidPrice(entry)
     && isValidPrice(stopLoss)
     && isValidPrice(takeProfit)
-    && getRiskRewardRatio(riskReward) != null;
+    && (getRiskRewardRatio(riskReward) ?? calculateRiskRewardFromLevels(entry, stopLoss, takeProfit, normalizedDirection)) != null;
   if (normalizedDirection !== 'BUY' && normalizedDirection !== 'SELL') {
     return 'WAIT FOR CONFIRMATION';
   }
   if (tradeStatus === 'actionable' && hasCompleteSetup) return normalizedDirection;
+  if (hasCompleteSetup) return `${normalizedDirection} SETUP`;
   if (tradeStatus && tradeStatus.startsWith('waiting_')) {
-    return hasCompleteSetup ? `${normalizedDirection} SETUP` : `${normalizedDirection} BIAS`;
+    return `${normalizedDirection} BIAS`;
   }
   if (tradeStatus === 'no_setup') return `${normalizedDirection} BIAS`;
   return 'WAIT FOR CONFIRMATION';
