@@ -44,7 +44,7 @@ import { canViewFullAnalysis } from '@/services/featureAccess';
 import { getInstrument } from '@/services/instruments';
 import { shareAnalysisCardOnWeb } from '@/services/shareAnalysisCard';
 import { resolveAnalysisDirection } from '@/services/analysisDirection';
-import { calculateRiskRewardFromLevels, formatDevelopingNote, formatRiskReward, formatTradeReadiness, getDirectionalCallLabel, hasValidatedTradeSetup, isUnavailableAnalysisValue } from '@/services/analysisResult';
+import { formatDevelopingNote, formatRiskReward, formatTradeReadiness, getDirectionalCallLabel, hasValidatedTradeSetup, isUnavailableAnalysisValue } from '@/services/analysisResult';
 import { formatInstrumentPriceText } from '@/services/priceFormatting';
 
 type ResultTab = 'analysis' | 'insights';
@@ -272,29 +272,17 @@ export default function AnalysisResultScreen() {
   const stopLevel = formatInstrumentPriceText(firstAvailableLevel(currentAnalysis?.sl, currentAnalysis?.tradeSetup?.stopLoss), pair);
   const tp1Level = formatInstrumentPriceText(usableTargetLevels[0], pair);
   const tp2Level = formatInstrumentPriceText(usableTargetLevels[1], pair);
-  const calculatedRiskReward = calculateRiskRewardFromLevels(
-    firstAvailableLevel(currentAnalysis?.entry, currentAnalysis?.tradeSetup?.entryZone),
-    firstAvailableLevel(currentAnalysis?.sl, currentAnalysis?.tradeSetup?.stopLoss),
-    usableTargetLevels[0] ?? currentAnalysis?.tradeSetup?.takeProfit,
-    currentAnalysis?.tradeSetup?.type,
-  );
-  const riskRewardValue = isUnavailableAnalysisValue(currentAnalysis?.tradeSetup?.riskReward)
-    ? calculatedRiskReward
-    : currentAnalysis?.tradeSetup?.riskReward;
-  const analysisWithCalculatedRiskReward = currentAnalysis?.tradeSetup
-    ? { ...currentAnalysis, tradeSetup: { ...currentAnalysis.tradeSetup, riskReward: riskRewardValue ?? '—' } }
-    : currentAnalysis;
-  const shareAnalysis = analysisWithCalculatedRiskReward && !hasFullAnalysisAccess ? {
-    ...analysisWithCalculatedRiskReward,
+  const shareAnalysis = currentAnalysis && !hasFullAnalysisAccess ? {
+    ...currentAnalysis,
     entry: entryLevel,
     tp: tp1Level,
     takeProfitLevels: usableTargetLevels.slice(0, 1),
-    tradeSetup: analysisWithCalculatedRiskReward.tradeSetup
-      ? { ...analysisWithCalculatedRiskReward.tradeSetup, takeProfit: tp1Level, riskReward: '—' }
+    tradeSetup: currentAnalysis.tradeSetup
+      ? { ...currentAnalysis.tradeSetup, takeProfit: tp1Level, riskReward: '—' }
       : undefined,
-  } : analysisWithCalculatedRiskReward;
+  } : currentAnalysis;
   const stopDistance = currentAnalysis?.slPips ?? getPipDistance(entryLevel, stopLevel, pair);
-  const riskReward = formatRiskReward(riskRewardValue);
+  const riskReward = formatRiskReward(currentAnalysis?.tradeSetup?.riskReward);
   const riskRewardText = riskReward === '—'
     ? 'Not calculable from available levels'
     : riskReward.includes(':') ? riskReward : `1:${riskReward}`;

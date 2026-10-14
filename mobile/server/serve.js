@@ -1526,11 +1526,33 @@ function evaluateDecisionEngine(obs) {
   ].some(hasMeaningfulLevel);
   const marketBias = deriveMarketBias(norm);
   const rawDirection = normalizeText(rawTrade.type);
+  const supportsDirection = {
+    buy: /\bbullish\b|higher\s+highs?|higher\s+lows?|\buptrend\b/.test(
+      `${norm.analysis?.trend || ''} ${norm.analysis?.structure_bias || ''} ${norm.analysis?.market_structure || ''} ${norm.analysis?.structure || ''} ${norm.analysis?.sentiment || ''}`.toLowerCase(),
+    ),
+    sell: /\bbearish\b|lower\s+highs?|lower\s+lows?|\bdowntrend\b/.test(
+      `${norm.analysis?.trend || ''} ${norm.analysis?.structure_bias || ''} ${norm.analysis?.market_structure || ''} ${norm.analysis?.structure || ''} ${norm.analysis?.sentiment || ''}`.toLowerCase(),
+    ),
+  };
+  const geometryDirection = marketBias === 'neutral' && hasProposedLevels
+    ? ['buy', 'sell'].filter((direction) => {
+      const calculated = computeRRFromLevels({
+        entry: rawTrade.entry_zone,
+        sl: rawTrade.stop_loss,
+        tp: firstTarget,
+        direction,
+      });
+      return Number.isFinite(calculated.rr) && calculated.rr > 0 && calculated.issues.length === 0
+        && supportsDirection[direction];
+    })
+    : [];
+  const inferredDirectionFromLevels = rawDirection !== 'buy' && rawDirection !== 'sell'
+    && geometryDirection.length === 1;
   const dir = ['buy', 'sell'].includes(rawDirection)
     ? rawDirection
     : hasProposedLevels && ['bullish', 'bearish'].includes(marketBias)
       ? marketBias === 'bullish' ? 'buy' : 'sell'
-      : 'none';
+      : inferredDirectionFromLevels ? geometryDirection[0] : 'none';
   if (dir !== 'none') {
     const entryRange = parsePriceOrRange(rawTrade.entry_zone);
     const slRange = parsePriceOrRange(rawTrade.stop_loss);
@@ -1642,6 +1664,7 @@ function evaluateDecisionEngine(obs) {
     trade_setup,
     candidate: validations.candidate_setup,
     rrIssues,
+    inferredDirectionFromLevels,
     status: clearDirectionalRead ? 'success' : 'no_trade',
   };
 
@@ -1896,6 +1919,21 @@ function applyMentorStrategy(normalized) {
     response.tradeStatus = 'no_setup';
     response.entryReadiness = 0;
     response.setupConfidence = 0;
+  }
+
+  if (evalRes.inferredDirectionFromLevels) {
+    const direction = response.trade_setup.type.toUpperCase();
+    const reason = `The chart structure and complete price levels support a conditional ${direction} setup, but entry confirmation is not established.`;
+    response.status = 'no_trade';
+    response.decision = 'NO_TRADE';
+    response.tradeDecision = 'WAIT';
+    response.tradeStatus = 'waiting_for_confirmation';
+    response.setupStatus = 'DEVELOPING';
+    response.entryReadiness = 0;
+    response.setupConfidence = 0;
+    response.tradeTrigger = `Conditional ${direction} setup. Wait for a chart-supported entry confirmation before considering a trade.`;
+    response.whyNotNow = mergeUniqueStrings([...(response.whyNotNow || []), reason]);
+    response.reasons = mergeUniqueStrings([...(response.reasons || []), reason]);
   }
 
   if (response.status === 'no_trade' && response.reasons.length === 0) {

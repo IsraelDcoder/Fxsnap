@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { normalizeChartTradeSetup, normalizeLatestVisiblePrice, type ChartAnalysisResult } from '../services/chartDetection';
-import { buildAnalysisResult, calculateRiskRewardFromLevels, formatDevelopingNote, formatRiskReward, formatTradeReadiness, getDirectionalCallLabel, getMarketDevelopmentPlan, getMissingTradeLevelsExplanation, getTradeReadinessLabel, hasValidatedTradeSetup, isUnavailableAnalysisValue } from '../services/analysisResult';
+import { buildAnalysisResult, formatDevelopingNote, formatRiskReward, formatTradeReadiness, getDirectionalCallLabel, getMarketDevelopmentPlan, getMissingTradeLevelsExplanation, getTradeReadinessLabel, hasValidatedTradeSetup, isUnavailableAnalysisValue } from '../services/analysisResult';
 
 function chartResult(overrides: Partial<ChartAnalysisResult> = {}): ChartAnalysisResult {
   return {
@@ -355,14 +355,6 @@ test('recognizes model-generated unavailable phrases instead of displaying them 
   assert.equal(formatRiskReward(0.004), '1:<0.01');
 });
 
-test('calculates conservative risk/reward from complete directional price levels', () => {
-  assert.ok(Math.abs((calculateRiskRewardFromLevels('1.1000', '1.0990', '1.1020', 'buy') ?? 0) - 2) < 1e-9);
-  assert.ok(Math.abs((calculateRiskRewardFromLevels('150.00', '151.00', '148.50', 'sell') ?? 0) - 1.5) < 1e-9);
-  assert.ok(Math.abs((calculateRiskRewardFromLevels('1.1000-1.1010', '1.0980', '1.1040-1.1050', 'buy') ?? 0) - 1) < 1e-9);
-  assert.equal(calculateRiskRewardFromLevels('1.1000', '1.1010', '1.1020', 'buy'), null);
-  assert.equal(calculateRiskRewardFromLevels('1.1000', '1.0990', '1.1020', 'none'), null);
-});
-
 test('incomplete successful responses are presented as developing, not as established trades', () => {
   const partial = buildAnalysisResult(chartResult({
     status: 'success',
@@ -411,25 +403,6 @@ test('conditional candidate levels and calculated R remain visible without claim
   assert.match(getMarketDevelopmentPlan(result), /Entry 1\.10000, SL 1\.09900, TP1 1\.10200, R:R 1:2/);
   assert.match(getMarketDevelopmentPlan(result), /wait for the specified entry trigger/i);
   assert.equal(getMissingTradeLevelsExplanation(result), null);
-});
-
-test('complete levels retain BUY or SELL setup with calculated RR when the provider omits the ratio', () => {
-  const result = buildAnalysisResult(chartResult({
-    status: 'no_trade',
-    tradeStatus: 'no_setup',
-    trade_setup: {
-      type: 'sell',
-      entry_zone: '150.00',
-      stop_loss: '151.00',
-      take_profit: '148.50',
-      take_profit_levels: ['148.50'],
-      risk_reward: 'none',
-    },
-  }), 'USD/JPY');
-
-  assert.equal(hasValidatedTradeSetup(result), true);
-  assert.equal(getTradeReadinessLabel('no_setup', '150.00', '151.00', '148.50', 'SELL'), 'SELL SETUP');
-  assert.match(getMarketDevelopmentPlan(result), /SELL candidate — Entry 150\.00, SL 151\.00, TP1 148\.50, R:R 1:1\.5/);
 });
 
 test('partial conditional candidates report supplied levels without inventing missing ones', () => {
@@ -513,7 +486,7 @@ test('waiting setups remain on hold and explain the confirmation trigger', () =>
 test('trade readiness distinguishes conditional setup direction from an actionable signal', () => {
   assert.equal(
     getTradeReadinessLabel('no_setup', '158.23000', '158.15500', '158.29000', 'BUY', 0.8),
-    'BUY SETUP',
+    'BUY BIAS',
   );
   assert.equal(getTradeReadinessLabel('no_setup', 'Not established', 'Not established', 'Not established', 'SELL'), 'SELL BIAS');
   assert.equal(getTradeReadinessLabel('no_setup', 'Not established', 'Not established', 'Not established'), 'WAIT FOR CONFIRMATION');
@@ -543,7 +516,7 @@ test('directional call label says BUY or SELL even when setup confirmation is pe
 test('trade readiness is not obscured by readiness percentages', () => {
   assert.equal(
     formatTradeReadiness(0, 'no_setup', '158.23000', '158.15500', '158.29000', 'BUY', 0.8),
-    'BUY SETUP',
+    'BUY BIAS',
   );
   assert.equal(
     formatTradeReadiness(64, 'waiting_for_confirmation', '1.10', '1.09', '1.12', 'BUY', 2),

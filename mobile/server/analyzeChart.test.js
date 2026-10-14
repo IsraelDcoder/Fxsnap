@@ -2167,6 +2167,54 @@ test('computed RR overrides a mismatched model report without dropping validated
   assert.ok(result.rrIssues.some((issue) => /differs/i.test(issue)));
 });
 
+test('complete level geometry plus matching chart structure returns a conditional directional setup', () => {
+  const buy = applyMentorStrategy({
+    status: 'no_trade',
+    chart: { is_chart: true, candles_visible: true, price_scale_visible: true, has_enough_candles: true },
+    analysis: { trend: 'neutral', market_structure: 'Higher highs and higher lows.', structure: 'Bullish structure.' },
+    zones: {},
+    strategy: {},
+    trade_setup: {
+      type: 'none',
+      entry_zone: '1.1000',
+      stop_loss: '1.0990',
+      take_profit: '1.1020',
+      take_profit_levels: ['1.1020'],
+      risk_reward: null,
+    },
+    confidence: 0,
+    reasons: [],
+  });
+  assert.equal(buy.trade_setup.type, 'buy');
+  assert.ok(Math.abs(buy.trade_setup.risk_reward - 2) < 1e-9);
+  assert.equal(buy.status, 'no_trade');
+  assert.equal(buy.tradeStatus, 'waiting_for_confirmation');
+  assert.equal(buy.tradeDecision, 'WAIT');
+  assert.match(buy.tradeTrigger, /Conditional BUY setup/);
+
+  const sell = applyMentorStrategy({
+    status: 'no_trade',
+    chart: { is_chart: true, candles_visible: true, price_scale_visible: true, has_enough_candles: true },
+    analysis: { trend: 'neutral', market_structure: 'Lower highs and lower lows.', structure: 'Bearish structure.' },
+    zones: {},
+    strategy: {},
+    trade_setup: {
+      type: 'none',
+      entry_zone: '150.00',
+      stop_loss: '151.00',
+      take_profit: '148.50',
+      take_profit_levels: ['148.50'],
+      risk_reward: null,
+    },
+    confidence: 0,
+    reasons: [],
+  });
+  assert.equal(sell.trade_setup.type, 'sell');
+  assert.ok(Math.abs(sell.trade_setup.risk_reward - 1.5) < 1e-9);
+  assert.equal(sell.tradeStatus, 'waiting_for_confirmation');
+  assert.equal(sell.tradeDecision, 'WAIT');
+});
+
 test('a low calculated R:R does not block an otherwise valid trade setup', () => {
   const normalized = {
     status: 'success',
