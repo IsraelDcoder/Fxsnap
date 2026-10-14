@@ -34,6 +34,8 @@ test('legacy signed sessions remain valid after removing the free-analysis ident
 test('all app API URL resolution targets the production backend', () => {
   assert.equal(API_BASE_URL, 'https://fxsnap.vercel.app');
   assert.equal(resolveApiBaseUrl(), 'https://fxsnap.vercel.app');
+  assert.equal(resolveApiBaseUrl('http://localhost:3000', false), 'https://fxsnap.vercel.app');
+  assert.equal(resolveApiBaseUrl('http://localhost:3000', true), 'http://localhost:3000');
 });
 
 test('analysis access accepts subscription status and rejects incomplete responses', () => {

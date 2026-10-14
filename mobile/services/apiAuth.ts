@@ -1,16 +1,23 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-export const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL?.trim() || 'https://fxsnap.vercel.app';
+const PRODUCTION_API_BASE_URL = 'https://fxsnap.vercel.app';
 
-export function resolveApiBaseUrl(): string {
-  return API_BASE_URL;
+export function resolveApiBaseUrl(
+  configuredApiBaseUrl = process.env.EXPO_PUBLIC_API_BASE_URL,
+  isDevelopmentBuild = typeof __DEV__ !== 'undefined' && __DEV__,
+): string {
+  return isDevelopmentBuild && configuredApiBaseUrl?.trim()
+    ? configuredApiBaseUrl.trim()
+    : PRODUCTION_API_BASE_URL;
 }
 
+export const API_BASE_URL = resolveApiBaseUrl();
 const API_URL = API_BASE_URL;
 const DEVICE_ID_KEY = 'fxsnap:deviceId';
 const SESSION_TOKEN_KEY = 'fxsnap:sessionToken';
 const SESSION_TOKEN_VERSION_KEY = 'fxsnap:sessionTokenVersion';
 const SESSION_TOKEN_VERSION = '4';
+const SESSION_API_URL_KEY = 'fxsnap:sessionApiUrl';
 const LEGACY_FREE_ANALYSIS_ID_KEY = 'fxsnap:freeAnalysisId';
 let legacyFreeAnalysisIdCleanup: Promise<void> | null = null;
 
@@ -36,12 +43,13 @@ async function clearLegacyFreeAnalysisId() {
 export async function getApiHeaders(): Promise<Record<string, string>> {
   await clearLegacyFreeAnalysisId();
   const deviceId = await getDeviceId();
-  const [storedToken, tokenVersion] = await Promise.all([
+  const [storedToken, tokenVersion, storedApiUrl] = await Promise.all([
     AsyncStorage.getItem(SESSION_TOKEN_KEY),
     AsyncStorage.getItem(SESSION_TOKEN_VERSION_KEY),
+    AsyncStorage.getItem(SESSION_API_URL_KEY),
   ]);
   let token = storedToken;
-  if (!token || tokenVersion !== SESSION_TOKEN_VERSION) {
+  if (!token || tokenVersion !== SESSION_TOKEN_VERSION || storedApiUrl !== API_URL) {
     const response = await fetch(`${API_URL}/api/session`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ deviceId }) });
     if (!response.ok) throw new Error('Unable to create an API session.');
     const payload = await response.json();
@@ -51,6 +59,7 @@ export async function getApiHeaders(): Promise<Record<string, string>> {
     await AsyncStorage.multiSet([
       [SESSION_TOKEN_KEY, sessionToken],
       [SESSION_TOKEN_VERSION_KEY, SESSION_TOKEN_VERSION],
+      [SESSION_API_URL_KEY, API_URL],
     ]);
   }
   return { 'content-type': 'application/json', authorization: `Bearer ${token}` };
