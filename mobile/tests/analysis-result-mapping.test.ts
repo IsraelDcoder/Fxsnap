@@ -350,6 +350,7 @@ test('recognizes model-generated unavailable phrases instead of displaying them 
   assert.equal(formatRiskReward('RR not calculable'), '—');
   assert.equal(formatRiskReward('1:2'), '1:2');
   assert.equal(formatRiskReward(0.9393939393939916), '1:0.94');
+  assert.equal(formatRiskReward(0.08000000000000303), '1:0.08');
   assert.equal(formatRiskReward('1:0.9393939393939916'), '1:0.94');
   assert.equal(formatRiskReward(0.004), '1:<0.01');
 });

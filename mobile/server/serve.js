@@ -2840,9 +2840,15 @@ function logProviderResponse(provider, model, details = {}) {
   console.log(`[Chart AI] ${provider} model ${model} status=${status}${error}${responseShape}`);
 }
 
-async function callVisionModel(messages, timeoutMs = 30000) {
+async function callVisionModel(messages, timeoutMs = 30000, retryWithoutJsonMode = false) {
   const baseUrl = (process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/$/, '');
   const model = process.env.OPENROUTER_VISION_MODEL || 'openai/gpt-4o-mini';
+  const requestBody = {
+    model,
+    temperature: 0.2,
+    messages,
+  };
+  if (retryWithoutJsonMode) requestBody.response_format = { type: 'json_object' };
   const response = await fetchWithTimeout(`${baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
@@ -2851,12 +2857,7 @@ async function callVisionModel(messages, timeoutMs = 30000) {
       'HTTP-Referer': process.env.OPENROUTER_SITE_URL || 'https://fxsnap.vercel.app',
       'X-Title': process.env.OPENROUTER_APP_NAME || 'FXSnap',
     },
-    body: JSON.stringify({
-      model,
-      temperature: 0.2,
-      messages,
-      response_format: { type: 'json_object' },
-    }),
+    body: JSON.stringify(requestBody),
   }, timeoutMs);
 
   const rawText = await response.text();
@@ -2880,6 +2881,12 @@ async function callVisionModel(messages, timeoutMs = 30000) {
   });
 
   if (!response.ok) {
+    if (retryWithoutJsonMode && response.status === 400) {
+      console.warn('[Chart AI] JSON-mode request was rejected; retrying once without response_format.', {
+        error: sanitizeDiagnosticText(payload?.error?.message || 'OpenRouter vision failed'),
+      });
+      return callVisionModel(messages, timeoutMs, false);
+    }
     throw new Error(payload?.error?.message || 'Chart AI request failed.');
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -3792,6 +3799,7 @@ async function analyzeChart(req, res) {
       const recoveredResult = await recoverCandidateLevels(finalResult, () => callVisionModel(
         buildCandidateLevelFollowupMessages(imageBase64, mime, input.pair || 'unknown', finalResult),
         30000,
+        true,
       ));
       Object.assign(finalResult, recoveredResult);
       finalResult = await retryPriceConsistencyOnce(
@@ -3890,6 +3898,7 @@ async function analyzeMultiTimeframeCharts(req, res) {
       finalResult = await recoverCandidateLevels(finalResult, () => callVisionModel(
         buildCandidateLevelFollowupMessages('', '', input.pair, finalResult, input.charts),
         30000,
+        true,
       ));
     }
     finalResult = await retryPriceConsistencyOnce(

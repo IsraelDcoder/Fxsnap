@@ -737,12 +737,12 @@ export default function AnalysisResultScreen() {
               {hasDirectionalBiasOnly ? <Text style={[styles.bodyMuted, { color: colors.textSecondary }]}>{`Directional call: ${directionalCallLabel}. The chart supports this direction, but entry, stop-loss, and take-profit levels are not validated. Do not enter until a valid setup and trigger are confirmed.`}</Text> : null}
               {currentPrice != null ? <View style={styles.confidenceLine}><Text style={[styles.bodyMuted, { color: colors.textSecondary }]}>Latest visible price (screenshot)</Text><Text style={[styles.confidenceText, { color: colors.text }]}>{marketEntryText}</Text></View> : null}
             </Animated.View>
-            {hasCompleteDirectionalSetup ? (
+            {hasDirectionalCandidate ? (
               <View style={[styles.levelsCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
-                <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>{hasDirectionalCandidate && !isValidatedActionable ? 'CONDITIONAL LEVELS' : 'TRADE LEVELS'}</Text>
-                <TradeLevelRow label="Entry" value={entryLevel} /><View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
-                <TradeLevelRow label="Stop Loss" value={stopLevel} color={colors.sell} /><View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
-                <TradeLevelRow label="Take Profit 1" value={tp1Level} color={colors.buy} /><View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
+                <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>{isValidatedActionable ? 'TRADE LEVELS' : 'CONDITIONAL LEVELS'}</Text>
+                <TradeLevelRow label="Entry" value={entryLevel === '—' ? 'Not established' : entryLevel} /><View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
+                <TradeLevelRow label="Stop Loss" value={stopLevel === '—' ? 'Not established' : stopLevel} color={colors.sell} /><View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
+                <TradeLevelRow label="Take Profit 1" value={tp1Level === '—' ? 'Not established' : tp1Level} color={colors.buy} /><View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
                 <TradeLevelRow label="Take Profit 2" value={usableTargetLevels.length > 1 ? (hasFullAnalysisAccess ? tp2Level : '••••••') : 'Open'} color={colors.buy} locked={!hasFullAnalysisAccess && usableTargetLevels.length > 1} onPress={() => openLockedContent('tp2')} /><View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
                 <TradeLevelRow label="Risk : Reward" value={hasFullAnalysisAccess ? riskRewardText : '••••'} color={colors.buy} locked={!hasFullAnalysisAccess} onPress={() => openLockedContent('risk-reward')} />
               </View>

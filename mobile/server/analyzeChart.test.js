@@ -1086,6 +1086,39 @@ test('vision provider failures and malformed JSON remain distinct errors', async
   }
 });
 
+test('candidate-level vision request retries a provider 400 without forced JSON mode', async () => {
+  const previousFetch = global.fetch;
+  const requests = [];
+  global.fetch = async (_url, options) => {
+    requests.push(JSON.parse(options.body));
+    if (requests.length === 1) {
+      return {
+        ok: false,
+        status: 400,
+        text: async () => JSON.stringify({ error: { message: 'Provider returned error' } }),
+      };
+    }
+    return {
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({
+        choices: [{ finish_reason: 'stop', message: { content: '{"status":"reviewed"}' } }],
+      }),
+    };
+  };
+  try {
+    const result = await callVisionModel([{ role: 'user', content: 'Review chart levels.' }], 1000, true);
+    assert.equal(result.status, 'reviewed');
+    assert.deepEqual(requests.map((request) => request.response_format), [
+      { type: 'json_object' },
+      undefined,
+    ]);
+    assert.deepEqual(requests[0].messages, requests[1].messages);
+  } finally {
+    global.fetch = previousFetch;
+  }
+});
+
 function twoSidedCandidate(direction, overrides = {}) {
   const buy = direction === 'buy';
   return {
