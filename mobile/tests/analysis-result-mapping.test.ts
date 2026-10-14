@@ -493,6 +493,8 @@ test('trade readiness distinguishes conditional setup direction from an actionab
   assert.equal(getTradeReadinessLabel('actionable', '1.10', '1.09', '1.12'), 'WAIT FOR CONFIRMATION');
   assert.equal(getTradeReadinessLabel('waiting_for_confirmation', '1.10', '1.09', '1.12', 'BUY', 2), 'BUY SETUP');
   assert.equal(getTradeReadinessLabel('waiting_for_confirmation', '1.10', 'Not established', '1.12', 'SELL', 2), 'SELL BIAS');
+  assert.equal(getTradeReadinessLabel('waiting_for_pullback', '1.10', '1.09', '1.12', 'SELL', 2), 'SELL SETUP');
+  assert.equal(getTradeReadinessLabel('waiting_for_breakout', '1.10', 'Not established', '1.12', 'BUY', 2), 'BUY BIAS');
 });
 
 test('trade readiness is not obscured by readiness percentages', () => {
@@ -503,6 +505,10 @@ test('trade readiness is not obscured by readiness percentages', () => {
   assert.equal(
     formatTradeReadiness(64, 'waiting_for_confirmation', '1.10', '1.09', '1.12', 'BUY', 2),
     'BUY SETUP',
+  );
+  assert.equal(
+    formatTradeReadiness(64, 'waiting_for_pullback', '1.10', '1.09', '1.12', 'SELL', 2),
+    'SELL SETUP',
   );
   assert.equal(
     formatTradeReadiness(100, 'actionable', '1.10', '1.09', '1.12', 'SELL', 2),

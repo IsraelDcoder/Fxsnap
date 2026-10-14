@@ -158,7 +158,7 @@ export function getTradeReadinessLabel(
     return 'WAIT FOR CONFIRMATION';
   }
   if (tradeStatus === 'actionable' && hasCompleteSetup) return normalizedDirection;
-  if (tradeStatus === 'waiting_for_confirmation') {
+  if (tradeStatus && tradeStatus.startsWith('waiting_')) {
     return hasCompleteSetup ? `${normalizedDirection} SETUP` : `${normalizedDirection} BIAS`;
   }
   return 'WAIT FOR CONFIRMATION';
