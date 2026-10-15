@@ -13,11 +13,13 @@ import {
 import { AnimatedTouchableOpacity as TouchableOpacity } from '@/components/AnimatedTouchableOpacity';
 import { Feather } from '@expo/vector-icons';
 import { router, useFocusEffect } from 'expo-router';
+import RevenueCatUI from 'react-native-purchases-ui';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useApp } from '@/context/AppContext';
 import { useColors } from '@/hooks/useColors';
 import { getSubscriptionDetails, type SubscriptionDetails } from '@/services/billing';
 import { API_BASE_URL } from '@/services/apiAuth';
+import { trackEvent } from '@/services/telemetry';
 import {
   deleteFxsnapAccount,
   getAuthenticatedAccount,
@@ -270,15 +272,33 @@ export default function SettingsScreen() {
       Alert.alert('Manage subscription', 'Subscription management is available in the app store where you purchased FXSnap Premium.');
       return;
     }
-    const subscriptionManagerUrl = subscriptionDetails?.managementUrl
-      || process.env.EXPO_PUBLIC_SUBSCRIPTION_URL
-      || (Platform.OS === 'ios'
-        ? 'https://apps.apple.com/account/subscriptions'
-        : 'https://play.google.com/store/account/subscriptions');
+    setBillingBusy(true);
+    let customerCenterOpened = false;
     try {
-      await Linking.openURL(subscriptionManagerUrl);
-    } catch {
-      Alert.alert('Unable to open subscriptions', 'Use your app store account to manage your subscription.');
+      await RevenueCatUI.presentCustomerCenter({
+        callbacks: {
+          onFeedbackSurveyCompleted: ({ feedbackSurveyOptionId }) => {
+            trackEvent('subscription_feedback_survey_completed', { feedbackSurveyOptionId });
+          },
+        },
+      });
+      customerCenterOpened = true;
+    } catch (error) {
+      console.error('[Settings] Unable to open RevenueCat Customer Center.', error);
+      Alert.alert(
+        'Unable to open subscriptions',
+        error instanceof Error ? error.message : 'Please try again or manage your subscription in your app store.',
+      );
+    } finally {
+      setBillingBusy(false);
+    }
+    if (customerCenterOpened) {
+      try {
+        setSubscriptionDetails(await getSubscriptionDetails());
+      } catch (error) {
+        console.error('[Settings] Unable to refresh subscription details after Customer Center closed.', error);
+        setSubscriptionError(error instanceof Error ? error.message : 'Unable to refresh subscription status.');
+      }
     }
   };
 
