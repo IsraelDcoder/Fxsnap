@@ -76,3 +76,9 @@ export function communityPushCopy(eventType: CommunityPushEventType, username = 
   }
   return { title: 'New Community post', body: 'A new post is waiting in the FXSnap Community.' };
 }
+
+export function communityPostDestinationParams(postId: string | null) {
+  return postId && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(postId)
+    ? { postId }
+    : {};
+}

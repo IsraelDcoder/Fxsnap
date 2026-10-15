@@ -1,5 +1,6 @@
 import {
   communityPushCopy,
+  communityPostDestinationParams,
   pushTicketRetryError,
   selectCommunityPushRecipients,
   shouldRetrySystemAnnouncementTicket,
@@ -137,6 +138,24 @@ async function getActorUsername(baseUrl: string, serviceKey: string, accountId: 
     `fxsnap_community_profiles?account_id=eq.${encodeURIComponent(accountId)}&select=username&limit=1`,
   );
   return profiles?.[0]?.username || 'Someone';
+}
+
+async function getRootCommunityPostId(baseUrl: string, serviceKey: string, messageId: string) {
+  let currentId = messageId;
+  const visited = new Set<string>();
+  for (let depth = 0; depth < 32 && !visited.has(currentId); depth += 1) {
+    visited.add(currentId);
+    const messages = await supabaseRequest<Array<{ id: string; reply_to_id: string | null }>>(
+      baseUrl,
+      serviceKey,
+      `fxsnap_community_messages?select=id,reply_to_id&id=eq.${encodeURIComponent(currentId)}&limit=1`,
+    );
+    const message = messages?.[0];
+    if (!message) return null;
+    if (!message.reply_to_id) return message.id;
+    currentId = message.reply_to_id;
+  }
+  return null;
 }
 
 async function removeDevice(baseUrl: string, serviceKey: string, deviceId: string) {
@@ -511,13 +530,21 @@ denoRuntime.serve(async (request) => {
           ? 'Someone'
           : await getActorUsername(baseUrl, serviceKey, event.actor_account_id);
         const activity = communityPushCopy(event.event_type, actorUsername);
+        const postId = event.event_type === 'post'
+          ? event.object_id
+          : await getRootCommunityPostId(baseUrl, serviceKey, event.object_id);
         const recipients = selectCommunityPushRecipients(devices, event)
           .map((device) => ({
             device,
             message: {
               to: device.expo_token,
               ...activity,
-              data: { type: 'community_activity', route: '/community', eventType: event.event_type },
+              data: {
+                type: 'community_activity',
+                route: '/community',
+                eventType: event.event_type,
+                destinationParams: communityPostDestinationParams(postId),
+              },
               channelId: 'fxsnap-community',
               sound: 'default',
               priority: 'default',

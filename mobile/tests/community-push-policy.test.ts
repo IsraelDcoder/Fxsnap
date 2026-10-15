@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   communityPushCopy,
+  communityPostDestinationParams,
   pushTicketRetryError,
   selectCommunityPushRecipients,
   shouldRetrySystemAnnouncementTicket,
@@ -51,8 +52,14 @@ test('new-post pushes retain community fan-out without notifying the author', ()
     actor_account_id: 'author',
     recipient_account_id: null,
   });
-
   assert.deepEqual(recipients.map((device) => device.device_id), ['replier-phone', 'other-phone']);
+});
+
+test('community push destinations include only a valid root post ID', () => {
+  const postId = '00000000-0000-4000-8000-000000000101';
+  assert.deepEqual(communityPostDestinationParams(postId), { postId });
+  assert.deepEqual(communityPostDestinationParams(null), {});
+  assert.deepEqual(communityPostDestinationParams('not-a-post-id'), {});
 });
 
 test('interaction events without a recipient do not become community-wide pushes', () => {

@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
+import React from 'react';
+import { Platform, StyleSheet, Text, View } from 'react-native';
 import { AnimatedTouchableOpacity as TouchableOpacity } from '@/components/AnimatedTouchableOpacity';
 import { AmbientBackdrop } from '@/components/AmbientBackdrop';
 import Animated, { FadeInDown, useReducedMotion } from 'react-native-reanimated';
@@ -7,143 +7,56 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useColors } from '@/hooks/useColors';
-import { DefaultNewsProvider, type UpcomingEvent } from '@/services/news';
-
-const provider = new DefaultNewsProvider();
-
-function dayLabel(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return 'Date unavailable';
-  const today = new Date();
-  const tomorrow = new Date();
-  tomorrow.setDate(today.getDate() + 1);
-  if (date.toDateString() === today.toDateString()) return 'Today';
-  if (date.toDateString() === tomorrow.toDateString()) return 'Tomorrow';
-  return new Intl.DateTimeFormat(undefined, { weekday: 'long', day: 'numeric', month: 'long' }).format(date);
-}
-
-function timeLabel(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return 'Time unavailable';
-  return new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', timeZoneName: 'short' }).format(date);
-}
 
 export default function EconomicCalendarScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const reduceMotion = useReducedMotion();
-  const [events, setEvents] = useState<UpcomingEvent[]>([]);
-  const [live, setLive] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
-  const [refreshToken, setRefreshToken] = useState(0);
-
-  useEffect(() => {
-    let active = true;
-    const refresh = async () => {
-      setRefreshing(true);
-      const result = await provider.getEconomicCalendar();
-      if (!active) return;
-      const sorted = [...result.events].filter((event) => Number.isFinite(Date.parse(event.date))).sort((a, b) => Date.parse(a.date) - Date.parse(b.date));
-      setEvents(sorted);
-      setLive(result.live);
-      setUpdatedAt(new Date());
-      setLoading(false);
-      setRefreshing(false);
-    };
-    void refresh();
-    const timer = setInterval(() => void refresh(), 60000);
-    return () => {
-      active = false;
-      clearInterval(timer);
-    };
-  }, [refreshToken]);
-
-  const groupedEvents = useMemo(() => {
-    const groups = new Map<string, UpcomingEvent[]>();
-    events.forEach((event) => {
-      const label = dayLabel(event.date);
-      groups.set(label, [...(groups.get(label) || []), event]);
-    });
-    return Array.from(groups.entries());
-  }, [events]);
 
   return (
-    <View style={[styles.screen, { backgroundColor: colors.background, paddingTop: insets.top + 8 }]}>
+    <View style={[styles.screen, { backgroundColor: colors.background }]}>
       <AmbientBackdrop />
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={[styles.headerButton, { backgroundColor: colors.card, borderColor: colors.cardBorder }]} accessibilityLabel="Back">
+      <View style={[styles.header, { paddingTop: insets.top + 14 }]}>
+        <TouchableOpacity
+          onPress={() => router.back()}
+          style={[styles.headerButton, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}
+          accessibilityRole="button"
+          accessibilityLabel="Back"
+        >
           <Feather name="arrow-left" size={20} color={colors.text} />
         </TouchableOpacity>
         <View style={styles.headerCopy}>
           <Text style={[styles.title, { color: colors.text }]}>Economic Calendar</Text>
           <Text style={[styles.subtitle, { color: colors.textSecondary }]}>Upcoming forex market events</Text>
         </View>
-        <TouchableOpacity onPress={() => setRefreshToken((value) => value + 1)} style={[styles.headerButton, { backgroundColor: colors.card, borderColor: colors.cardBorder }]} accessibilityLabel="Refresh calendar">
-          {refreshing ? <ActivityIndicator size="small" color={colors.buy} /> : <Feather name="refresh-cw" size={18} color={colors.buy} />}
-        </TouchableOpacity>
       </View>
 
-      <View style={[styles.feedStatus, { borderColor: colors.cardBorder, backgroundColor: colors.card }]}>
-        <View style={[styles.statusDot, { backgroundColor: live ? colors.buy : colors.textMuted }]} />
-        <Text style={[styles.statusText, { color: colors.textSecondary }]}>
-          {live ? 'Live provider calendar' : 'Live calendar feed unavailable'}
-        </Text>
-        <View style={{ flex: 1 }} />
-        {updatedAt ? <Text style={[styles.updatedText, { color: colors.textMuted }]}>Updated {new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' }).format(updatedAt)}</Text> : null}
+      <View style={styles.content}>
+        <Animated.View
+          entering={reduceMotion ? undefined : FadeInDown.duration(380)}
+          style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}
+        >
+          <View style={[styles.iconWrap, { backgroundColor: `${colors.buy}18` }]}>
+            <Feather name="calendar" size={25} color={colors.buy} />
+          </View>
+          <View style={[styles.badge, { backgroundColor: `${colors.buy}15` }]}>
+            <View style={[styles.badgeDot, { backgroundColor: colors.buy }]} />
+            <Text style={[styles.badgeText, { color: colors.buy }]}>COMING SOON</Text>
+          </View>
+          <Text style={[styles.cardTitle, { color: colors.text }]}>A clearer view of market events</Text>
+          <Text style={[styles.cardBody, { color: colors.textSecondary }]}>
+            We’re working on an economic calendar to help you follow upcoming forex events and plan around market-moving news.
+          </Text>
+          <TouchableOpacity
+            onPress={() => router.replace('/(tabs)/home')}
+            style={[styles.homeButton, { backgroundColor: colors.buy }]}
+            accessibilityRole="button"
+          >
+            <Feather name="home" size={16} color={colors.primaryForeground} />
+            <Text style={[styles.homeButtonText, { color: colors.primaryForeground }]}>Back to Home</Text>
+          </TouchableOpacity>
+        </Animated.View>
       </View>
-
-      <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 24 }]} showsVerticalScrollIndicator={false}>
-        {loading ? (
-          <View style={styles.loadingState}>
-            <ActivityIndicator size="small" color={colors.buy} />
-            <Text style={[styles.emptyText, { color: colors.textSecondary }]}>Loading calendar events</Text>
-          </View>
-        ) : !live ? (
-          <View style={[styles.emptyState, { borderColor: colors.cardBorder, backgroundColor: colors.card }]}>
-            <View style={[styles.emptyIcon, { backgroundColor: colors.surface }]}><Feather name="calendar" size={22} color={colors.textMuted} /></View>
-            <Text style={[styles.emptyTitle, { color: colors.text }]}>Calendar feed not connected</Text>
-            <Text style={[styles.emptyText, { color: colors.textSecondary }]}>Connect a Twelve Data economic calendar key on the FXSnap server to load current event schedules.</Text>
-          </View>
-        ) : groupedEvents.length === 0 ? (
-          <View style={[styles.emptyState, { borderColor: colors.cardBorder, backgroundColor: colors.card }]}>
-            <View style={[styles.emptyIcon, { backgroundColor: colors.surface }]}><Feather name="check-circle" size={22} color={colors.buy} /></View>
-            <Text style={[styles.emptyTitle, { color: colors.text }]}>No upcoming events returned</Text>
-            <Text style={[styles.emptyText, { color: colors.textSecondary }]}>The provider returned no scheduled events for the current calendar window.</Text>
-          </View>
-        ) : (
-          groupedEvents.map(([day, dayEvents]) => (
-            <View key={day} style={styles.dayGroup}>
-              <Text style={[styles.dayTitle, { color: colors.textSecondary }]}>{day}</Text>
-              {dayEvents.map((event, eventIndex) => {
-                const impactColor = event.impact === 'HIGH' ? colors.sell : event.impact === 'MEDIUM' ? colors.buy : colors.textMuted;
-                return (
-                  <Animated.View
-                    key={event.id}
-                    entering={reduceMotion ? undefined : FadeInDown.delay(Math.min(eventIndex * 35, 210)).duration(260)}
-                    style={[styles.eventCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}
-                  >
-                    <View style={[styles.impactRail, { backgroundColor: impactColor }]} />
-                    <View style={styles.eventContent}>
-                      <View style={styles.eventTopline}>
-                        <Text style={[styles.eventTime, { color: colors.buy }]}>{timeLabel(event.date)}</Text>
-                        <View style={[styles.impactBadge, { backgroundColor: `${impactColor}1A` }]}>
-                          <Text style={[styles.impactLabel, { color: impactColor }]}>{event.impact.toLowerCase()} impact</Text>
-                        </View>
-                      </View>
-                      <Text style={[styles.eventTitle, { color: colors.text }]}>{event.title}</Text>
-                      <Text style={[styles.eventMeta, { color: colors.textSecondary }]}>
-                        {[event.currency, event.country].filter(Boolean).join(' · ') || 'Currency not specified'}
-                      </Text>
-                    </View>
-                  </Animated.View>
-                );
-              })}
-            </View>
-          ))
-        )}
-      </ScrollView>
     </View>
   );
 }
@@ -155,25 +68,14 @@ const styles = StyleSheet.create({
   headerCopy: { flex: 1 },
   title: { fontSize: 18, fontFamily: 'Inter_600SemiBold' },
   subtitle: { marginTop: 3, fontSize: 11, fontFamily: 'Inter_400Regular' },
-  feedStatus: { minHeight: 38, marginHorizontal: 18, borderWidth: 1, borderRadius: 11, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 11, gap: 7 },
-  statusDot: { width: 7, height: 7, borderRadius: 4 },
-  statusText: { fontSize: 11, fontFamily: 'Inter_500Medium' },
-  updatedText: { fontSize: 9, fontFamily: 'Inter_400Regular' },
-  content: { paddingHorizontal: 18, paddingTop: 22 },
-  dayGroup: { marginBottom: 22 },
-  dayTitle: { marginBottom: 9, fontSize: 12, fontFamily: 'Inter_600SemiBold' },
-  eventCard: { minHeight: 92, flexDirection: 'row', borderWidth: 1, borderRadius: 15, overflow: 'hidden', marginBottom: 9 },
-  impactRail: { width: 3 },
-  eventContent: { flex: 1, padding: 12 },
-  eventTopline: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
-  eventTime: { fontSize: 11, fontFamily: 'Inter_600SemiBold' },
-  impactBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 7 },
-  impactLabel: { textTransform: 'capitalize', fontSize: 9, fontFamily: 'Inter_600SemiBold' },
-  eventTitle: { marginTop: 8, fontSize: 14, fontFamily: 'Inter_600SemiBold' },
-  eventMeta: { marginTop: 4, fontSize: 10, fontFamily: 'Inter_400Regular' },
-  loadingState: { minHeight: 160, alignItems: 'center', justifyContent: 'center', gap: 10 },
-  emptyState: { minHeight: 215, borderWidth: 1, borderRadius: 17, padding: 22, alignItems: 'center', justifyContent: 'center' },
-  emptyIcon: { width: 48, height: 48, borderRadius: 15, alignItems: 'center', justifyContent: 'center', marginBottom: 13 },
-  emptyTitle: { fontSize: 15, textAlign: 'center', fontFamily: 'Inter_600SemiBold' },
-  emptyText: { marginTop: 7, fontSize: 12, lineHeight: 18, textAlign: 'center', fontFamily: 'Inter_400Regular' },
+  content: { flex: 1, justifyContent: 'center', paddingHorizontal: 18, paddingBottom: Platform.OS === 'web' ? 24 : 12 },
+  card: { alignItems: 'center', borderWidth: 1, borderRadius: 22, paddingHorizontal: 24, paddingVertical: 30 },
+  iconWrap: { width: 62, height: 62, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+  badge: { flexDirection: 'row', alignItems: 'center', gap: 7, marginTop: 19, paddingHorizontal: 11, paddingVertical: 7, borderRadius: 20 },
+  badgeDot: { width: 7, height: 7, borderRadius: 4 },
+  badgeText: { fontSize: 10, letterSpacing: 1, fontFamily: 'Inter_700Bold' },
+  cardTitle: { marginTop: 17, fontSize: 19, textAlign: 'center', fontFamily: 'Inter_700Bold' },
+  cardBody: { maxWidth: 300, marginTop: 9, fontSize: 13, lineHeight: 20, textAlign: 'center', fontFamily: 'Inter_400Regular' },
+  homeButton: { minHeight: 46, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 23, paddingHorizontal: 17, borderRadius: 13 },
+  homeButtonText: { fontSize: 12, fontFamily: 'Inter_600SemiBold' },
 });
