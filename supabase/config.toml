@@ -1,2 +1,2 @@
 [functions.community-push]
-verify_jwt = true
+verify_jwt = false

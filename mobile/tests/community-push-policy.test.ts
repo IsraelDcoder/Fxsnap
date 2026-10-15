@@ -1,0 +1,62 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import {
+  communityPushCopy,
+  selectCommunityPushRecipients,
+  type CommunityPushDevice,
+} from '../../supabase/functions/community-push/policy';
+
+const devices: Array<CommunityPushDevice & { device_id: string }> = [
+  { account_id: 'author', device_id: 'author-phone' },
+  { account_id: 'author', device_id: 'author-tablet' },
+  { account_id: 'replier', device_id: 'replier-phone' },
+  { account_id: 'other', device_id: 'other-phone' },
+];
+
+test('reply pushes go only to the replied-to author and exclude the replier', () => {
+  const recipients = selectCommunityPushRecipients(devices, {
+    event_type: 'reply',
+    actor_account_id: 'replier',
+    recipient_account_id: 'author',
+  });
+
+  assert.deepEqual(recipients.map((device) => device.device_id), ['author-phone', 'author-tablet']);
+  assert.deepEqual(communityPushCopy('reply', 'market_maya'), {
+    title: 'New Community reply',
+    body: 'market_maya replied to your post or reply.',
+  });
+});
+
+test('reaction pushes go only to the reacted-to author', () => {
+  const recipients = selectCommunityPushRecipients(devices, {
+    event_type: 'reaction',
+    actor_account_id: 'replier',
+    recipient_account_id: 'author',
+  });
+
+  assert.deepEqual(recipients.map((device) => device.device_id), ['author-phone', 'author-tablet']);
+  assert.deepEqual(communityPushCopy('reaction', 'market_maya'), {
+    title: 'New Community reaction',
+    body: 'market_maya reacted to your post or reply.',
+  });
+});
+
+test('new-post pushes retain community fan-out without notifying the author', () => {
+  const recipients = selectCommunityPushRecipients(devices, {
+    event_type: 'post',
+    actor_account_id: 'author',
+    recipient_account_id: null,
+  });
+
+  assert.deepEqual(recipients.map((device) => device.device_id), ['replier-phone', 'other-phone']);
+});
+
+test('interaction events without a recipient do not become community-wide pushes', () => {
+  const recipients = selectCommunityPushRecipients(devices, {
+    event_type: 'reply',
+    actor_account_id: 'replier',
+    recipient_account_id: null,
+  });
+
+  assert.deepEqual(recipients, []);
+});

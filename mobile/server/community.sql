@@ -152,7 +152,7 @@ begin
     if found and post_account_id <> p_account_id then
       insert into public.fxsnap_community_view_dedup (message_id, account_id, last_viewed_at)
       values (requested_id, p_account_id, now())
-      on conflict (message_id, account_id) do update
+      on conflict on constraint fxsnap_community_view_dedup_pkey do update
         set last_viewed_at = excluded.last_viewed_at
         where public.fxsnap_community_view_dedup.last_viewed_at <= now() - interval '24 hours';
       get diagnostics inserted_rows = row_count;
@@ -332,6 +332,7 @@ create table if not exists public.fxsnap_community_push_queue (
   event_type text not null check (event_type in ('post', 'reply', 'reaction')),
   object_id uuid not null,
   actor_account_id text not null,
+  recipient_account_id text,
   status text not null default 'pending' check (status in ('pending', 'processing', 'sent', 'failed')),
   attempt_count integer not null default 0 check (attempt_count >= 0),
   next_attempt_at timestamptz not null default now(),
@@ -340,6 +341,22 @@ create table if not exists public.fxsnap_community_push_queue (
   last_error text,
   created_at timestamptz not null default now()
 );
+alter table public.fxsnap_community_push_queue
+  add column if not exists recipient_account_id text;
+update public.fxsnap_community_push_queue queue
+set recipient_account_id = case
+  when queue.event_type = 'reply' then (
+    select parent.account_id
+    from public.fxsnap_community_messages parent
+    where parent.id = object_message.reply_to_id
+  )
+  when queue.event_type = 'reaction' then object_message.account_id
+  else null
+end
+from public.fxsnap_community_messages object_message
+where queue.object_id = object_message.id
+  and queue.event_type in ('reply', 'reaction')
+  and queue.recipient_account_id is null;
 create index if not exists fxsnap_community_push_queue_pending_idx
   on public.fxsnap_community_push_queue (next_attempt_at, created_at)
   where status in ('pending', 'processing');
@@ -347,8 +364,9 @@ alter table public.fxsnap_community_push_queue enable row level security;
 revoke all on table public.fxsnap_community_push_queue from public, anon, authenticated;
 grant all on table public.fxsnap_community_push_queue to service_role;
 
-create or replace function public.fxsnap_community_claim_push_events(p_limit integer default 100, p_object_id uuid default null)
-returns table(id bigint, event_type text, object_id uuid, actor_account_id text, attempt_count integer)
+drop function if exists public.fxsnap_community_claim_push_events(integer, uuid);
+create function public.fxsnap_community_claim_push_events(p_limit integer default 100, p_object_id uuid default null)
+returns table(id bigint, event_type text, object_id uuid, actor_account_id text, recipient_account_id text, attempt_count integer)
 language plpgsql
 security definer
 set search_path = public
@@ -373,7 +391,7 @@ begin
         updated_at = now()
     from available
     where queue.id = available.id
-    returning queue.id, queue.event_type, queue.object_id, queue.actor_account_id, queue.attempt_count;
+    returning queue.id, queue.event_type, queue.object_id, queue.actor_account_id, queue.recipient_account_id, queue.attempt_count;
 end;
 $$;
 revoke all on function public.fxsnap_community_claim_push_events(integer, uuid) from public, anon, authenticated;
@@ -459,6 +477,7 @@ as $$
 declare
   event_kind text;
   parent_account_id text;
+  actor_username text;
   recipient_user_id uuid;
 begin
   if tg_table_name = 'fxsnap_community_messages' then
@@ -466,19 +485,18 @@ begin
       event_kind := case when new.kind = 'announcement' then 'announcement' else 'message' end;
       insert into public.fxsnap_community_events (event_type, object_id)
         values (event_kind, new.id);
-      insert into public.fxsnap_community_push_queue (event_type, object_id, actor_account_id)
-        values (
-          case when new.reply_to_id is null then 'post' else 'reply' end,
-          new.id,
-          new.account_id
-        );
       if new.reply_to_id is not null then
         select account_id into parent_account_id
           from public.fxsnap_community_messages where id = new.reply_to_id;
+        insert into public.fxsnap_community_push_queue (event_type, object_id, actor_account_id, recipient_account_id)
+          values ('reply', new.id, new.account_id, parent_account_id);
         if parent_account_id is not null and parent_account_id <> new.account_id then
           insert into public.fxsnap_community_notifications (recipient_account_id, kind, message, object_id)
-            values (parent_account_id, 'reply', 'Someone replied to your community message.', new.id);
+            values (parent_account_id, 'reply', format('%s replied to your Community post or reply.', new.author_username), new.id);
         end if;
+      else
+        insert into public.fxsnap_community_push_queue (event_type, object_id, actor_account_id)
+          values ('post', new.id, new.account_id);
       end if;
     elsif new.removed_at is distinct from old.removed_at and new.removed_at is not null then
       insert into public.fxsnap_community_events (event_type, object_id)
@@ -495,23 +513,32 @@ begin
   elsif tg_table_name = 'fxsnap_community_reactions' and tg_op = 'INSERT' then
     insert into public.fxsnap_community_events (event_type, object_id)
       values ('reaction', new.message_id);
-    insert into public.fxsnap_community_push_queue (event_type, object_id, actor_account_id)
-      values ('reaction', new.message_id, new.account_id);
     select account_id into parent_account_id
       from public.fxsnap_community_messages where id = new.message_id;
+    select username into actor_username
+      from public.fxsnap_community_profiles where account_id = new.account_id;
+    insert into public.fxsnap_community_push_queue (event_type, object_id, actor_account_id, recipient_account_id)
+      values ('reaction', new.message_id, new.account_id, parent_account_id);
     if parent_account_id is not null and parent_account_id <> new.account_id then
       insert into public.fxsnap_community_notifications (recipient_account_id, kind, message, object_id)
-        values (parent_account_id, 'reaction', 'Someone reacted to your community post.', new.message_id);
+        values (
+          parent_account_id,
+          'reaction',
+          format('%s reacted to your Community post or reply.', coalesce(actor_username, 'Someone')),
+          new.message_id
+        );
     end if;
   elsif tg_table_name = 'fxsnap_community_reactions' and tg_op = 'DELETE' then
     insert into public.fxsnap_community_events (event_type, object_id)
       values ('reaction', old.message_id);
-  elsif tg_table_name = 'fxsnap_support_messages' and tg_op = 'INSERT' and new.sender_kind = 'admin' then
-    select account_id into parent_account_id
-      from public.fxsnap_support_conversations where id = new.conversation_id;
-    if parent_account_id is not null then
-      insert into public.fxsnap_community_notifications (recipient_account_id, kind, message, object_id)
-        values (parent_account_id, 'support_reply', 'FXSnap Support replied to your private conversation.', new.id);
+  elsif tg_table_name = 'fxsnap_support_messages' and tg_op = 'INSERT' then
+    if new.sender_kind = 'admin' then
+      select account_id into parent_account_id
+        from public.fxsnap_support_conversations where id = new.conversation_id;
+      if parent_account_id is not null then
+        insert into public.fxsnap_community_notifications (recipient_account_id, kind, message, object_id)
+          values (parent_account_id, 'support_reply', 'FXSnap Support replied to your private conversation.', new.id);
+      end if;
     end if;
   elsif tg_table_name = 'fxsnap_community_notifications' and tg_op = 'INSERT' then
     select supabase_user_id into recipient_user_id

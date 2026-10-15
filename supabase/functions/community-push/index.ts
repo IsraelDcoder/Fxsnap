@@ -1,3 +1,5 @@
+import { communityPushCopy, selectCommunityPushRecipients } from './policy.ts';
+
 type PushDevice = {
   device_id: string;
   expo_token: string;
@@ -10,6 +12,8 @@ type CommunityEvent = {
   id: number;
   event_type: 'post' | 'reply' | 'reaction';
   object_id: string;
+  actor_account_id: string;
+  recipient_account_id: string | null;
 };
 
 type ExpoTicket = {
@@ -84,6 +88,15 @@ async function getPushDevices(baseUrl: string, serviceKey: string) {
     entries.push(...(rows || []).filter((entry) => entry.preferences?.community !== false));
     if (!rows || rows.length < 1000) return entries;
   }
+}
+
+async function getActorUsername(baseUrl: string, serviceKey: string, accountId: string) {
+  const profiles = await supabaseRequest<Array<{ username: string }>>(
+    baseUrl,
+    serviceKey,
+    `fxsnap_community_profiles?account_id=eq.${encodeURIComponent(accountId)}&select=username&limit=1`,
+  );
+  return profiles?.[0]?.username || 'Someone';
 }
 
 async function removeDevice(baseUrl: string, serviceKey: string, deviceId: string) {
@@ -235,22 +248,22 @@ Deno.serve(async (request) => {
 
     for (const event of events) {
       try {
-        const activity = event.event_type === 'reply'
-          ? { title: 'New Community reply', body: 'There is a new reply in the FXSnap Community.' }
-          : event.event_type === 'reaction'
-            ? { title: 'New Community reaction', body: 'There is new reaction activity in the FXSnap Community.' }
-            : { title: 'New Community post', body: 'A new post is waiting in the FXSnap Community.' };
-        const recipients = devices.map((device) => ({
-          device,
-          message: {
-            to: device.expo_token,
-            ...activity,
-            data: { type: 'community_activity', route: '/community', eventType: event.event_type },
-            channelId: 'fxsnap-community',
-            sound: 'default',
-            priority: 'default',
-          },
-        }));
+        const actorUsername = event.event_type === 'post'
+          ? 'Someone'
+          : await getActorUsername(baseUrl, serviceKey, event.actor_account_id);
+        const activity = communityPushCopy(event.event_type, actorUsername);
+        const recipients = selectCommunityPushRecipients(devices, event)
+          .map((device) => ({
+            device,
+            message: {
+              to: device.expo_token,
+              ...activity,
+              data: { type: 'community_activity', route: '/community', eventType: event.event_type },
+              channelId: 'fxsnap-community',
+              sound: 'default',
+              priority: 'default',
+            },
+          }));
 
         for (let offset = 0; offset < recipients.length; offset += EXPO_CHUNK_SIZE) {
           const chunk = recipients.slice(offset, offset + EXPO_CHUNK_SIZE);
