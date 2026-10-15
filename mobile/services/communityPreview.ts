@@ -378,6 +378,12 @@ export async function handleCommunityPreviewRequest(path: string, init?: Request
   if (pathname === '/api/community/notifications' && method === 'GET') {
     return response(200, { notifications });
   }
+  if (pathname === '/api/system-announcements' && method === 'GET') {
+    return response(200, { announcements: [] });
+  }
+  if (pathname === '/api/admin/system-announcements/access' && method === 'GET') {
+    return response(200, { allowed: false });
+  }
   const readMatch = pathname.match(/^\/api\/community\/notifications\/([^/]+)\/read$/);
   if (readMatch && method === 'POST') {
     const notification = notifications.find((item) => item.id === decodeURIComponent(readMatch[1]));

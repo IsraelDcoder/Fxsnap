@@ -3,6 +3,7 @@ import test from 'node:test';
 import { formatCompactCommunityCount } from '../services/communityFormatting';
 import {
   applyCommunityReaction,
+  COMMUNITY_VIEW_BATCH_SIZE,
   COMMUNITY_VIEW_DEDUP_WINDOW_MS,
   COMMUNITY_VIEWABILITY_CONFIG,
   getNewVisiblePostIds,
@@ -19,7 +20,8 @@ test('formats compact Community engagement counts', () => {
 });
 
 test('uses a minimum visibility dwell and deduplicates own, repeated, and recent views', () => {
-  assert.equal(COMMUNITY_VIEWABILITY_CONFIG.itemVisiblePercentThreshold, 60);
+  assert.equal(COMMUNITY_VIEW_BATCH_SIZE, 30);
+  assert.equal(COMMUNITY_VIEWABILITY_CONFIG.viewAreaCoveragePercentThreshold, 60);
   assert.equal(COMMUNITY_VIEWABILITY_CONFIG.minimumViewTime, 1000);
   const now = 100_000;
   const alreadySent = new Map([

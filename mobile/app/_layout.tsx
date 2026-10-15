@@ -4,6 +4,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
+import CommunityInteractionPrompt from '@/components/CommunityInteractionPrompt';
 import { AppProvider } from '@/context/AppContext';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
@@ -19,6 +20,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import * as Sentry from '@sentry/react-native';
 import * as Notifications from 'expo-notifications';
 import { registerForegroundNotificationHandler, getNotificationResponseRoute, syncRegisteredPushNotifications } from '@/services/notifications';
+import { markSystemAnnouncementRead } from '@/services/community';
 import { trackEvent } from '@/services/telemetry';
 
 SplashScreen.preventAutoHideAsync();
@@ -57,17 +59,28 @@ function RootLayoutNav({ fontsReady }: { fontsReady: boolean }) {
   useEffect(() => {
     if (Platform.OS === 'web') return;
     const handleResponse = async (response: Notifications.NotificationResponse | null) => {
-      const route = getNotificationResponseRoute(response);
-      if (!response || !route || handledNotificationResponse.current === response.notification.request.identifier) return;
+      const target = getNotificationResponseRoute(response);
+      if (!response || !target || handledNotificationResponse.current === response.notification.request.identifier) return;
       handledNotificationResponse.current = response.notification.request.identifier;
+      const data = response.notification.request.content.data;
+      if (data.type === 'system_announcement' && typeof data.announcementId === 'string') {
+        await markSystemAnnouncementRead(data.announcementId).catch((error: unknown) => {
+          console.error('[Notifications] Could not mark the opened system announcement as read.', error);
+        });
+      }
       const { router } = await import('expo-router');
-      router.push(route);
+      router.push(target);
       await Notifications.clearLastNotificationResponseAsync();
     };
-    const subscription = registerForegroundNotificationHandler((route, identifier) => {
+    const subscription = registerForegroundNotificationHandler((target, identifier, data) => {
       if (handledNotificationResponse.current === identifier) return;
       handledNotificationResponse.current = identifier;
-      void import('expo-router').then(({ router }) => router.push(route));
+      if (data.type === 'system_announcement' && typeof data.announcementId === 'string') {
+        void markSystemAnnouncementRead(data.announcementId).catch((error: unknown) => {
+          console.error('[Notifications] Could not mark the opened system announcement as read.', error);
+        });
+      }
+      void import('expo-router').then(({ router }) => router.push(target));
       void Notifications.clearLastNotificationResponseAsync();
     });
     const openLastNotification = async () => {
@@ -79,33 +92,37 @@ function RootLayoutNav({ fontsReady }: { fontsReady: boolean }) {
   }, []);
 
   return (
-    <Stack screenOptions={{ headerShown: false, animation: 'fade' }}>
-      <Stack.Screen name="index" options={{ headerShown: false }} />
-      <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-      <Stack.Screen name="onboarding" options={{ headerShown: false, animation: 'fade' }} />
-      <Stack.Screen name="analysis" options={{ headerShown: false, animation: 'slide_from_bottom' }} />
-      <Stack.Screen name="analysis-result" options={{ headerShown: false, animation: 'slide_from_right' }} />
-      <Stack.Screen name="strategy" options={{ headerShown: false, animation: 'slide_from_bottom' }} />
-      <Stack.Screen name="daily-brief" options={{ headerShown: false, animation: 'slide_from_right' }} />
-      <Stack.Screen name="economic-calendar" options={{ headerShown: false, animation: 'slide_from_right' }} />
-      <Stack.Screen name="events" options={{ headerShown: false, animation: 'slide_from_right' }} />
-      <Stack.Screen name="settings" options={{ headerShown: false, animation: 'slide_from_right' }} />
-      <Stack.Screen name="auth/callback" options={{ headerShown: false, animation: 'none' }} />
-      <Stack.Screen name="support-chat" options={{ headerShown: false, animation: 'slide_from_right' }} />
-      <Stack.Screen name="community" options={{ headerShown: false, animation: 'slide_from_right' }} />
-      <Stack.Screen name="community-search" options={{ headerShown: false, animation: 'slide_from_right' }} />
-      <Stack.Screen name="community-member" options={{ headerShown: false, animation: 'slide_from_right' }} />
-      <Stack.Screen name="community-notifications" options={{ headerShown: false, animation: 'slide_from_right' }} />
-      <Stack.Screen name="community-support" options={{ headerShown: false, animation: 'slide_from_right' }} />
-      <Stack.Screen name="community-admin" options={{ headerShown: false, animation: 'slide_from_right' }} />
-      <Stack.Screen name="profile" options={{ headerShown: false, animation: 'slide_from_right' }} />
-      <Stack.Screen name="lot-size-calculator" options={{ headerShown: false, animation: 'slide_from_right' }} />
-      <Stack.Screen name="risk-management" options={{ headerShown: false, animation: 'slide_from_right' }} />
-      <Stack.Screen name="saved" options={{ headerShown: false, animation: 'slide_from_right' }} />
-      <Stack.Screen name="saved-briefs" options={{ headerShown: false, animation: 'slide_from_right' }} />
-      <Stack.Screen name="paywall" options={{ headerShown: false, animation: 'slide_from_bottom', presentation: 'modal' }} />
-      <Stack.Screen name="my-strategies" options={{ headerShown: false, animation: 'slide_from_right' }} />
-    </Stack>
+    <>
+      <Stack screenOptions={{ headerShown: false, animation: 'fade' }}>
+        <Stack.Screen name="index" options={{ headerShown: false }} />
+        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+        <Stack.Screen name="onboarding" options={{ headerShown: false, animation: 'fade' }} />
+        <Stack.Screen name="analysis" options={{ headerShown: false, animation: 'slide_from_bottom' }} />
+        <Stack.Screen name="analysis-result" options={{ headerShown: false, animation: 'slide_from_right' }} />
+        <Stack.Screen name="strategy" options={{ headerShown: false, animation: 'slide_from_bottom' }} />
+        <Stack.Screen name="daily-brief" options={{ headerShown: false, animation: 'slide_from_right' }} />
+        <Stack.Screen name="economic-calendar" options={{ headerShown: false, animation: 'slide_from_right' }} />
+        <Stack.Screen name="events" options={{ headerShown: false, animation: 'slide_from_right' }} />
+        <Stack.Screen name="settings" options={{ headerShown: false, animation: 'slide_from_right' }} />
+        <Stack.Screen name="auth/callback" options={{ headerShown: false, animation: 'none' }} />
+        <Stack.Screen name="support-chat" options={{ headerShown: false, animation: 'slide_from_right' }} />
+        <Stack.Screen name="community" options={{ headerShown: false, animation: 'slide_from_right' }} />
+        <Stack.Screen name="community-search" options={{ headerShown: false, animation: 'slide_from_right' }} />
+        <Stack.Screen name="community-member" options={{ headerShown: false, animation: 'slide_from_right' }} />
+        <Stack.Screen name="community-notifications" options={{ headerShown: false, animation: 'slide_from_right' }} />
+        <Stack.Screen name="system-announcement" options={{ headerShown: false, animation: 'slide_from_right' }} />
+        <Stack.Screen name="community-support" options={{ headerShown: false, animation: 'slide_from_right' }} />
+        <Stack.Screen name="community-admin" options={{ headerShown: false, animation: 'slide_from_right' }} />
+        <Stack.Screen name="profile" options={{ headerShown: false, animation: 'slide_from_right' }} />
+        <Stack.Screen name="lot-size-calculator" options={{ headerShown: false, animation: 'slide_from_right' }} />
+        <Stack.Screen name="risk-management" options={{ headerShown: false, animation: 'slide_from_right' }} />
+        <Stack.Screen name="saved" options={{ headerShown: false, animation: 'slide_from_right' }} />
+        <Stack.Screen name="saved-briefs" options={{ headerShown: false, animation: 'slide_from_right' }} />
+        <Stack.Screen name="paywall" options={{ headerShown: false, animation: 'slide_from_bottom', presentation: 'modal' }} />
+        <Stack.Screen name="my-strategies" options={{ headerShown: false, animation: 'slide_from_right' }} />
+      </Stack>
+      <CommunityInteractionPrompt enabled={!isLoading} />
+    </>
   );
 }
 

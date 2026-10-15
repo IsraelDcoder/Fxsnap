@@ -34,6 +34,7 @@ import {
   unregisterPushToken,
   type NotificationPreferences,
 } from '@/services/notifications';
+import { getSystemAnnouncementAdminAccess } from '@/services/community';
 
 type ThemeMode = 'light' | 'dark' | 'system';
 type SettingsIcon = React.ComponentProps<typeof Feather>['name'];
@@ -72,6 +73,7 @@ export default function SettingsScreen() {
   const [accountLoading, setAccountLoading] = useState(Platform.OS !== 'web');
   const [accountBusy, setAccountBusy] = useState(false);
   const [accountError, setAccountError] = useState<string | null>(null);
+  const [systemAnnouncementAdmin, setSystemAnnouncementAdmin] = useState(false);
   const [subscriptionDetails, setSubscriptionDetails] = useState<SubscriptionDetails | null>(null);
   const [subscriptionLoading, setSubscriptionLoading] = useState(true);
   const [subscriptionError, setSubscriptionError] = useState<string | null>(null);
@@ -82,6 +84,7 @@ export default function SettingsScreen() {
     inactivity: true,
     weekly: true,
     community: true,
+    systemAnnouncements: true,
   });
   const [notificationsLoading, setNotificationsLoading] = useState(true);
   const [notificationsBusy, setNotificationsBusy] = useState(false);
@@ -122,6 +125,21 @@ export default function SettingsScreen() {
       });
     return () => { active = false; };
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    if (!account) {
+      setSystemAnnouncementAdmin(false);
+      return () => { active = false; };
+    }
+    void getSystemAnnouncementAdminAccess()
+      .then((access) => { if (active) setSystemAnnouncementAdmin(access.allowed); })
+      .catch((error: unknown) => {
+        console.error('[Settings] Could not check system announcement admin access.', error);
+        if (active) setSystemAnnouncementAdmin(false);
+      });
+    return () => { active = false; };
+  }, [account]);
 
   useFocusEffect(useCallback(() => {
     let active = true;
@@ -514,6 +532,12 @@ export default function SettingsScreen() {
         </SettingsGroup>
 
         <SettingsGroup title="Notifications" colors={colors}>
+          <SettingsRow
+            icon="bell"
+            label="Open notification center"
+            colors={colors}
+            onPress={() => router.push('/community-notifications')}
+          />
           <NotificationToggle
             icon="bell"
             label="Push notifications"
@@ -559,7 +583,16 @@ export default function SettingsScreen() {
             disabled={notificationsLoading || notificationsBusy || !notificationPreferences.enabled}
             colors={colors}
             onValueChange={(community) => void changeNotificationPreferences({ community })}
-            last
+          />
+          <NotificationToggle
+            icon="bell"
+            label="System announcements"
+            description="Important FXSnap product and service updates."
+            value={notificationPreferences.systemAnnouncements}
+            disabled={notificationsLoading || notificationsBusy || !notificationPreferences.enabled}
+            colors={colors}
+            onValueChange={(systemAnnouncements) => void changeNotificationPreferences({ systemAnnouncements })}
+            last={!systemAnnouncementAdmin}
           />
           {notificationsLoading ? (
             <Text style={[styles.inlineMessage, { color: colors.textSecondary }]}>Loading notification preferences…</Text>
@@ -569,6 +602,15 @@ export default function SettingsScreen() {
           ) : null}
           {notificationError ? (
             <Text style={[styles.inlineMessage, { color: colors.sell }]}>{notificationError}</Text>
+          ) : null}
+          {systemAnnouncementAdmin ? (
+            <SettingsRow
+              icon="send"
+              label="System announcement admin"
+              colors={colors}
+              onPress={() => router.push({ pathname: '/community-admin', params: { tab: 'announcements', systemOnly: 'true' } })}
+              last
+            />
           ) : null}
         </SettingsGroup>
 

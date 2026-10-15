@@ -39,6 +39,7 @@ async function registerPushToken(deviceId, payload) {
     inactivity: preferences.inactivity !== false,
     weekly: preferences.weekly !== false,
     community: preferences.community !== false,
+    systemAnnouncements: preferences.systemAnnouncements !== false,
   };
   await supabasePushStore.register(
     deviceId,

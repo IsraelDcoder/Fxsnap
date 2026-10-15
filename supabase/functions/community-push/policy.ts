@@ -10,6 +10,45 @@ export interface CommunityPushDevice {
   account_id: string;
 }
 
+export interface CommunityPushTicket {
+  status?: string;
+  id?: string;
+  message?: string;
+  details?: { error?: string };
+}
+
+export type SystemAnnouncementDestination =
+  | 'home'
+  | 'community'
+  | 'analysis'
+  | 'events'
+  | 'profile'
+  | 'notification_center';
+
+export interface SystemAnnouncementPushPreference {
+  systemAnnouncements?: unknown;
+}
+
+export function systemAnnouncementRoute(destination: string): string | null {
+  const routes: Record<string, string> = {
+    home: '/',
+    community: '/community',
+    analysis: '/analysis',
+    events: '/events',
+    profile: '/profile',
+    notification_center: '/community-notifications',
+  };
+  return routes[destination] || null;
+}
+
+export function systemAnnouncementPushEnabled(preferences: SystemAnnouncementPushPreference | null) {
+  return preferences?.systemAnnouncements !== false;
+}
+
+export function shouldRetrySystemAnnouncementTicket(ticket: CommunityPushTicket) {
+  return ticket.details?.error !== 'DeviceNotRegistered';
+}
+
 export function selectCommunityPushRecipients<T extends CommunityPushDevice>(
   devices: T[],
   event: CommunityPushEvent,
@@ -19,6 +58,13 @@ export function selectCommunityPushRecipients<T extends CommunityPushDevice>(
     if (event.event_type === 'post') return true;
     return event.recipient_account_id !== null && device.account_id === event.recipient_account_id;
   });
+}
+
+export function pushTicketRetryError(ticket: CommunityPushTicket): string | null {
+  if (ticket.status === 'ok' && ticket.id) return null;
+  if (ticket.details?.error === 'DeviceNotRegistered') return null;
+  const code = ticket.details?.error;
+  return `${code ? `${code}: ` : ''}${ticket.message || 'Expo did not accept the push notification.'}`;
 }
 
 export function communityPushCopy(eventType: CommunityPushEventType, username = 'Someone') {

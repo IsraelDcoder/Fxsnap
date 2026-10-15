@@ -2258,7 +2258,7 @@ function sendJson(res, status, body) {
   res.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
     'access-control-allow-origin': process.env.ALLOWED_ORIGIN || '*',
-    'access-control-allow-headers': 'content-type, authorization, x-device-id, x-notification-secret, x-fxsnap-account-token',
+    'access-control-allow-headers': 'content-type, authorization, x-device-id, x-notification-secret, x-fxsnap-account-token, idempotency-key',
     'access-control-allow-methods': 'GET, POST, DELETE, OPTIONS',
   });
   res.end(JSON.stringify(body));
@@ -4174,7 +4174,10 @@ function createRequestHandler() {
       });
     }
 
-    if (pathname.startsWith('/api/community/') || pathname.startsWith('/api/admin/community/')) {
+    if (pathname.startsWith('/api/community/')
+      || pathname.startsWith('/api/admin/community/')
+      || pathname.startsWith('/api/system-announcements')
+      || pathname.startsWith('/api/admin/system-announcements')) {
       return handleCommunityRequest(req, res, url);
     }
 

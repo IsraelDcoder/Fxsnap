@@ -1,11 +1,12 @@
 import type { CommunityMessage, CommunityReaction } from './community';
 
 export const COMMUNITY_VIEWABILITY_CONFIG = {
-  itemVisiblePercentThreshold: 60,
+  viewAreaCoveragePercentThreshold: 60,
   minimumViewTime: 1000,
   waitForInteraction: false,
 };
 
+export const COMMUNITY_VIEW_BATCH_SIZE = 30;
 export const COMMUNITY_VIEW_DEDUP_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 export function applyCommunityReaction(

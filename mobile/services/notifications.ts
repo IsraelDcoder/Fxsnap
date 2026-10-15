@@ -9,7 +9,23 @@ import { getFxsnapAccountApiHeaders } from './account';
 import { formatExpoPushTokenError } from './notificationErrors';
 import type { EventSubscription, NotificationResponse } from 'expo-notifications';
 
-export type NotificationRoute = '/daily-brief' | '/analysis' | '/saved' | '/community';
+export type NotificationRoute =
+  | '/daily-brief'
+  | '/analysis'
+  | '/saved'
+  | '/community'
+  | '/events'
+  | '/profile'
+  | '/community-notifications'
+  | '/system-announcement'
+  | '/';
+export type NotificationTarget = NotificationRoute | {
+  pathname: '/system-announcement';
+  params: { id: string };
+} | {
+  pathname: '/community';
+  params: { postId: string };
+};
 
 export type PushNotificationPayload = {
   type: string;
@@ -21,18 +37,22 @@ const NOTIFICATION_SETTINGS_KEY = 'fxsnap:notificationSettings';
 const PUSH_TOKEN_KEY = 'fxsnap:pushToken';
 
 Notifications.setNotificationHandler({
-  handleNotification: async (notification) => ({
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-    shouldShowAlert: true,
-  }),
+  handleNotification: async (notification) => {
+    const data = notification.request.content.data;
+    const showForegroundPush = data.type !== 'system_announcement' || data.inAppBanner !== true;
+    return {
+      shouldShowBanner: showForegroundPush,
+      shouldShowList: showForegroundPush,
+      shouldPlaySound: showForegroundPush,
+      shouldSetBadge: false,
+      shouldShowAlert: showForegroundPush,
+    };
+  },
 });
 
 export async function getNotificationPreferences(): Promise<NotificationPreferences> {
   const stored = await AsyncStorage.getItem(NOTIFICATION_SETTINGS_KEY);
-  if (!stored) return { enabled: false, dailyBrief: true, inactivity: true, weekly: true, community: true };
+  if (!stored) return { enabled: false, dailyBrief: true, inactivity: true, weekly: true, community: true, systemAnnouncements: true };
   try {
     const value = JSON.parse(stored);
     return {
@@ -41,9 +61,10 @@ export async function getNotificationPreferences(): Promise<NotificationPreferen
       inactivity: value.inactivity !== false,
       weekly: value.weekly !== false,
       community: value.community !== false,
+      systemAnnouncements: value.systemAnnouncements !== false,
     };
   } catch {
-    return { enabled: false, dailyBrief: true, inactivity: true, weekly: true, community: true };
+    return { enabled: false, dailyBrief: true, inactivity: true, weekly: true, community: true, systemAnnouncements: true };
   }
 }
 
@@ -53,6 +74,7 @@ export type NotificationPreferences = {
   inactivity: boolean;
   weekly: boolean;
   community: boolean;
+  systemAnnouncements: boolean;
 };
 
 export async function hasPushNotificationPermission(): Promise<boolean> {
@@ -67,6 +89,7 @@ export async function saveNotificationPreferences(preferences: {
   inactivity: boolean;
   weekly: boolean;
   community: boolean;
+  systemAnnouncements: boolean;
 }) {
   await AsyncStorage.setItem(NOTIFICATION_SETTINGS_KEY, JSON.stringify(preferences));
   notifyAccountDataChanged();
@@ -92,6 +115,10 @@ export async function requestAndRegisterPushNotifications(preferences?: Notifica
     await Notifications.setNotificationChannelAsync('fxsnap-retention', {
       name: 'FXSnap updates',
       importance: Notifications.AndroidImportance.DEFAULT,
+    });
+    await Notifications.setNotificationChannelAsync('fxsnap-system', {
+      name: 'System announcements',
+      importance: Notifications.AndroidImportance.HIGH,
     });
   }
   const projectId = Constants.easConfig?.projectId ?? Constants.expoConfig?.extra?.eas?.projectId;
@@ -140,23 +167,44 @@ export async function syncRegisteredPushNotifications() {
   await requestAndRegisterPushNotifications(preferences, false);
 }
 
-export function registerForegroundNotificationHandler(onRoute?: (route: NotificationRoute, identifier: string) => void): EventSubscription {
+export function registerForegroundNotificationHandler(
+  onRoute?: (route: NotificationTarget, identifier: string, data: Record<string, unknown>) => void,
+): EventSubscription {
   return Notifications.addNotificationResponseReceivedListener((response) => {
-    const route = getNotificationRoute(response.notification.request.content.data);
-    if (route) {
-      if (onRoute) onRoute(route, response.notification.request.identifier);
-      else void import('expo-router').then(({ router }) => router.push(route));
-    }
+    const data = response.notification.request.content.data;
+    const target = getNotificationTarget(data);
+    if (!target) return;
+    if (onRoute) onRoute(target, response.notification.request.identifier, data);
+    else void import('expo-router').then(({ router }) => router.push(target));
   });
 }
 
-export function getNotificationResponseRoute(response: NotificationResponse | null) {
-  return response ? getNotificationRoute(response.notification.request.content.data) : null;
+export function getNotificationResponseRoute(response: NotificationResponse | null): NotificationTarget | null {
+  return response ? getNotificationTarget(response.notification.request.content.data) : null;
+}
+
+function getNotificationTarget(data: Record<string, unknown> | undefined): NotificationTarget | null {
+  const route = getNotificationRoute(data);
+  if (!route || !data) return null;
+  if (route === '/system-announcement' && typeof data.announcementId === 'string') {
+    return { pathname: route, params: { id: data.announcementId } };
+  }
+  const destinationParams = data.destinationParams;
+  if (route === '/community' && destinationParams && typeof destinationParams === 'object'
+    && !Array.isArray(destinationParams) && 'postId' in destinationParams) {
+    const postId = destinationParams.postId;
+    if (typeof postId === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(postId)) {
+      return { pathname: route, params: { postId } };
+    }
+  }
+  return route;
 }
 
 export function getNotificationRoute(data: Record<string, unknown> | undefined): NotificationRoute | null {
   const route = data?.route;
-  if (route === '/daily-brief' || route === '/analysis' || route === '/saved' || route === '/community') return route;
+  if (route === '/daily-brief' || route === '/analysis' || route === '/saved' || route === '/community'
+    || route === '/events' || route === '/profile' || route === '/community-notifications'
+    || route === '/system-announcement' || route === '/') return route;
   return null;
 }
 

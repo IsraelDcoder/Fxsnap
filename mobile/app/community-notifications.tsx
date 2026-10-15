@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, FlatList, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import { AnimatedTouchableOpacity as TouchableOpacity } from '@/components/AnimatedTouchableOpacity';
@@ -9,16 +9,20 @@ import { useColors } from '@/hooks/useColors';
 import {
   getCommunityNotifications,
   markCommunityNotificationRead,
+  markSystemAnnouncementRead,
+  subscribeToSystemAnnouncementChanges,
+  subscribeToCommunityChanges,
   type CommunityNotification,
 } from '@/services/community';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-type NotificationFilter = 'all' | 'mentions' | 'replies' | 'reactions';
+type NotificationFilter = 'all' | 'mentions' | 'replies' | 'reactions' | 'updates';
 const FILTERS: Array<{ id: NotificationFilter; label: string }> = [
   { id: 'all', label: 'All' },
   { id: 'mentions', label: 'Mentions' },
   { id: 'replies', label: 'Replies' },
   { id: 'reactions', label: 'Reactions' },
+  { id: 'updates', label: 'Updates' },
 ];
 
 function ageLabel(value: string) {
@@ -58,32 +62,59 @@ export default function CommunityNotificationsScreen() {
 
   useEffect(() => { void load(); }, [load]);
 
+  useEffect(() => {
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+    const unsubscribe = subscribeToCommunityChanges((eventType) => {
+      if (eventType !== 'notification') return;
+      if (refreshTimer) clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(() => { void load(); }, 180);
+    });
+    const unsubscribeAnnouncements = subscribeToSystemAnnouncementChanges(() => {
+      if (refreshTimer) clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(() => { void load(); }, 180);
+    });
+    return () => {
+      if (refreshTimer) clearTimeout(refreshTimer);
+      unsubscribe();
+      unsubscribeAnnouncements();
+    };
+  }, [load]);
+
   const visible = useMemo(() => notifications.filter((item) => {
+    if (item.kind === 'system_announcement' && item.channels?.notification_center !== true) return false;
     if (filter === 'all') return true;
     if (filter === 'mentions') return item.kind === 'mention';
     if (filter === 'replies') return item.kind === 'reply';
+    if (filter === 'updates') return item.kind === 'system_announcement';
     return item.kind === 'reaction';
   }), [filter, notifications]);
 
-  const open = async (item: CommunityNotification) => {
-    try {
-      if (!item.read_at) {
-        await markCommunityNotificationRead(item.id);
+  const open = (item: CommunityNotification) => {
+    if (!item.read_at) {
+      const readAt = new Date().toISOString();
+      setNotifications((previous) => previous.map((notification) => notification.id === item.id
+        ? { ...notification, read_at: readAt }
+        : notification));
+      const markRead = item.kind === 'system_announcement'
+        ? markSystemAnnouncementRead(item.id)
+        : markCommunityNotificationRead(item.id);
+      void markRead.catch((failure: unknown) => {
         setNotifications((previous) => previous.map((notification) => notification.id === item.id
-          ? { ...notification, read_at: new Date().toISOString() }
+          ? { ...notification, read_at: null }
           : notification));
-      }
-      if (item.kind === 'support_reply') {
-        router.push('/community-support');
-      } else if (item.post_id) {
-        router.push({ pathname: '/community', params: { postId: item.post_id } });
-      } else if (item.object_id) {
-        router.push({ pathname: '/community', params: { postId: item.object_id } });
-      } else {
-        setFilter('all');
-      }
-    } catch (failure) {
-      setError(errorMessage(failure));
+        Alert.alert('Could not mark notification read', errorMessage(failure));
+      });
+    }
+    if (item.kind === 'system_announcement') {
+      router.push({ pathname: '/system-announcement', params: { id: item.id } });
+    } else if (item.kind === 'support_reply') {
+      router.push('/community-support');
+    } else if (item.post_id) {
+      router.push({ pathname: '/community', params: { postId: item.post_id } });
+    } else if (item.object_id) {
+      router.push({ pathname: '/community', params: { postId: item.object_id } });
+    } else {
+      setFilter('all');
     }
   };
 
@@ -91,6 +122,7 @@ export default function CommunityNotificationsScreen() {
     if (kind === 'reply') return 'message-circle';
     if (kind === 'reaction') return 'heart';
     if (kind === 'support_reply') return 'headphones';
+    if (kind === 'system_announcement') return 'bell';
     return 'bell';
   };
 
@@ -142,7 +174,9 @@ export default function CommunityNotificationsScreen() {
                 <Feather name={iconFor(item.kind)} size={18} color={item.read_at ? colors.textMuted : colors.buy} />
               </View>
               <View style={styles.copy}>
-                <Text style={[styles.message, { color: colors.text }]}>{item.message}</Text>
+                <Text style={[styles.message, { color: colors.text }]}>
+                  {item.kind === 'system_announcement' && item.title ? `${item.title} · ` : ''}{item.message}
+                </Text>
                 <Text style={[styles.time, { color: colors.textMuted }]}>{ageLabel(item.created_at)}</Text>
               </View>
               {!item.read_at ? <View style={[styles.unread, { backgroundColor: colors.buy }]} /> : null}
@@ -153,7 +187,7 @@ export default function CommunityNotificationsScreen() {
               <Feather name={filter === 'mentions' ? 'at-sign' : 'bell'} size={24} color={colors.textMuted} />
               <Text style={[styles.emptyTitle, { color: colors.text }]}>You’re all caught up</Text>
               <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
-                {filter === 'all' ? 'Community activity and replies will show up here.' : `No ${filter} yet.`}
+              {filter === 'all' ? 'Community activity and FXSnap updates will show up here.' : `No ${filter} yet.`}
               </Text>
             </View>
           }

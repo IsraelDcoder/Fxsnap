@@ -2,7 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   communityPushCopy,
+  pushTicketRetryError,
   selectCommunityPushRecipients,
+  shouldRetrySystemAnnouncementTicket,
+  systemAnnouncementPushEnabled,
+  systemAnnouncementRoute,
   type CommunityPushDevice,
 } from '../../supabase/functions/community-push/policy';
 
@@ -59,4 +63,41 @@ test('interaction events without a recipient do not become community-wide pushes
   });
 
   assert.deepEqual(recipients, []);
+});
+
+test('Expo ticket failures retry the event instead of marking it delivered', () => {
+  assert.equal(pushTicketRetryError({
+    status: 'error',
+    message: 'Service unavailable',
+    details: { error: 'ExpoServerError' },
+  }), 'ExpoServerError: Service unavailable');
+  assert.equal(pushTicketRetryError({ status: 'ok', id: 'ticket-1' }), null);
+});
+
+test('unregistered devices are removed without retrying already delivered recipients', () => {
+  assert.equal(pushTicketRetryError({
+    status: 'error',
+    message: 'The recipient device is no longer registered.',
+    details: { error: 'DeviceNotRegistered' },
+  }), null);
+});
+
+test('system announcement push preferences and destinations are explicitly allowlisted', () => {
+  assert.equal(systemAnnouncementPushEnabled({ systemAnnouncements: false }), false);
+  assert.equal(systemAnnouncementPushEnabled({}), true);
+  assert.equal(systemAnnouncementRoute('analysis'), '/analysis');
+  assert.equal(systemAnnouncementRoute('/untrusted-route'), null);
+});
+
+test('system announcement Expo failures retry except for permanently unregistered devices', () => {
+  assert.equal(shouldRetrySystemAnnouncementTicket({
+    status: 'error',
+    message: 'Service unavailable.',
+    details: { error: 'ExpoServerError' },
+  }), true);
+  assert.equal(shouldRetrySystemAnnouncementTicket({
+    status: 'error',
+    message: 'Device is not registered.',
+    details: { error: 'DeviceNotRegistered' },
+  }), false);
 });

@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, Image, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Image as CachedImage } from 'expo-image';
 import { router } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import { AnimatedTouchableOpacity as TouchableOpacity } from '@/components/AnimatedTouchableOpacity';
@@ -19,6 +20,7 @@ import {
   type CommunitySearchKind,
   type CommunitySearchResults,
 } from '@/services/community';
+import { applyCommunityReaction } from '@/services/communityEngagement';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const EMPTY_RESULTS: CommunitySearchResults = { posts: [], people: [], topics: [] };
@@ -52,6 +54,7 @@ export default function CommunitySearchScreen() {
   const [recentSearches, setRecentSearches] = useState<string[]>([]);
   const [reactionBusyIds, setReactionBusyIds] = useState<Set<string>>(() => new Set());
   const pendingReactionIds = useRef(new Set<string>());
+  const pendingFollowUsernames = useRef(new Set<string>());
 
   useEffect(() => {
     const normalized = query.trim();
@@ -89,6 +92,12 @@ export default function CommunitySearchScreen() {
     if (pendingReactionIds.current.has(post.id)) return;
     pendingReactionIds.current.add(post.id);
     setReactionBusyIds((current) => new Set(current).add(post.id));
+    const previousReactions = post.reactions;
+    const optimisticReactions = applyCommunityReaction(previousReactions, reaction);
+    setResults((previous) => ({
+      ...previous,
+      posts: previous.posts.map((item) => item.id === post.id ? { ...item, reactions: optimisticReactions } : item),
+    }));
     try {
       const response = await toggleCommunityReaction(post.id, reaction);
       setResults((previous) => ({
@@ -96,6 +105,10 @@ export default function CommunitySearchScreen() {
         posts: previous.posts.map((item) => item.id === post.id ? { ...item, reactions: response.reactions } : item),
       }));
     } catch (failure) {
+      setResults((previous) => ({
+        ...previous,
+        posts: previous.posts.map((item) => item.id === post.id ? { ...item, reactions: previousReactions } : item),
+      }));
       Alert.alert('Could not update reaction', messageFor(failure));
     } finally {
       pendingReactionIds.current.delete(post.id);
@@ -122,10 +135,14 @@ export default function CommunitySearchScreen() {
   };
 
   const toggleFollow = async (post: CommunityMessage) => {
+    if (pendingFollowUsernames.current.has(post.authorUsername)) return;
+    pendingFollowUsernames.current.add(post.authorUsername);
     const wasFollowing = post.isFollowed;
     setResults((previous) => ({
       ...previous,
-      posts: previous.posts.map((item) => item.id === post.id ? { ...item, isFollowed: !wasFollowing } : item),
+      posts: previous.posts.map((item) => item.authorUsername === post.authorUsername
+        ? { ...item, isFollowed: !wasFollowing }
+        : item),
     }));
     try {
       if (wasFollowing) await unfollowCommunityMember(post.authorUsername);
@@ -133,9 +150,13 @@ export default function CommunitySearchScreen() {
     } catch (failure) {
       setResults((previous) => ({
         ...previous,
-        posts: previous.posts.map((item) => item.id === post.id ? { ...item, isFollowed: wasFollowing } : item),
+        posts: previous.posts.map((item) => item.authorUsername === post.authorUsername
+          ? { ...item, isFollowed: wasFollowing }
+          : item),
       }));
       Alert.alert('Could not update follow', messageFor(failure));
+    } finally {
+      pendingFollowUsernames.current.delete(post.authorUsername);
     }
   };
 
@@ -269,7 +290,7 @@ export default function CommunitySearchScreen() {
               onPress={() => router.push({ pathname: '/community-member', params: { username: item.username } })}
               style={[styles.person, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}
             >
-              {item.pictureUrl ? <Image source={{ uri: item.pictureUrl }} style={styles.avatar} /> : avatarColor(colors.surface, colors.text, item.username)}
+              {item.pictureUrl ? <CachedImage source={{ uri: item.pictureUrl }} style={styles.avatar} contentFit="cover" cachePolicy="memory-disk" transition={120} /> : avatarColor(colors.surface, colors.text, item.username)}
               <View style={styles.personCopy}>
                 <Text style={[styles.personName, { color: colors.text }]}>@{item.username}</Text>
                 <Text style={[styles.personSub, { color: colors.textMuted }]}>FXSnap Community member</Text>

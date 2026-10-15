@@ -110,6 +110,16 @@ export interface CommunityNotification {
   post_id?: string | null;
   read_at: string | null;
   created_at: string;
+  title?: string;
+  announcement_type?: 'product' | 'maintenance' | 'educational' | 'urgent';
+  destination?: 'home' | 'community' | 'analysis' | 'events' | 'profile' | 'notification_center';
+  destination_params?: { postId?: string };
+  channels?: {
+    in_app_banner: boolean;
+    notification_center: boolean;
+    push: boolean;
+  };
+  banner_dismissed_at?: string | null;
 }
 
 export interface CommunityRequestError extends Error {
@@ -370,11 +380,130 @@ export async function unblockCommunityMember(accountId: string) {
 }
 
 export async function getCommunityNotifications() {
-  return request<{ notifications: CommunityNotification[] }>('/api/community/notifications');
+  const [communityResult, systemResult] = await Promise.allSettled([
+    request<{ notifications: CommunityNotification[] }>('/api/community/notifications'),
+    getSystemAnnouncements(),
+  ]);
+  if (communityResult.status === 'rejected' && systemResult.status === 'rejected') {
+    throw systemResult.reason;
+  }
+  if (communityResult.status === 'rejected') {
+    console.warn('[Notifications] Community notifications are unavailable.', communityResult.reason);
+  }
+  if (systemResult.status === 'rejected') {
+    console.error('[Notifications] System announcements are unavailable.', systemResult.reason);
+  }
+  const community = communityResult.status === 'fulfilled' ? communityResult.value.notifications : [];
+  const system = systemResult.status === 'fulfilled' ? systemResult.value.announcements : [];
+  return {
+    notifications: [...community, ...system.map((announcement) => ({
+      id: announcement.id,
+      kind: 'system_announcement',
+      message: announcement.message,
+      object_id: announcement.id,
+      read_at: announcement.read_at,
+      created_at: announcement.published_at,
+      title: announcement.title,
+      announcement_type: announcement.type,
+      destination: announcement.destination,
+      destination_params: announcement.destination_params,
+      channels: announcement.channels,
+      banner_dismissed_at: announcement.banner_dismissed_at,
+    } satisfies CommunityNotification))].sort((left, right) =>
+      Date.parse(right.created_at) - Date.parse(left.created_at)),
+  };
 }
 
 export async function markCommunityNotificationRead(id: string) {
   return request<{ read: boolean }>(`/api/community/notifications/${encodeURIComponent(id)}/read`, json({}));
+}
+
+export type SystemAnnouncement = {
+  id: string;
+  type: 'product' | 'maintenance' | 'educational' | 'urgent';
+  title: string;
+  message: string;
+  destination: 'home' | 'community' | 'analysis' | 'events' | 'profile' | 'notification_center';
+  destination_params: { postId?: string };
+  channels: {
+    in_app_banner: boolean;
+    notification_center: boolean;
+    push: boolean;
+  };
+  published_at: string;
+  created_at: string;
+  read_at: string | null;
+  banner_dismissed_at: string | null;
+};
+
+export async function getSystemAnnouncements() {
+  return request<{ announcements: SystemAnnouncement[] }>('/api/system-announcements');
+}
+
+export async function markSystemAnnouncementRead(id: string) {
+  return request<{ updated: boolean }>(`/api/system-announcements/${encodeURIComponent(id)}/read`, json({}));
+}
+
+export async function dismissSystemAnnouncementBanner(id: string) {
+  return request<{ updated: boolean }>(`/api/system-announcements/${encodeURIComponent(id)}/dismiss`, json({}));
+}
+
+export async function getCommunityAdminSystemAnnouncements() {
+  return request<{ announcements: CommunityAdminSystemAnnouncement[] }>('/api/admin/system-announcements');
+}
+
+export async function getSystemAnnouncementAdminAccess() {
+  return request<{ allowed: boolean }>('/api/admin/system-announcements/access');
+}
+
+export async function getSystemAnnouncementAudienceCount(audience: 'all' | 'recently_active', days = 30) {
+  const query = new URLSearchParams({ audience, days: String(days) });
+  return request<{ count: number }>(`/api/admin/system-announcements/audience-count?${query}`);
+}
+
+export type CommunityAdminSystemAnnouncementInput = {
+  type: 'product' | 'maintenance' | 'educational' | 'urgent';
+  title: string;
+  message: string;
+  destination: SystemAnnouncement['destination'];
+  destinationParams: SystemAnnouncement['destination_params'];
+  audience: 'all' | 'recently_active';
+  audienceDays: number;
+  channels: SystemAnnouncement['channels'];
+};
+
+export type CommunityAdminSystemAnnouncement = Omit<CommunityAdminSystemAnnouncementInput, 'destinationParams'> & {
+  id: string;
+  destination_params: SystemAnnouncement['destination_params'];
+  status: 'draft' | 'published' | 'cancelled';
+  recipient_count: number;
+  created_at: string;
+  published_at: string | null;
+  push_queued: number;
+  push_accepted: number;
+  push_delivered: number;
+  push_failed: number;
+  read_count: number;
+};
+
+export async function createCommunityAdminSystemAnnouncement(input: CommunityAdminSystemAnnouncementInput, idempotencyKey: string) {
+  return request<{ announcement: CommunityAdminSystemAnnouncement }>('/api/admin/system-announcements', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'idempotency-key': idempotencyKey },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateCommunityAdminSystemAnnouncement(
+  id: string,
+  action: 'update' | 'publish' | 'cancel',
+  announcement?: CommunityAdminSystemAnnouncementInput,
+) {
+  return request<{ announcement: CommunityAdminSystemAnnouncement }>(`/api/admin/system-announcements/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ action, ...(announcement ? { announcement } : {}) }),
+  });
 }
 
 export interface CommunitySupportMessage {
@@ -493,7 +622,7 @@ export async function shareCommunityPost(message: CommunityMessage, cardView: Vi
   return null;
 }
 
-export function subscribeToCommunityChanges(onChange: (eventType: string | null) => void) {
+export function subscribeToCommunityChanges(onChange: (eventType: string | null, objectId: string | null) => void) {
   const channel = getSupabaseClient()
     .channel(`fxsnap-community-${newId()}`)
     .on('postgres_changes', {
@@ -504,7 +633,10 @@ export function subscribeToCommunityChanges(onChange: (eventType: string | null)
       const eventType = payload.new && typeof payload.new.event_type === 'string'
         ? payload.new.event_type
         : null;
-      onChange(eventType);
+      const objectId = payload.new && typeof payload.new.object_id === 'string'
+        ? payload.new.object_id
+        : null;
+      onChange(eventType, objectId);
     })
     .subscribe((status) => {
       if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
@@ -512,6 +644,39 @@ export function subscribeToCommunityChanges(onChange: (eventType: string | null)
       }
     });
   return () => { void getSupabaseClient().removeChannel(channel); };
+}
+
+export function subscribeToSystemAnnouncementChanges(onChange: () => void) {
+  const client = getSupabaseClient();
+  let active = true;
+  let channel: ReturnType<typeof client.channel> | null = null;
+  void client.auth.getUser().then(({ data, error }) => {
+    if (!active) return;
+    if (error) {
+      console.error('[Notifications] Could not subscribe to system announcements.', error);
+      return;
+    }
+    if (!data.user) return;
+    channel = client
+      .channel(`fxsnap-system-announcements-${newId()}`)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'fxsnap_system_announcement_recipients',
+        filter: `recipient_supabase_user_id=eq.${data.user.id}`,
+      }, onChange)
+      .subscribe((status) => {
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.error('[Notifications] System announcement subscription failed.', status);
+        }
+      });
+  }).catch((error: unknown) => {
+    console.error('[Notifications] Could not subscribe to system announcements.', error);
+  });
+  return () => {
+    active = false;
+    if (channel) void client.removeChannel(channel);
+  };
 }
 
 export function subscribeToCommunityPresence(accountId: string, onCountChange: (count: number) => void) {

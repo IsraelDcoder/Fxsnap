@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { Modal, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import Animated, { useAnimatedStyle, useReducedMotion, useSharedValue, withSequence, withSpring } from 'react-native-reanimated';
-import { BlurView } from 'expo-blur';
 import { Image } from 'expo-image';
 import { Feather } from '@expo/vector-icons';
 import { AnimatedTouchableOpacity as TouchableOpacity } from '@/components/AnimatedTouchableOpacity';
@@ -131,31 +130,10 @@ export default function CommunityPostCard({
       compact && styles.compactCard,
       feedStyle && styles.feedCard,
       {
-        backgroundColor: feedStyle
-          ? colors.text === '#FFFFFF' ? 'rgba(24, 28, 27, 0.72)' : 'rgba(255, 255, 255, 0.48)'
-          : colors.card,
-        borderColor: feedStyle
-          ? colors.text === '#FFFFFF' ? 'rgba(255, 255, 255, 0.16)' : 'rgba(255, 255, 255, 0.76)'
-          : colors.cardBorder,
+        backgroundColor: colors.card,
+        borderColor: colors.cardBorder,
       },
     ]}>
-      {feedStyle ? (
-        <>
-          <BlurView
-            pointerEvents="none"
-            intensity={24}
-            tint={colors.text === '#FFFFFF' ? 'dark' : 'light'}
-            style={StyleSheet.absoluteFill}
-          />
-          <View
-            pointerEvents="none"
-            style={[
-              StyleSheet.absoluteFill,
-              { backgroundColor: colors.text === '#FFFFFF' ? 'rgba(17, 22, 20, 0.42)' : 'rgba(255, 255, 255, 0.22)' },
-            ]}
-          />
-        </>
-      ) : null}
       {post.pinnedAt ? (
         <View style={[styles.pinned, { backgroundColor: `${colors.buy}16` }]}>
           <Feather name="bookmark" size={12} color={colors.buy} />
@@ -171,7 +149,7 @@ export default function CommunityPostCard({
           accessibilityLabel={`View @${post.authorUsername}'s profile`}
         >
           {post.authorPictureUrl ? (
-            <Image source={{ uri: post.authorPictureUrl }} style={[styles.avatar, compact && styles.compactAvatar]} contentFit="cover" accessibilityLabel={`${post.authorUsername}'s profile picture`} />
+            <Image source={{ uri: post.authorPictureUrl }} style={[styles.avatar, compact && styles.compactAvatar]} contentFit="cover" cachePolicy="memory-disk" transition={120} accessibilityLabel={`${post.authorUsername}'s profile picture`} />
           ) : (
             <View style={[styles.avatar, compact && styles.compactAvatar, { backgroundColor: post.isOfficial ? colors.buy : colors.surface }]}>
               <Text style={[styles.avatarText, { color: post.isOfficial ? colors.primaryForeground : colors.text }]}>
@@ -303,6 +281,7 @@ export default function CommunityPostCard({
           source={{ uri: imageUrl }}
           style={[styles.postImage, compact && styles.compactPostImage, { aspectRatio: imageAspectRatio, backgroundColor: colors.surface }]}
           contentFit="cover"
+          cachePolicy="memory-disk"
           transition={120}
           accessibilityLabel="Chart attachment"
         />
@@ -329,9 +308,7 @@ export default function CommunityPostCard({
                 if (event.nativeEvent.actionName === 'longpress') openReactionPicker();
               }}
             >
-              {reactionBusy
-                ? <ActivityIndicator size="small" color={colors.textSecondary} />
-                : <Animated.Text style={[styles.reactionEmoji, reactionAnimatedStyle]}>{selectedReactionInfo?.emoji || '❤️'}</Animated.Text>}
+              <Animated.Text style={[styles.reactionEmoji, reactionAnimatedStyle]}>{selectedReactionInfo?.emoji || '❤️'}</Animated.Text>
               <Text style={[
                 styles.actionLabel,
                 (compact || feedStyle) && styles.compactActionLabel,

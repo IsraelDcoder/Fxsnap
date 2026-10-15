@@ -96,11 +96,11 @@ function createCommunityApi({
   saveCommunityUsername,
   dispatchCommunityPush: sendCommunityPush = dispatchCommunityPush,
 }) {
-  function dispatchQueuedCommunityPush(messageId) {
+  function dispatchQueuedNotifications(messageId) {
     void Promise.resolve()
       .then(() => sendCommunityPush(messageId))
       .catch((error) => {
-        console.error('[Community] Activity push dispatch failed; the queued event will be retried.', {
+        console.error('[Notifications] Queued push dispatch failed; the event will be retried.', {
           messageId,
           error: error instanceof Error ? error.message : 'Unknown error',
         });
@@ -109,7 +109,15 @@ function createCommunityApi({
 
   async function database(path, options = {}) {
     const config = getServerConfig();
-    if (!config.ready) throw new CommunityError('Community storage is not configured. Apply the migration and configure server-side Supabase storage first.', 503);
+    const isSystemAnnouncementOperation = path.includes('system_announcement');
+    if (!config.ready) {
+      throw new CommunityError(
+        isSystemAnnouncementOperation
+          ? 'System announcement storage is not configured. Apply its migration and configure server-side Supabase storage first.'
+          : 'Community storage is not configured. Apply the migration and configure server-side Supabase storage first.',
+        503,
+      );
+    }
     const method = options.method || 'GET';
     let requestBody = null;
     if (typeof options.body === 'string') {
@@ -157,7 +165,13 @@ function createCommunityApi({
       });
       if (response.status === 404 || response.status === 406
         || ['42P01', '42703', '42883', 'PGRST202', 'PGRST204', 'PGRST205'].includes(databaseCode)) {
-        throw new CommunityError('Community database migration is not installed or is unavailable.', 503, requestId);
+        throw new CommunityError(
+          isSystemAnnouncementOperation
+            ? 'The system announcement database migration is not installed or is unavailable.'
+            : 'Community database migration is not installed or is unavailable.',
+          503,
+          requestId,
+        );
       }
       if (response.status === 409 || databaseCode === '23505') {
         throw new CommunityError('That action conflicts with existing community data.', 409, requestId);
@@ -174,7 +188,13 @@ function createCommunityApi({
       if (databaseCode === '42501') {
         throw new CommunityError('You are not authorized to update this community post.', 403, requestId);
       }
-      throw new CommunityError('Community storage could not complete the request. Please try again.', 502, requestId);
+      throw new CommunityError(
+        isSystemAnnouncementOperation
+          ? 'System announcement storage could not complete the request. Please try again.'
+          : 'Community storage could not complete the request. Please try again.',
+        502,
+        requestId,
+      );
     }
     return payload;
   }
@@ -195,20 +215,26 @@ function createCommunityApi({
     headers: { prefer: 'return=minimal' },
   });
 
-  async function authorize(req, res, { joined = true, admin = false } = {}) {
+  async function authorize(req, res, { joined = true, requireCommunity = true } = {}) {
     const config = getServerConfig();
-    if (!config.enabled) {
+    if (requireCommunity && !config.enabled) {
       sendJson(res, 503, { error: 'Community is not enabled yet.' });
       return null;
     }
     if (!config.ready) {
-      sendJson(res, 503, { error: 'Community storage is not configured. Apply the migration and configure server-side Supabase storage first.' });
+      sendJson(res, 503, {
+        error: requireCommunity
+          ? 'Community storage is not configured. Apply the migration and configure server-side Supabase storage first.'
+          : 'FXSnap announcement storage is not configured. Apply the system announcement migration and configure server-side Supabase storage first.',
+      });
       return null;
     }
     const actor = await getActor(req, res);
     if (!actor) return null;
     if (typeof actor.supabaseUserId !== 'string' || !actor.supabaseUserId) {
-      sendJson(res, 403, { error: 'Sign in with your linked Google account to join Community.' });
+      sendJson(res, 403, { error: requireCommunity
+        ? 'Sign in with your linked Google account to join Community.'
+        : 'Sign in with your linked Google account to access FXSnap announcements.' });
       return null;
     }
     const isAdmin = config.adminUserIds.has(actor.supabaseUserId);
@@ -623,7 +649,7 @@ function createCommunityApi({
     }
     if (!inserted.length) throw new CommunityError('Message could not be confirmed after saving. Retry safely with the same message id.', 502);
     const [message] = await serializeMessages(inserted, actor);
-    dispatchQueuedCommunityPush(message.id);
+    dispatchQueuedNotifications(message.id);
     return sendJson(res, 201, { message, duplicate: false });
   }
 
@@ -646,14 +672,136 @@ function createCommunityApi({
 
   async function handle(req, res, url) {
     const pathname = url.pathname;
-    if (!pathname.startsWith('/api/community/') && !pathname.startsWith('/api/admin/community/')) return false;
+    const isSystemAnnouncementPath = pathname.startsWith('/api/system-announcements')
+      || pathname.startsWith('/api/admin/system-announcements');
+    if (!isSystemAnnouncementPath
+      && !pathname.startsWith('/api/community/')
+      && !pathname.startsWith('/api/admin/community/')) return false;
     try {
       const actor = await authorize(req, res, {
-        joined: !['/api/community/me', '/api/community/username', '/api/community/join', '/api/community/bootstrap'].includes(pathname),
+        requireCommunity: !isSystemAnnouncementPath,
+        joined: !isSystemAnnouncementPath
+          && !['/api/community/me', '/api/community/username', '/api/community/join', '/api/community/bootstrap', '/api/community/notifications'].includes(pathname),
       });
       if (!actor) return true;
       const config = getServerConfig();
       const profileQuery = (accountId) => `account_id=eq.${encodeURIComponent(accountId)}`;
+
+      if (isSystemAnnouncementPath) {
+        if (pathname === '/api/system-announcements' && req.method === 'GET') {
+          const announcements = parseRows(await database('rpc/fxsnap_system_announcement_inbox', {
+            method: 'POST',
+            body: JSON.stringify({ p_user_id: actor.supabaseUserId }),
+          }));
+          return sendJson(res, 200, { announcements });
+        }
+
+        const announcementUserMatch = pathname.match(/^\/api\/system-announcements\/([0-9a-f-]+)\/(read|dismiss)$/i);
+        if (announcementUserMatch && req.method === 'POST') {
+          const [, announcementId, action] = announcementUserMatch;
+          const recipients = parseRows(await getRows(
+            'fxsnap_system_announcement_recipients',
+            `announcement_id=eq.${encodeURIComponent(announcementId)}&recipient_supabase_user_id=eq.${encodeURIComponent(actor.supabaseUserId)}&select=announcement_id&limit=1`,
+          ));
+          if (!recipients.length) return sendJson(res, 404, { error: 'This announcement is not available to your account.' });
+          const field = action.toLowerCase() === 'read' ? 'read_at' : 'banner_dismissed_at';
+          await patchRows(
+            'fxsnap_system_announcement_recipients',
+            `announcement_id=eq.${encodeURIComponent(announcementId)}&recipient_supabase_user_id=eq.${encodeURIComponent(actor.supabaseUserId)}&${field}=is.null`,
+            { [field]: new Date().toISOString() },
+          );
+          return sendJson(res, 200, { updated: true });
+        }
+
+        if (pathname === '/api/admin/system-announcements/audience-count' && req.method === 'GET') {
+          if (!await adminOnly(actor, res)) return true;
+          const audience = url.searchParams.get('audience');
+          const daysValue = Number(url.searchParams.get('days') || 30);
+          if (!['all', 'recently_active'].includes(audience || '')
+            || !Number.isInteger(daysValue) || daysValue < 1 || daysValue > 365) {
+            return sendJson(res, 400, { error: 'Choose a valid audience and activity window.' });
+          }
+          const countResult = await database('rpc/fxsnap_system_announcement_audience_count', {
+            method: 'POST',
+            body: JSON.stringify({ p_audience: audience, p_audience_days: daysValue }),
+          });
+          const count = Array.isArray(countResult) ? countResult[0] : countResult;
+          return sendJson(res, 200, { count: Number(count) || 0 });
+        }
+
+        if (pathname === '/api/admin/system-announcements/access' && req.method === 'GET') {
+          return sendJson(res, 200, { allowed: actor.isAdmin });
+        }
+
+        if (pathname === '/api/admin/system-announcements' && req.method === 'GET') {
+          if (!await adminOnly(actor, res)) return true;
+          const announcements = parseRows(await database('rpc/fxsnap_system_announcement_admin_list', { method: 'POST', body: '{}' }));
+          return sendJson(res, 200, { announcements });
+        }
+
+        const announcementInputSchema = z.object({
+          type: z.enum(['product', 'maintenance', 'educational', 'urgent']),
+          title: z.string().trim().min(1).max(100),
+          message: z.string().trim().min(1).max(2000),
+          destination: z.enum(['home', 'community', 'analysis', 'events', 'profile', 'notification_center']),
+          destinationParams: z.object({ postId: z.string().uuid().optional() }).strict().default({}),
+          audience: z.enum(['all', 'recently_active']),
+          audienceDays: z.number().int().min(1).max(365).default(30),
+          channels: z.object({
+            in_app_banner: z.boolean(),
+            notification_center: z.boolean(),
+            push: z.boolean(),
+          }).strict(),
+        }).strict()
+          .refine((value) => Object.values(value.channels).some(Boolean))
+          .refine((value) => value.destination === 'community' || !value.destinationParams.postId);
+
+        if (pathname === '/api/admin/system-announcements' && req.method === 'POST') {
+          if (!await adminOnly(actor, res)) return true;
+          const input = announcementInputSchema.safeParse(await readJsonBody(req));
+          if (!input.success) return sendJson(res, 400, { error: 'Check the announcement content, destination, audience, and delivery channels.' });
+          const idempotencyKey = z.string().uuid().safeParse(req.headers['idempotency-key']);
+          if (!idempotencyKey.success) return sendJson(res, 400, { error: 'An Idempotency-Key UUID header is required.' });
+          const saved = await database('rpc/fxsnap_system_announcement_save', {
+            method: 'POST',
+            body: JSON.stringify({
+              p_actor_supabase_user_id: actor.supabaseUserId,
+              p_idempotency_key: idempotencyKey.data,
+              p_input: input.data,
+            }),
+          });
+          return sendJson(res, 201, { announcement: Array.isArray(saved) ? saved[0] : saved });
+        }
+
+        const adminAnnouncementMatch = pathname.match(/^\/api\/admin\/system-announcements\/([0-9a-f-]+)$/i);
+        if (adminAnnouncementMatch && req.method === 'PATCH') {
+          if (!await adminOnly(actor, res)) return true;
+          const body = await readJsonBody(req);
+          const action = z.enum(['update', 'publish', 'cancel']).safeParse(body?.action);
+          if (!action.success) return sendJson(res, 400, { error: 'Choose whether to update, publish, or cancel this announcement.' });
+          let announcementInput = null;
+          if (action.data === 'update') {
+            const input = announcementInputSchema.safeParse(body?.announcement);
+            if (!input.success) return sendJson(res, 400, { error: 'Check the announcement content, destination, audience, and delivery channels.' });
+            announcementInput = input.data;
+          }
+          const announcement = await database('rpc/fxsnap_system_announcement_transition', {
+            method: 'POST',
+            body: JSON.stringify({
+              p_announcement_id: adminAnnouncementMatch[1],
+              p_actor_supabase_user_id: actor.supabaseUserId,
+              p_action: action.data,
+              p_input: announcementInput,
+            }),
+          });
+          if (action.data === 'publish' && announcement?.status === 'published') {
+            dispatchQueuedNotifications(null);
+          }
+          return sendJson(res, 200, { announcement });
+        }
+
+        return sendJson(res, 405, { error: 'Unsupported system announcement operation.' });
+      }
 
       if (pathname === '/api/community/me' && req.method === 'GET') {
         let rows = actor.profile ? [actor.profile] : parseRows(await getRows(
@@ -1157,7 +1305,7 @@ function createCommunityApi({
         }))[0];
         const reactions = groupReactions(await queryReactions([message.id]), actor.accountId);
         const selectedReaction = selection?.selected_reaction || null;
-        if (selectedReaction) dispatchQueuedCommunityPush(message.id);
+        if (selectedReaction) dispatchQueuedNotifications(message.id);
         return sendJson(res, 200, {
           reacted: selectedReaction !== null,
           selectedReaction,
@@ -1531,7 +1679,7 @@ function createCommunityApi({
         });
       }
       const requestId = crypto.randomUUID();
-      console.error('[Community] Request failed.', {
+      console.error(isSystemAnnouncementPath ? '[Notifications] System announcement request failed.' : '[Community] Request failed.', {
         requestId,
         operation: communityDatabaseOperation(pathname, req.method || 'GET', null),
         errorName: error instanceof Error ? error.name : 'UnknownError',

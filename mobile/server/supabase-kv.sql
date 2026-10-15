@@ -13,7 +13,7 @@ create table if not exists public.fxsnap_push_devices (
   supabase_user_id uuid,
   expo_token text not null unique,
   platform text not null check (platform in ('ios', 'android')),
-  preferences jsonb not null default '{"dailyBrief": true, "inactivity": true, "weekly": true, "community": true}'::jsonb,
+  preferences jsonb not null default '{"dailyBrief": true, "inactivity": true, "weekly": true, "community": true, "systemAnnouncements": true}'::jsonb,
   registered_at timestamptz not null default now(),
   last_notification_at timestamptz
 );
@@ -24,7 +24,7 @@ create index if not exists fxsnap_push_devices_user_idx
   on public.fxsnap_push_devices (supabase_user_id, device_id)
   where supabase_user_id is not null;
 alter table public.fxsnap_push_devices
-  alter column preferences set default '{"dailyBrief": true, "inactivity": true, "weekly": true, "community": true}'::jsonb;
+  alter column preferences set default '{"dailyBrief": true, "inactivity": true, "weekly": true, "community": true, "systemAnnouncements": true}'::jsonb;
 
 alter table public.fxsnap_kv enable row level security;
 alter table public.fxsnap_push_devices enable row level security;

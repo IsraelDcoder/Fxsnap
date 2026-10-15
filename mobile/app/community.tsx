@@ -3,7 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   Image,
-  KeyboardAvoidingView,
+  KeyboardAvoidingView as NativeKeyboardAvoidingView,
   Modal,
   Platform,
   RefreshControl,
@@ -14,8 +14,10 @@ import {
   View,
   type ViewToken,
 } from 'react-native';
+import { KeyboardAvoidingView as KeyboardControllerAvoidingView } from 'react-native-keyboard-controller';
+import { Image as CachedImage } from 'expo-image';
 import { AnimatedTouchableOpacity as TouchableOpacity } from '@/components/AnimatedTouchableOpacity';
-import Animated, { FadeIn, FadeInDown, LinearTransition, useReducedMotion } from 'react-native-reanimated';
+import Animated, { FadeIn, FadeInDown, useReducedMotion } from 'react-native-reanimated';
 import { Feather } from '@expo/vector-icons';
 import { FlashList, type FlashListRef } from '@shopify/flash-list';
 import { router, useLocalSearchParams } from 'expo-router';
@@ -61,8 +63,10 @@ import {
   type CommunityProfile,
   type CommunityReaction,
 } from '@/services/community';
+import { readCommunityFeedCache, writeCommunityFeedCache } from '@/services/communityFeedCache';
 import {
   applyCommunityReaction,
+  COMMUNITY_VIEW_BATCH_SIZE,
   COMMUNITY_VIEWABILITY_CONFIG,
   getNewVisiblePostIds,
 } from '@/services/communityEngagement';
@@ -133,6 +137,13 @@ function ageLabel(isoDate: string) {
   return `${Math.floor(hours / 24)} days ago`;
 }
 
+function upsertCommunityMessage(messages: CommunityMessage[], message: CommunityMessage) {
+  const existingIndex = messages.findIndex((item) =>
+    item.id === message.id || item.clientMessageId === message.clientMessageId);
+  if (existingIndex < 0) return [...messages, message];
+  return messages.map((item, index) => index === existingIndex ? message : item);
+}
+
 export default function CommunityScreen() {
   const colors = useColors();
   const reduceMotion = useReducedMotion();
@@ -198,14 +209,27 @@ export default function CommunityScreen() {
   const flatListRef = useRef<FlashListRef<CommunityMessage>>(null);
   const recordedViewIds = useRef(new Map<string, number>());
   const pendingReactionIds = useRef(new Set<string>());
+  const pendingFollowUsernames = useRef(new Set<string>());
   const commentSubmissionPending = useRef(false);
   const currentAccountIdRef = useRef<string | null>(null);
+  const currentPostIdsRef = useRef(new Set<string>());
+  const currentDiscussionMessageIdsRef = useRef(new Set<string>());
   const processedPostId = useRef<string | null>(null);
   const processedAnalysisId = useRef<string | null>(null);
   const skipBootstrapFeedFetch = useRef(false);
   const publishId = useRef<string | null>(null);
   const commentId = useRef<string | null>(null);
+  const currentDiscussionIdRef = useRef<string | null>(null);
+  const currentReplyTargetIdRef = useRef<string | null>(null);
   currentAccountIdRef.current = profile?.accountId || null;
+  currentDiscussionIdRef.current = commentPost?.id || null;
+  currentReplyTargetIdRef.current = replyTarget?.id || null;
+  currentPostIdsRef.current = new Set(posts.map((post) => post.id));
+  currentDiscussionMessageIdsRef.current = new Set([
+    ...(commentPost ? [commentPost.id] : []),
+    ...comments.map((comment) => comment.id),
+    ...threadReplies.map((reply) => reply.id),
+  ]);
 
   const loadFeed = useCallback(async (reset = true) => {
     if (stage !== 'feed' && !profile) return;
@@ -227,6 +251,11 @@ export default function CommunityScreen() {
       setNextCursor(page.nextCursor);
       setHasMore(page.hasMore);
       setFollowingEmpty(page.followingEmpty === true);
+      if (reset && profile && account?.email) {
+        void writeCommunityFeedCache(account.email, feed, category, profile, page).catch((error) => {
+          console.warn('[Community] Could not save the feed cache.', error);
+        });
+      }
     } catch (error) {
       setFeedError(apiErrorMessage(error));
     } finally {
@@ -234,7 +263,7 @@ export default function CommunityScreen() {
       setLoadingMore(false);
       setRefreshing(false);
     }
-  }, [category, feed, nextCursor, profile, stage]);
+  }, [account?.email, category, feed, nextCursor, profile, stage]);
 
   const refreshNotifications = useCallback(async () => {
     const result = await getCommunityNotifications();
@@ -242,6 +271,7 @@ export default function CommunityScreen() {
   }, []);
 
   const bootstrap = useCallback(async () => {
+    let cachedFeed: Awaited<ReturnType<typeof readCommunityFeedCache>> = null;
     setStage('loading');
     setScreenError('');
     try {
@@ -253,6 +283,22 @@ export default function CommunityScreen() {
       }
       setAccount(linkedAccount);
       const initialCategory = COMMUNITY_CATEGORIES.find((item) => item.id === categoryParam)?.id || null;
+      cachedFeed = await readCommunityFeedCache(linkedAccount.email, 'global', initialCategory)
+        .catch((error: unknown) => {
+          console.warn('[Community] Could not read the feed cache.', error);
+          return null;
+        });
+      if (cachedFeed) {
+        setCategory(initialCategory);
+        setFeed('global');
+        setPosts(cachedFeed.page.messages);
+        setNextCursor(cachedFeed.page.nextCursor);
+        setHasMore(cachedFeed.page.hasMore);
+        setFollowingEmpty(cachedFeed.page.followingEmpty === true);
+        setProfile(cachedFeed.profile);
+        skipBootstrapFeedFetch.current = true;
+        setStage('feed');
+      }
       const membership = await getCommunityBootstrap({ feed: 'global', category: initialCategory, limit: 30 });
       if (!membership.profile) {
         setProfile(null);
@@ -264,12 +310,26 @@ export default function CommunityScreen() {
       setNextCursor(membership.nextCursor);
       setHasMore(membership.hasMore);
       setFollowingEmpty(membership.followingEmpty === true);
+      void writeCommunityFeedCache(
+        linkedAccount.email,
+        'global',
+        initialCategory,
+        membership.profile,
+        membership,
+      ).catch((error) => {
+        console.warn('[Community] Could not save the feed cache.', error);
+      });
       skipBootstrapFeedFetch.current = true;
       setProfile(membership.profile);
       setStage('feed');
     } catch (error) {
-      setScreenError(apiErrorMessage(error));
-      setStage('error');
+      if (cachedFeed) {
+        setFeedError(apiErrorMessage(error));
+        setStage('feed');
+      } else {
+        setScreenError(apiErrorMessage(error));
+        setStage('error');
+      }
     }
   }, [categoryParam]);
 
@@ -291,21 +351,50 @@ export default function CommunityScreen() {
 
   useEffect(() => {
     if (stage !== 'feed' || !profile) return;
-    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
-    const unsubscribe = subscribeToCommunityChanges((eventType) => {
-      if (refreshTimer) clearTimeout(refreshTimer);
-      refreshTimer = setTimeout(() => { void loadFeed(true); }, 220);
+    const unsubscribe = subscribeToCommunityChanges((eventType, objectId) => {
       if (eventType === 'notification') {
         void refreshNotifications().catch((error) => {
           console.error('[Community] Could not refresh notifications.', error);
         });
       }
+      if ((eventType !== 'message' && eventType !== 'announcement' && eventType !== 'reaction') || !objectId) return;
+      if (eventType === 'reaction'
+        && !currentPostIdsRef.current.has(objectId)
+        && !currentDiscussionMessageIdsRef.current.has(objectId)) return;
+      void getCommunityPost(objectId).then(({ post: changedPost }) => {
+        if (eventType === 'reaction') {
+          setPosts((previous) => previous.map((item) => item.id === changedPost.id ? changedPost : item));
+          setComments((previous) => previous.map((item) => item.id === changedPost.id ? changedPost : item));
+          setThreadReplies((previous) => previous.map((item) => item.id === changedPost.id ? changedPost : item));
+          setCommentPost((current) => current?.id === changedPost.id ? changedPost : current);
+          return;
+        }
+        if (changedPost.replyTo) {
+          if (changedPost.replyTo.id === currentDiscussionIdRef.current) {
+            setComments((previous) => upsertCommunityMessage(previous, changedPost));
+          }
+          if (changedPost.replyTo.id === currentReplyTargetIdRef.current) {
+            setThreadReplies((previous) => upsertCommunityMessage(previous, changedPost));
+          }
+          return;
+        }
+        setPosts((previous) => {
+          const existing = previous.some((item) => item.id === changedPost.id);
+          if (existing) return previous.map((item) => item.id === changedPost.id ? changedPost : item);
+          const isRecent = Date.now() - Date.parse(changedPost.createdAt) < 5 * 60_000;
+          const matchesFeed = feed === 'global' || changedPost.isFollowed;
+          const matchesCategory = !category || changedPost.category === category;
+          return isRecent && matchesFeed && matchesCategory ? [changedPost, ...previous] : previous;
+        });
+        setCommentPost((current) => current?.id === changedPost.id ? changedPost : current);
+      }).catch((error: unknown) => {
+        console.error('[Community] Could not apply a live post update.', error);
+      });
     });
     return () => {
-      if (refreshTimer) clearTimeout(refreshTimer);
       unsubscribe();
     };
-  }, [loadFeed, profile, refreshNotifications, stage]);
+  }, [category, feed, profile, refreshNotifications, stage]);
 
   useEffect(() => {
     if (stage !== 'feed' || !profile) {
@@ -736,18 +825,41 @@ export default function CommunityScreen() {
   };
 
   const handleFollow = async (post: CommunityMessage) => {
+    if (pendingFollowUsernames.current.has(post.authorUsername)) return;
+    pendingFollowUsernames.current.add(post.authorUsername);
     const wasFollowing = post.isFollowed;
+    const nextFollowing = !wasFollowing;
+    setPosts((previous) => previous.map((item) => item.authorUsername === post.authorUsername
+      ? { ...item, isFollowed: nextFollowing }
+      : item));
+    setCommentPost((current) => current?.authorUsername === post.authorUsername
+      ? { ...current, isFollowed: nextFollowing }
+      : current);
+    setPostActionsPost((current) => current?.authorUsername === post.authorUsername
+      ? { ...current, isFollowed: nextFollowing }
+      : current);
+    setFollowedNames((previous) => wasFollowing
+      ? previous.filter((name) => name !== post.authorUsername)
+      : previous.includes(post.authorUsername) ? previous : [...previous, post.authorUsername]);
     try {
       if (wasFollowing) await unfollowCommunityMember(post.authorUsername);
       else await followCommunityMember(post.authorUsername);
-      setPosts((previous) => previous.map((item) => item.authorUsername === post.authorUsername
-        ? { ...item, isFollowed: !wasFollowing }
-        : item));
-      setFollowedNames((previous) => wasFollowing
-        ? previous.filter((name) => name !== post.authorUsername)
-        : [...previous, post.authorUsername]);
     } catch (error) {
+      setPosts((previous) => previous.map((item) => item.authorUsername === post.authorUsername
+        ? { ...item, isFollowed: wasFollowing }
+        : item));
+      setCommentPost((current) => current?.authorUsername === post.authorUsername
+        ? { ...current, isFollowed: wasFollowing }
+        : current);
+      setPostActionsPost((current) => current?.authorUsername === post.authorUsername
+        ? { ...current, isFollowed: wasFollowing }
+        : current);
+      setFollowedNames((previous) => wasFollowing
+        ? previous.includes(post.authorUsername) ? previous : [...previous, post.authorUsername]
+        : previous.filter((name) => name !== post.authorUsername));
       Alert.alert('Could not update following', apiErrorMessage(error));
+    } finally {
+      pendingFollowUsernames.current.delete(post.authorUsername);
     }
   };
 
@@ -889,18 +1001,21 @@ export default function CommunityScreen() {
     const newIds = getNewVisiblePostIds(visiblePosts, accountId, recordedViewIds.current);
     if (!newIds.length) return;
     for (const id of newIds) recordedViewIds.current.set(`${accountId}:${id}`, Date.now());
-    void recordCommunityViews(newIds).then(({ views }) => {
-      const countById = new Map(views.map((view) => [view.messageId, view.viewCount]));
-      setPosts((previous) => previous.map((post) => countById.has(post.id)
-        ? { ...post, viewCount: countById.get(post.id) ?? post.viewCount }
-        : post));
-      setCommentPost((current) => current && countById.has(current.id)
-        ? { ...current, viewCount: countById.get(current.id) ?? current.viewCount }
-        : current);
-    }).catch((error: unknown) => {
-      for (const id of newIds) recordedViewIds.current.delete(`${accountId}:${id}`);
-      console.warn('Community post impressions could not be recorded.', error instanceof Error ? error.message : error);
-    });
+    for (let offset = 0; offset < newIds.length; offset += COMMUNITY_VIEW_BATCH_SIZE) {
+      const batch = newIds.slice(offset, offset + COMMUNITY_VIEW_BATCH_SIZE);
+      void recordCommunityViews(batch).then(({ views }) => {
+        const countById = new Map(views.map((view) => [view.messageId, view.viewCount]));
+        setPosts((previous) => previous.map((post) => countById.has(post.id)
+          ? { ...post, viewCount: countById.get(post.id) ?? post.viewCount }
+          : post));
+        setCommentPost((current) => current && countById.has(current.id)
+          ? { ...current, viewCount: countById.get(current.id) ?? current.viewCount }
+          : current);
+      }).catch((error: unknown) => {
+        for (const id of batch) recordedViewIds.current.delete(`${accountId}:${id}`);
+        console.warn('Community post impressions could not be recorded.', error instanceof Error ? error.message : error);
+      });
+    }
   }).current;
 
   const openNotifications = () => {
@@ -929,12 +1044,8 @@ export default function CommunityScreen() {
     }
   };
 
-  const renderPost = ({ item, index }: { item: CommunityMessage; index: number }) => (
-    <Animated.View
-      entering={reduceMotion ? undefined : FadeInDown.delay(Math.min(index * 45, 180)).duration(320).springify().damping(20)}
-      layout={reduceMotion ? undefined : LinearTransition.duration(180)}
-      style={styles.feedPostCell}
-    >
+  const renderPost = ({ item }: { item: CommunityMessage }) => (
+    <View style={styles.feedPostCell}>
       <CommunityPostCard
         post={item}
         feedStyle
@@ -947,7 +1058,7 @@ export default function CommunityScreen() {
         onFollow={() => void handleFollow(item)}
         onAuthorPress={() => router.push({ pathname: '/community-member', params: { username: item.authorUsername } })}
       />
-    </Animated.View>
+    </View>
   );
 
   const unreadCount = notifications.filter((notification) => !notification.read_at).length;
@@ -1055,7 +1166,7 @@ export default function CommunityScreen() {
 
   if (stage === 'onboarding') {
     return (
-      <KeyboardAvoidingView style={[styles.screen, { backgroundColor: colors.background }]} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <NativeKeyboardAvoidingView style={[styles.screen, { backgroundColor: colors.background }]} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <View style={[styles.onboardingHeader, { paddingTop: insets.top + 10 }]}>
           <TouchableOpacity onPress={() => router.back()} style={styles.headerIcon} accessibilityLabel="Go back">
             <Feather name="arrow-left" size={20} color={colors.text} />
@@ -1118,7 +1229,7 @@ export default function CommunityScreen() {
           </TouchableOpacity>
           <Text style={[styles.privacyNote, { color: colors.textMuted }]}>Your FXSnap account is used to secure your community identity. Your email is not shown in posts.</Text>
         </ScrollView>
-      </KeyboardAvoidingView>
+      </NativeKeyboardAvoidingView>
     );
   }
 
@@ -1126,14 +1237,13 @@ export default function CommunityScreen() {
     <View style={[styles.screen, { backgroundColor: colors.background }]}>
       <Animated.View
         entering={reduceMotion ? undefined : FadeIn.duration(260)}
-        style={[styles.header, { paddingTop: insets.top + 8, borderBottomColor: colors.cardBorder }]}
+        style={[styles.header, { paddingTop: insets.top + 4, borderBottomColor: colors.cardBorder }]}
       >
         <TouchableOpacity onPress={() => router.back()} style={styles.headerIcon} accessibilityLabel="Go back">
           <Feather name="arrow-left" size={20} color={colors.text} />
         </TouchableOpacity>
         <View style={styles.headerTitleWrap}>
           <Text style={[styles.headerTitle, { color: colors.text }]}>Community</Text>
-          <Text style={[styles.headerSubtitle, { color: colors.textMuted }]}>Trade ideas. Learn together.</Text>
         </View>
         <TouchableOpacity onPress={() => router.push('/community-search')} style={styles.headerIcon} accessibilityLabel="Search Community">
           <Feather name="search" size={19} color={colors.text} />
@@ -1216,23 +1326,6 @@ export default function CommunityScreen() {
                 ))}
               </ScrollView>
             </Animated.View>
-            <Animated.View entering={reduceMotion ? undefined : FadeInDown.delay(150).duration(320)}>
-              <TouchableOpacity
-                onPress={() => openComposer('text')}
-                style={[styles.composePrompt, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}
-                accessibilityLabel="Create a community post"
-              >
-                {profile?.pictureUrl
-                  ? <Image source={{ uri: profile.pictureUrl }} style={styles.composeAvatar} resizeMode="cover" accessibilityLabel="Your profile picture" />
-                  : (
-                    <View style={[styles.composeAvatar, { backgroundColor: colors.buy }]}>
-                      <Text style={[styles.composeAvatarText, { color: colors.primaryForeground }]}>{profile?.username.slice(0, 1).toUpperCase()}</Text>
-                    </View>
-                  )}
-                <Text style={[styles.composePlaceholder, { color: colors.textMuted }]}>What are you learning in the markets?</Text>
-                <Feather name="edit-3" size={17} color={colors.buy} />
-              </TouchableOpacity>
-            </Animated.View>
             {feedError ? (
               <View style={[styles.inlineError, { backgroundColor: `${colors.sell}10` }]}>
                 <Text style={[styles.errorText, { color: colors.sell }]}>{feedError}</Text>
@@ -1292,7 +1385,7 @@ export default function CommunityScreen() {
       </View>
 
       <Modal visible={composerVisible} animationType="slide" onRequestClose={() => setComposerVisible(false)}>
-        <KeyboardAvoidingView style={[styles.modalScreen, { backgroundColor: colors.background, paddingTop: insets.top }]} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <NativeKeyboardAvoidingView style={[styles.modalScreen, { backgroundColor: colors.background, paddingTop: insets.top }]} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <View style={[styles.modalHeader, { borderBottomColor: colors.cardBorder }]}>
             <TouchableOpacity onPress={() => setComposerVisible(false)} style={styles.headerIcon} accessibilityLabel="Close composer"><Feather name="x" size={21} color={colors.text} /></TouchableOpacity>
             <Text style={[styles.modalTitle, { color: colors.text }]}>{editingPost ? 'Edit post' : composerKind === 'signal' ? 'Share a trading signal' : composerKind === 'analysis' ? 'Share FXSnap analysis' : 'Create a post'}</Text>
@@ -1371,28 +1464,36 @@ export default function CommunityScreen() {
             ) : null}
             {composerError ? <Text style={[styles.errorText, { color: colors.sell }]}>{composerError}</Text> : null}
           </ScrollView>
-        </KeyboardAvoidingView>
+        </NativeKeyboardAvoidingView>
       </Modal>
 
       <Modal visible={Boolean(commentPost)} animationType="slide" onRequestClose={() => setCommentPost(null)}>
-        <KeyboardAvoidingView style={[styles.modalScreen, { backgroundColor: colors.background, paddingTop: insets.top }]} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <KeyboardControllerAvoidingView
+          style={[styles.modalScreen, { backgroundColor: colors.background, paddingTop: insets.top }]}
+          behavior="padding"
+          keyboardVerticalOffset={insets.top}
+        >
           <View style={[styles.modalHeader, { borderBottomColor: colors.cardBorder }]}>
             <TouchableOpacity onPress={() => setCommentPost(null)} style={styles.headerIcon} accessibilityLabel="Close discussion"><Feather name="arrow-left" size={20} color={colors.text} /></TouchableOpacity>
             <Text style={[styles.modalTitle, { color: colors.text }]}>Discussion</Text>
             <View style={styles.headerIcon} />
           </View>
-          <ScrollView contentContainerStyle={styles.commentsContent} keyboardShouldPersistTaps="handled">
+          <ScrollView contentContainerStyle={styles.commentsContent} keyboardShouldPersistTaps="handled" keyboardDismissMode="interactive">
             {commentPost ? <CommunityPostCard post={commentPost} ownAccount={commentPost.authorUsername === profile?.username} reactionBusy={reactionBusyIds.has(commentPost.id)} onReact={(reaction) => void handleReaction(commentPost, reaction)} onComment={() => {}} onShare={(cardView) => void sharePost(commentPost, cardView)} onMore={(cardView) => showPostActions(commentPost, cardView)} onFollow={() => void handleFollow(commentPost)} /> : null}
             <Text style={[styles.commentsHeading, { color: colors.text }]}>Trader discussion</Text>
-            {commentsLoading ? <ActivityIndicator color={colors.buy} /> : comments.length ? comments.map((comment) => (
-              <CommentCard key={comment.id} comment={comment} colors={colors} onReply={() => void startReply(comment)} onMore={() => showPostActions(comment)} onAuthorPress={() => router.push({ pathname: '/community-member', params: { username: comment.authorUsername } })} />
+            {commentsLoading ? <ActivityIndicator color={colors.buy} /> : comments.length ? comments.map((comment, index) => (
+              <Animated.View key={comment.id} entering={reduceMotion ? undefined : FadeInDown.delay(Math.min(index * 35, 140)).duration(240)}>
+                <CommentCard comment={comment} colors={colors} onReply={() => void startReply(comment)} onMore={() => showPostActions(comment)} onAuthorPress={() => router.push({ pathname: '/community-member', params: { username: comment.authorUsername } })} />
+              </Animated.View>
             )) : (
               <View style={styles.noComments}>
                 <Text style={[styles.emptyBody, { color: colors.textSecondary }]}>No replies yet. Add a constructive thought or ask a follow-up question.</Text>
               </View>
             )}
-            {threadLoading ? <ActivityIndicator color={colors.buy} /> : threadReplies.map((reply) => (
-              <CommentCard key={reply.id} comment={reply} colors={colors} nested onReply={() => void startReply(reply)} onMore={() => showPostActions(reply)} onAuthorPress={() => router.push({ pathname: '/community-member', params: { username: reply.authorUsername } })} />
+            {threadLoading ? <ActivityIndicator color={colors.buy} /> : threadReplies.map((reply, index) => (
+              <Animated.View key={reply.id} entering={reduceMotion ? undefined : FadeInDown.delay(Math.min(index * 35, 140)).duration(240)}>
+                <CommentCard comment={reply} colors={colors} nested onReply={() => void startReply(reply)} onMore={() => showPostActions(reply)} onAuthorPress={() => router.push({ pathname: '/community-member', params: { username: reply.authorUsername } })} />
+              </Animated.View>
             ))}
           </ScrollView>
           {replyTarget ? (
@@ -1409,13 +1510,14 @@ export default function CommunityScreen() {
               placeholderTextColor={colors.textMuted}
               maxLength={2000}
               multiline
+              textAlignVertical="top"
               style={[styles.commentInput, { color: colors.text, backgroundColor: colors.surface }]}
             />
             <TouchableOpacity onPress={() => void submitComment()} disabled={!commentDraft.trim() || commentSending} style={[styles.sendComment, { backgroundColor: colors.buy }]}>
               {commentSending ? <ActivityIndicator size="small" color={colors.primaryForeground} /> : <Feather name="arrow-up" size={18} color={colors.primaryForeground} />}
             </TouchableOpacity>
           </View>
-        </KeyboardAvoidingView>
+        </KeyboardControllerAvoidingView>
       </Modal>
 
       <Modal
@@ -1553,7 +1655,7 @@ function CommentCard({
     <View style={[styles.commentCard, { marginLeft: nested ? 25 : 0, backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
       <View style={styles.commentHeader}>
         {comment.authorPictureUrl ? (
-          <Image source={{ uri: comment.authorPictureUrl }} style={styles.commentAvatar} accessibilityLabel={`${comment.authorUsername}'s profile picture`} />
+          <CachedImage source={{ uri: comment.authorPictureUrl }} style={styles.commentAvatar} contentFit="cover" cachePolicy="memory-disk" transition={120} accessibilityLabel={`${comment.authorUsername}'s profile picture`} />
         ) : (
           <View style={[styles.commentAvatar, { backgroundColor: comment.isOfficial ? colors.buy : colors.surface }]}>
             <Text style={[styles.composeAvatarText, { color: comment.isOfficial ? colors.primaryForeground : colors.text }]}>{comment.authorUsername.slice(0, 1).toUpperCase()}</Text>
@@ -1592,13 +1694,12 @@ function BottomItem({ icon, label, active, colors, onPress }: { icon: React.Comp
 
 const styles = StyleSheet.create({
   screen: { flex: 1 },
-  header: { minHeight: 68, flexDirection: 'row', alignItems: 'center', gap: 2, paddingHorizontal: 10, borderBottomWidth: StyleSheet.hairlineWidth },
+  header: { minHeight: 56, flexDirection: 'row', alignItems: 'center', gap: 2, paddingHorizontal: 10, borderBottomWidth: StyleSheet.hairlineWidth },
   onboardingHeader: { minHeight: 56, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14 },
   headerIcon: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center', position: 'relative' },
   headerTitleWrap: { flex: 1, paddingLeft: 5 },
   headerTitle: { fontSize: 19, fontFamily: 'Inter_700Bold' },
   username: { fontSize: 12, fontFamily: 'Inter_700Bold' },
-  headerSubtitle: { fontSize: 10, fontFamily: 'Inter_400Regular', marginTop: 2 },
   notificationDot: { width: 8, height: 8, borderRadius: 4, position: 'absolute', right: 8, top: 7 },
   feedContent: { paddingHorizontal: 12, paddingTop: 7 },
   feedTabRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 9, marginBottom: 2 },
@@ -1612,10 +1713,7 @@ const styles = StyleSheet.create({
   categories: { alignItems: 'center', gap: 8, paddingVertical: 8, paddingRight: 8 },
   categoryChip: { minHeight: 33, justifyContent: 'center', borderWidth: 1, borderRadius: 17, paddingHorizontal: 13 },
   categoryText: { fontSize: 10, fontFamily: 'Inter_600SemiBold' },
-  composePrompt: { minHeight: 54, flexDirection: 'row', alignItems: 'center', gap: 11, borderWidth: 1, borderRadius: 16, paddingHorizontal: 13, marginTop: 2 },
-  composeAvatar: { width: 31, height: 31, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
   composeAvatarText: { fontSize: 12, fontFamily: 'Inter_700Bold' },
-  composePlaceholder: { flex: 1, fontSize: 12, fontFamily: 'Inter_400Regular' },
   feedLoading: { minHeight: 100, alignItems: 'center', justifyContent: 'center', gap: 9 },
   emptyCard: { alignItems: 'center', gap: 9, borderWidth: 1, borderRadius: 18, padding: 22, marginTop: 8, marginBottom: 14 },
   emptyTitle: { fontSize: 14, textAlign: 'center', fontFamily: 'Inter_700Bold' },

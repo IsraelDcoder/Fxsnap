@@ -109,19 +109,25 @@ test('push tokens are bound to the authenticated device and can be removed', asy
       platform: 'android',
       accountId: 'usr_push-test-member',
       supabaseUserId: '00000000-0000-4000-8000-000000000010',
-      preferences: { enabled: true, dailyBrief: true, inactivity: false, weekly: true, community: false },
+      preferences: { enabled: true, dailyBrief: true, inactivity: false, weekly: true, community: false, systemAnnouncements: false },
     });
     const registration = (await getRegisteredTokens()).find((entry) => entry.deviceId === deviceId);
     assert.equal(registration?.platform, 'android');
     assert.equal(registration?.accountId, 'usr_push-test-member');
     assert.equal(registration?.supabaseUserId, '00000000-0000-4000-8000-000000000010');
-    assert.deepEqual(registration?.preferences, { dailyBrief: true, inactivity: false, weekly: true, community: false });
+    assert.deepEqual(registration?.preferences, {
+      dailyBrief: true,
+      inactivity: false,
+      weekly: true,
+      community: false,
+      systemAnnouncements: false,
+    });
     await registerPushToken('device-push-test-234567', {
       token: 'ExponentPushToken[yyyyyyyyyyyyyyyyyyyyyy]',
       platform: 'android',
       accountId: 'usr_push-test-member',
       supabaseUserId: '00000000-0000-4000-8000-000000000010',
-      preferences: { enabled: true, dailyBrief: true, inactivity: false, weekly: true, community: false },
+      preferences: { enabled: true, dailyBrief: true, inactivity: false, weekly: true, community: false, systemAnnouncements: false },
     });
     assert.equal((await getRegisteredTokens()).filter((entry) => entry.accountId === 'usr_push-test-member').length, 2);
     await unregisterPushToken(deviceId, 'usr_push-test-member');
