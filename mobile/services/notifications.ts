@@ -34,7 +34,7 @@ export type PushNotificationPayload = {
 };
 
 const NOTIFICATION_SETTINGS_KEY = 'fxsnap:notificationSettings';
-const PUSH_TOKEN_KEY = 'fxsnap:pushToken';
+const PUSH_TOKEN_KEY = 'fxsnap_pushToken';
 
 Notifications.setNotificationHandler({
   handleNotification: async (notification) => {
