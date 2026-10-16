@@ -731,7 +731,9 @@ export default function AnalysisResultScreen() {
               <View style={styles.verdictTop}><Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>{hasDirectionalCandidate ? 'TRADE SETUP' : hasDirectionalBiasOnly ? 'DIRECTIONAL CALL' : 'TRADE SIGNAL'}</Text><View style={[styles.verdictBadge, { backgroundColor: `${signalColor}20` }]}><View style={[styles.verdictDot, { backgroundColor: signalColor }]} /><Text style={[styles.verdictText, { color: signalColor }]}>{directionalCallLabel}</Text></View></View>
               {hasDirectionalCandidate && !isValidatedActionable ? (
                 <Text style={[styles.bodyMuted, { color: colors.textSecondary }]}>
-                  Conditional plan only. {currentAnalysis.tradeTrigger || 'Wait for the chart-supported entry trigger.'} Do not enter yet.
+                  {hasCompleteDirectionalSetup
+                    ? `${currentAnalysis.tradeSetup!.type.toUpperCase()} plan — Entry ${entryLevel}, SL ${stopLevel}, TP1 ${tp1Level}. Verify these chart levels against current price and your risk plan.`
+                    : `${currentAnalysis.tradeSetup!.type.toUpperCase()} direction identified, but a complete entry, stop and target could not all be verified from the chart.`}
                 </Text>
               ) : null}
               {hasDirectionalBiasOnly ? <Text style={[styles.bodyMuted, { color: colors.textSecondary }]}>{`Directional call: ${directionalCallLabel}. The chart supports this direction, but entry, stop-loss, and take-profit levels are not validated. Do not enter until a valid setup and trigger are confirmed.`}</Text> : null}
