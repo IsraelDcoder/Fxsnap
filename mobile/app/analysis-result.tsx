@@ -229,21 +229,26 @@ export default function AnalysisResultScreen() {
   const canShowMarketRead = currentAnalysis?.status === 'success'
     || currentAnalysis?.status === 'no_trade'
     || currentAnalysis?.status == null;
-  const hasDirectionalCandidate = currentAnalysis?.tradeSetup?.type === 'buy'
+  const hasTradePlan = currentAnalysis?.tradePlan != null;
+  const hasDirectionalCandidate = hasTradePlan
+    || currentAnalysis?.tradeSetup?.type === 'buy'
     || currentAnalysis?.tradeSetup?.type === 'sell';
+  const tradeDirection = currentAnalysis?.tradePlan?.direction
+    ?? currentAnalysis?.tradeSetup?.type?.toUpperCase();
   const isValidatedActionable = currentAnalysis?.status === 'success'
     && currentAnalysis.tradeStatus === 'actionable'
     && hasDirectionalCandidate
     && hasValidatedTradeSetup(currentAnalysis);
-  const hasCompleteDirectionalSetup = hasDirectionalCandidate
+  const hasCompleteDirectionalSetup = hasTradePlan || (hasDirectionalCandidate
     && currentAnalysis != null
-    && hasValidatedTradeSetup(currentAnalysis);
+    && hasValidatedTradeSetup(currentAnalysis));
   const isDevelopingResult = currentAnalysis != null
     && !isAnalysisUnavailable
     && canShowMarketRead
     && !isValidatedActionable;
   const marketRead = currentAnalysis?.marketBias ?? currentAnalysis?.analysis?.trend;
   const displayDirection = resolveAnalysisDirection(
+    currentAnalysis?.tradePlan?.direction,
     currentAnalysis?.tradeSetup?.type,
     currentAnalysis?.direction,
     marketRead,
@@ -263,13 +268,14 @@ export default function AnalysisResultScreen() {
   const pair = currentAnalysis?.pair ?? '';
   const [baseCurrency, quoteCurrency] = pairCurrencies(pair);
   const targetLevels = [
+    ...(currentAnalysis?.tradePlan ? [currentAnalysis.tradePlan.takeProfit1, currentAnalysis.tradePlan.takeProfit2].filter((level): level is number => level != null).map(String) : []),
     ...(currentAnalysis?.takeProfitLevels ?? []),
     ...(currentAnalysis?.tradeSetup?.takeProfit ? [currentAnalysis.tradeSetup.takeProfit] : []),
     ...(currentAnalysis?.tp ? [currentAnalysis.tp] : []),
   ].filter((level, index, levels) => firstAvailableLevel(level) != null && levels.indexOf(level) === index).slice(0, 2);
   const usableTargetLevels = targetLevels;
-  const entryLevel = formatInstrumentPriceText(firstAvailableLevel(currentAnalysis?.entry, currentAnalysis?.tradeSetup?.entryZone), pair);
-  const stopLevel = formatInstrumentPriceText(firstAvailableLevel(currentAnalysis?.sl, currentAnalysis?.tradeSetup?.stopLoss), pair);
+  const entryLevel = formatInstrumentPriceText(firstAvailableLevel(currentAnalysis?.tradePlan?.entry, currentAnalysis?.entry, currentAnalysis?.tradeSetup?.entryZone), pair);
+  const stopLevel = formatInstrumentPriceText(firstAvailableLevel(currentAnalysis?.tradePlan?.stopLoss, currentAnalysis?.sl, currentAnalysis?.tradeSetup?.stopLoss), pair);
   const tp1Level = formatInstrumentPriceText(usableTargetLevels[0], pair);
   const tp2Level = formatInstrumentPriceText(usableTargetLevels[1], pair);
   const shareAnalysis = currentAnalysis && !hasFullAnalysisAccess ? {
@@ -282,14 +288,14 @@ export default function AnalysisResultScreen() {
       : undefined,
   } : currentAnalysis;
   const stopDistance = currentAnalysis?.slPips ?? getPipDistance(entryLevel, stopLevel, pair);
-  const riskReward = formatRiskReward(currentAnalysis?.tradeSetup?.riskReward);
+  const riskReward = formatRiskReward(currentAnalysis?.tradePlan?.riskReward ?? currentAnalysis?.tradeSetup?.riskReward);
   const riskRewardText = riskReward === '—'
     ? 'Not calculable from available levels'
     : riskReward.includes(':') ? riskReward : `1:${riskReward}`;
   const confidence = currentAnalysis?.marketConfidence ?? currentAnalysis?.confidence ?? 0;
   const entryReadiness = Math.round(Math.max(0, Math.min(100, currentAnalysis?.entryReadiness ?? 0)));
   const readinessDirection = hasDirectionalCandidate
-    ? currentAnalysis?.tradeSetup?.type?.toUpperCase()
+    ? currentAnalysis?.tradePlan?.direction ?? currentAnalysis?.tradeSetup?.type?.toUpperCase()
     : displayDirection;
   const readinessText = isAnalysisUnavailable
     ? 'WAIT FOR CONFIRMATION'
@@ -357,7 +363,7 @@ export default function AnalysisResultScreen() {
 
   // Legacy saved analyses store entry/sl/tp directly; new shape stores
   // tradeSetup + analysis + zones.
-  const hasTradeSetup = Boolean(currentAnalysis?.tradeSetup?.type && currentAnalysis.tradeSetup.type !== 'none');
+  const hasTradeSetup = hasTradePlan || Boolean(currentAnalysis?.tradeSetup?.type && currentAnalysis.tradeSetup.type !== 'none');
 
   const saveIconScale = useSharedValue(1);
 
@@ -720,6 +726,28 @@ export default function AnalysisResultScreen() {
           </>) : null}
         </Animated.View>
 
+        {hasTradePlan && currentAnalysis?.tradePlan ? (
+          <View style={[styles.levelsCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+            <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>TRADE PLAN</Text>
+            <TradeLevelRow label="Direction" value={currentAnalysis.tradePlan.direction} color={currentAnalysis.tradePlan.direction === 'BUY' ? colors.buy : colors.sell} />
+            <View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
+            <TradeLevelRow label="Entry" value={entryLevel} />
+            <View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
+            <TradeLevelRow label="Stop Loss" value={stopLevel} color={colors.sell} />
+            <View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
+            <TradeLevelRow label="Take Profit" value={tp1Level} color={colors.buy} />
+            <View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
+            <TradeLevelRow label="Risk : Reward" value={riskRewardText} color={colors.buy} />
+            {currentAnalysis.conviction === 'LOW'
+              ? <Text style={[styles.reasoningText, { color: colors.sell }]}>{/LOW QUALITY.*SKIP/i.test(currentAnalysis.verdictReason || '')
+                ? currentAnalysis.verdictReason
+                : `${currentAnalysis.verdictReason ? `${currentAnalysis.verdictReason} ` : ''}LOW QUALITY — RECOMMENDED: SKIP.`}</Text>
+              : currentAnalysis.verdictReason
+                ? <Text style={[styles.reasoningText, { color: colors.textSecondary }]}>{currentAnalysis.verdictReason}</Text>
+                : null}
+          </View>
+        ) : null}
+
         <View style={[styles.segmentedControl, { backgroundColor: colors.surface, borderColor: colors.cardBorder }]}>
           <TouchableOpacity style={[styles.segment, activeTab === 'analysis' && { backgroundColor: colors.card }]} onPress={() => selectTab('analysis')}><Text style={[styles.segmentText, { color: activeTab === 'analysis' ? colors.text : colors.textSecondary }]}>Our Analysis</Text></TouchableOpacity>
           <TouchableOpacity style={[styles.segment, activeTab === 'insights' && { backgroundColor: colors.card }]} onPress={() => selectTab('insights')}><Text style={[styles.segmentText, { color: activeTab === 'insights' ? colors.text : colors.textSecondary }]}>Insights</Text></TouchableOpacity>
@@ -732,14 +760,14 @@ export default function AnalysisResultScreen() {
               {hasDirectionalCandidate && !isValidatedActionable ? (
                 <Text style={[styles.bodyMuted, { color: colors.textSecondary }]}>
                   {hasCompleteDirectionalSetup
-                    ? `${currentAnalysis.tradeSetup!.type.toUpperCase()} plan — Entry ${entryLevel}, SL ${stopLevel}, TP1 ${tp1Level}. Verify these chart levels against current price and your risk plan.`
-                    : `${currentAnalysis.tradeSetup!.type.toUpperCase()} direction identified, but a complete entry, stop and target could not all be verified from the chart.`}
+                    ? `${tradeDirection} plan — Entry ${entryLevel}, SL ${stopLevel}, TP1 ${tp1Level}. Verify these chart levels against current price and your risk plan.`
+                    : `${tradeDirection} direction identified, but a complete entry, stop and target could not all be verified from the chart.`}
                 </Text>
               ) : null}
               {hasDirectionalBiasOnly ? <Text style={[styles.bodyMuted, { color: colors.textSecondary }]}>{`Directional call: ${directionalCallLabel}. The chart supports this direction, but entry, stop-loss, and take-profit levels are not validated. Do not enter until a valid setup and trigger are confirmed.`}</Text> : null}
               {currentPrice != null ? <View style={styles.confidenceLine}><Text style={[styles.bodyMuted, { color: colors.textSecondary }]}>Latest visible price (screenshot)</Text><Text style={[styles.confidenceText, { color: colors.text }]}>{marketEntryText}</Text></View> : null}
             </Animated.View>
-            {hasDirectionalCandidate ? (
+            {hasDirectionalCandidate && !hasTradePlan ? (
               <View style={[styles.levelsCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
                 <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>{isValidatedActionable ? 'TRADE LEVELS' : 'CONDITIONAL LEVELS'}</Text>
                 <TradeLevelRow label="Entry" value={entryLevel === '—' ? 'Not established' : entryLevel} /><View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />

@@ -71,6 +71,20 @@ export interface ChartAnalysisResult {
     take_profit_levels?: string[];
     risk_reward: number | string;
   };
+  tradePlan?: {
+    direction: 'BUY' | 'SELL';
+    entryType: 'market' | 'trigger';
+    triggerEvent: string | null;
+    entry: number;
+    stopLoss: number;
+    takeProfit1: number;
+    takeProfit2: number | null;
+    riskReward: number;
+  } | null;
+  verdict?: 'TRADE_PLAN' | 'CONDITIONAL_PLAN' | 'NO_TRADE';
+  conviction?: 'HIGH' | 'MEDIUM' | 'LOW' | null;
+  verdictReason?: string;
+  noTradeReason?: string | null;
   marketBias?: 'bullish' | 'bearish' | 'neutral' | 'mixed';
   marketBiasConfidence?: number;
   // Canonical analysis scores
@@ -239,6 +253,31 @@ export function normalizeChartTradeSetup(payload: unknown): ChartAnalysisResult[
   };
 }
 
+export function normalizeChartTradePlan(payload: unknown): NonNullable<ChartAnalysisResult['tradePlan']> | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const plan = (payload as Record<string, unknown>).trade_plan;
+  if (!plan || typeof plan !== 'object' || Array.isArray(plan)) return null;
+  const raw = plan as Record<string, unknown>;
+  const direction = raw.direction;
+  const entryType = raw.entry_type;
+  const prices = [raw.entry, raw.stop_loss, raw.take_profit_1, raw.risk_reward].map(Number);
+  if ((direction !== 'BUY' && direction !== 'SELL')
+    || (entryType !== 'market' && entryType !== 'trigger')
+    || !prices.every((price) => Number.isFinite(price) && price > 0)) return null;
+  const takeProfit2 = raw.take_profit_2 == null ? null : Number(raw.take_profit_2);
+  if (takeProfit2 != null && (!Number.isFinite(takeProfit2) || takeProfit2 <= 0)) return null;
+  return {
+    direction,
+    entryType,
+    triggerEvent: typeof raw.trigger_event === 'string' ? raw.trigger_event : null,
+    entry: prices[0],
+    stopLoss: prices[1],
+    takeProfit1: prices[2],
+    takeProfit2,
+    riskReward: prices[3],
+  };
+}
+
 export function normalizeLatestVisiblePrice(payload: unknown): number | undefined {
   if (!payload || typeof payload !== 'object') return undefined;
   const root = payload as Record<string, unknown>;
@@ -360,6 +399,11 @@ async function sendChartAnalysis(path: string, body: Record<string, unknown>): P
         liquidity: payload.zones?.liquidity || 'not_clear',
       },
       trade_setup: tradeSetup,
+      tradePlan: normalizeChartTradePlan(payload),
+      verdict: ['TRADE_PLAN', 'CONDITIONAL_PLAN', 'NO_TRADE'].includes(payload.verdict) ? payload.verdict : undefined,
+      conviction: ['HIGH', 'MEDIUM', 'LOW'].includes(payload.conviction) ? payload.conviction : payload.conviction === null ? null : undefined,
+      verdictReason: typeof payload.verdict_reason === 'string' ? payload.verdict_reason : undefined,
+      noTradeReason: typeof payload.no_trade_reason === 'string' ? payload.no_trade_reason : payload.no_trade_reason === null ? null : undefined,
       marketBias: payload.marketBias || 'neutral',
       marketBiasConfidence: Math.max(0, Math.min(100, Number(payload.marketBiasConfidence) || 0)),
       tradeStatus: payload.tradeStatus || 'no_setup',

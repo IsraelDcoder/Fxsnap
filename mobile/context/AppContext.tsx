@@ -67,6 +67,20 @@ export interface AnalysisResult {
     takeProfit: string;
     riskReward: number | string;
   };
+  tradePlan?: {
+    direction: 'BUY' | 'SELL';
+    entryType: 'market' | 'trigger';
+    triggerEvent: string | null;
+    entry: number;
+    stopLoss: number;
+    takeProfit1: number;
+    takeProfit2: number | null;
+    riskReward: number;
+  } | null;
+  verdict?: 'TRADE_PLAN' | 'CONDITIONAL_PLAN' | 'NO_TRADE';
+  conviction?: 'HIGH' | 'MEDIUM' | 'LOW' | null;
+  verdictReason?: string;
+  noTradeReason?: string | null;
   marketBias?: 'bullish' | 'bearish' | 'neutral' | 'mixed';
   marketBiasConfidence?: number;
   // Canonical analysis scores exposed by the server

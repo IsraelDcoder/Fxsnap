@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { normalizeChartTradeSetup, normalizeLatestVisiblePrice, type ChartAnalysisResult } from '../services/chartDetection';
+import { normalizeChartTradePlan, normalizeChartTradeSetup, normalizeLatestVisiblePrice, type ChartAnalysisResult } from '../services/chartDetection';
 import { buildAnalysisResult, formatDevelopingNote, formatRiskReward, formatTradeReadiness, getDirectionalCallLabel, getMarketDevelopmentPlan, getMissingTradeLevelsExplanation, getTradeReadinessLabel, hasValidatedTradeSetup, isUnavailableAnalysisValue } from '../services/analysisResult';
 
 function chartResult(overrides: Partial<ChartAnalysisResult> = {}): ChartAnalysisResult {
@@ -177,6 +177,19 @@ test('maps a backend API payload through client normalization into visible resul
       take_profit_levels: ['66,000', '65,000'],
       risk_reward: 2,
     },
+    trade_plan: {
+      direction: 'SELL',
+      entry_type: 'trigger',
+      trigger_event: 'rejection_at_level',
+      entry: 68000,
+      stop_loss: 69000,
+      take_profit_1: 66000,
+      take_profit_2: 65000,
+      risk_reward: 2,
+    },
+    verdict: 'CONDITIONAL_PLAN' as const,
+    conviction: 'LOW' as const,
+    verdict_reason: 'LOW QUALITY — RECOMMENDED: SKIP.',
   };
   const tradeSetup = normalizeChartTradeSetup(apiPayload);
   const result = buildAnalysisResult(chartResult({
@@ -190,6 +203,10 @@ test('maps a backend API payload through client normalization into visible resul
     reasoning: apiPayload.reasoning,
     analysis: apiPayload.analysis,
     trade_setup: tradeSetup,
+    tradePlan: normalizeChartTradePlan(apiPayload),
+    verdict: apiPayload.verdict,
+    conviction: apiPayload.conviction,
+    verdictReason: apiPayload.verdict_reason,
   }), 'BTC/USD');
 
   assert.equal(result.status, 'no_trade');
@@ -201,6 +218,19 @@ test('maps a backend API payload through client normalization into visible resul
   assert.equal(result.tradeSetup?.stopLoss, '69,000');
   assert.equal(result.tradeSetup?.takeProfit, '66,000');
   assert.equal(result.tradeSetup?.riskReward, 2);
+  assert.deepEqual(result.tradePlan, {
+    direction: 'SELL',
+    entryType: 'trigger',
+    triggerEvent: 'rejection_at_level',
+    entry: 68000,
+    stopLoss: 69000,
+    takeProfit1: 66000,
+    takeProfit2: 65000,
+    riskReward: 2,
+  });
+  assert.equal(result.verdict, 'CONDITIONAL_PLAN');
+  assert.equal(result.conviction, 'LOW');
+  assert.equal(result.verdictReason, 'LOW QUALITY — RECOMMENDED: SKIP.');
   assert.deepEqual(result.takeProfitLevels, ['66,000', '65,000']);
   assert.deepEqual(result.reasoning, apiPayload.reasoning);
   assert.equal(result.analysis?.notes, 'Wait for price to retest resistance.');
