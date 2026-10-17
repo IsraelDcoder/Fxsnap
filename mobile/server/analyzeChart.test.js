@@ -292,6 +292,10 @@ test('failed latest-price validation strips candidate levels and returns an expl
   assert.equal(held.status, 'no_trade');
   assert.equal(held.trade_setup.type, 'none');
   assert.equal(held.trade_setup.entry_zone, 'none');
+  assert.equal(held.verdict, 'NO_TRADE');
+  assert.equal(held.conviction, null);
+  assert.equal(held.trade_plan, null);
+  assert.match(held.no_trade_reason, /No trade:/i);
   assert.equal(held.tradeDecision, 'NONE');
   assert.match(held.reasons.join(' '), /entry is stale/i);
 });
@@ -904,30 +908,16 @@ test('vision instructions reserve invalid_image for clearly non-chart or unrecog
   assert.ok(prompt.length < 6000, `Expected a compact prompt, got ${prompt.length} characters`);
   assert.match(prompt, /Pair: use the chart label/i);
   assert.match(prompt, /Timeframe: use the chart label/i);
-  assert.match(prompt, /Indicators: report only clearly visible ones/i);
   assert.match(prompt, /Cover forex, crypto, metals, indices and commodities/i);
-  assert.match(prompt, /rightmost candle against a legible scale/i);
-  assert.match(prompt, /never use an earlier close/i);
-  assert.match(prompt, /forming, completed or unknown/i);
-  assert.match(prompt, /screenshot is live/i);
-  assert.match(prompt, /invalid_image only for a clearly non-chart/i);
-  assert.match(prompt, /chart_quality=poor and no_trade/i);
-  assert.match(prompt, /status=no_trade/i);
-  assert.match(prompt, /Support and resistance define setup direction; confirmation defines whether to enter now/i);
-  assert.match(prompt, /buy entry at\/near support, SL beyond the visible support-side swing, TP1 at resistance/i);
-  assert.match(prompt, /sell entry at\/near resistance, SL beyond the visible resistance-side swing, TP1 at support/i);
-  assert.match(prompt, /If current price is between boundaries, plan from the nearer boundary/i);
-  assert.match(prompt, /Do not require consolidation or a confirmed trend to describe a candidate/i);
-  assert.match(prompt, /return the best supported conditional BUY or SELL plan/i);
-  assert.match(prompt, /reserve an actionable BUY\/SELL decision for setups whose trigger and current-price checks pass/i);
-  assert.match(prompt, /Compute R:R from these exact entry\/SL\/TP1 levels/i);
-  assert.match(prompt, /candidate levels/i);
-  assert.match(prompt, /entry, SL and TP1/i);
-  assert.match(prompt, /Calculate risk_reward from the same entry, SL and TP1/i);
-  assert.match(prompt, /server validates actionability and recalculates R:R/i);
-  assert.match(prompt, /"take_profit_levels":\["TP1","optional TP2"\]/);
-  assert.match(prompt, /"setup_status":"valid\|missed\|invalidated\|unclear\|unknown"/);
-  assert.match(prompt, /"risk_reward":null/);
+  assert.match(prompt, /Never claim screenshot prices are live/i);
+  assert.match(prompt, /Follow this order exactly/i);
+  assert.match(prompt, /Identify nearest visible support and resistance and record their exact numeric prices/i);
+  assert.match(prompt, /always provide a BUY or SELL trade_plan/i);
+  assert.match(prompt, /Never output the bare phrase "wait for confirmation"/i);
+  assert.match(prompt, /Required legacy shapes: analysis=\{trend,market_structure,structure_bias/i);
+  assert.match(prompt, /do not put new verdict fields inside trade_setup/i);
+  assert.match(prompt, /"verdict":"TRADE_PLAN\|CONDITIONAL_PLAN\|NO_TRADE"/);
+  assert.match(prompt, /"trade_plan":\{"direction":"BUY\|SELL"/);
 });
 
 test('missing chart visibility metadata is not treated as positive evidence', () => {
@@ -1059,6 +1049,125 @@ test('provider responses require chart, visible analysis, and an explanation bef
   assert.equal(hasRequiredAnalysisPayload({ status: 'invalid_image' }), true);
   assert.equal(hasRequiredAnalysisPayload({ status: 'no_trade' }), false);
   assert.equal(hasRequiredAnalysisPayload({}), false);
+});
+
+test('verdict-shaped provider responses normalize when legacy analysis details are omitted', () => {
+  const retryPayload = {
+    status: 'success',
+    chart: {
+      is_chart: true,
+      pair: 'EURUSD',
+      chart_quality: 'good',
+      price_scale_visible: true,
+      candles_visible: true,
+      has_enough_candles: true,
+      latest_visible_price: 1.105,
+      current_price_source: 'visible_price_marker',
+      current_candle_status: 'completed',
+      latest_candle_timestamp: null,
+    },
+    analysis: { notes: 'Readable range with clear support and resistance.' },
+    levels: { support: [1.1], resistance: [1.11] },
+    bias: 'bullish',
+    price_position: 'mid_range',
+    setup: 'range_middle',
+    verdict: 'CONDITIONAL_PLAN',
+    conviction: 'LOW',
+    verdict_reason: 'LOW QUALITY — RECOMMENDED: SKIP. Support 1.1 and resistance 1.11; price is mid_range with a range_middle setup.',
+    trade_plan: {
+      direction: 'BUY',
+      entry_type: 'trigger',
+      trigger_event: 'rejection_at_level',
+      entry: 1.1,
+      stop_loss: 1.099,
+      take_profit_1: 1.11,
+      take_profit_2: null,
+      risk_reward: 10,
+    },
+    reasoning: ['Support 1.1 and resistance 1.11 are visible.'],
+  };
+
+  assert.equal(hasRequiredAnalysisPayload(retryPayload), true);
+  const canonical = canonicalizeRawAnalysis(retryPayload);
+  const parsed = TradeAnalysisSchema.safeParse(canonical);
+  assert.equal(parsed.success, true, JSON.stringify(parsed.error?.flatten()));
+  const normalized = normalizeAnalysis(parsed.data);
+  assert.deepEqual(normalized.trade_plan, {
+    direction: 'BUY',
+    entry_type: 'trigger',
+    trigger_event: 'rejection_at_level',
+    entry: 1.1,
+    stop_loss: 1.099,
+    take_profit_1: 1.11,
+    take_profit_2: null,
+    risk_reward: 10,
+  });
+
+  const firstPassPayload = {
+    status: 'success',
+    chart: retryPayload.chart,
+    analysis: { notes: 'Readable range with clear support and resistance.' },
+    zones: { support: '1.1', resistance: '1.11' },
+    support_resistance: { support: ['1.1'], resistance: ['1.11'] },
+    reasoning: ['Support 1.1 and resistance 1.11 are visible.'],
+    trade_setup: { price_position: 'mid_range', setup: 'range_middle', trigger: 'pending' },
+  };
+  assert.equal(hasRequiredAnalysisPayload(firstPassPayload), true);
+  const firstPass = canonicalizeRawAnalysis(firstPassPayload);
+  assert.deepEqual(firstPass.levels, { support: [1.1], resistance: [1.11] });
+  assert.equal(firstPass.price_position, 'mid_range');
+  assert.equal(firstPass.setup, 'range_middle');
+  const firstPassParsed = TradeAnalysisSchema.safeParse(firstPass);
+  assert.equal(firstPassParsed.success, true, JSON.stringify(firstPassParsed.error?.flatten()));
+  const fallbackPlan = normalizeAnalysis(firstPassParsed.data).trade_plan;
+  assert.equal(fallbackPlan.direction, 'BUY');
+  assert.equal(fallbackPlan.entry_type, 'trigger');
+  assert.equal(fallbackPlan.entry, 1.1);
+  assert.equal(fallbackPlan.take_profit_1, 1.11);
+  assert.equal(fallbackPlan.stop_loss, 1.09999);
+  assert.equal(fallbackPlan.risk_reward, 1000);
+});
+
+test('verdict-only provider response without legacy status or chart fields normalizes to a complete plan', () => {
+  const raw = {
+    pair: 'XAUUSD',
+    levels: { support: [4164.171], resistance: [4178.461] },
+    bias: 'neutral',
+    price_position: 'mid_range',
+    setup: 'range_middle',
+    verdict: 'NO_TRADE',
+    conviction: null,
+    verdict_reason: 'Support 4164.171 and resistance 4178.461 frame price in mid_range with a range_middle setup.',
+    trade_plan: null,
+    no_trade_reason: 'The chart levels are unclear; no trade.',
+  };
+
+  assert.equal(hasRequiredAnalysisPayload(raw), true);
+  const canonical = canonicalizeRawAnalysis(raw);
+  assert.equal(canonical.zones.support, '4164.171');
+  assert.equal(canonical.zones.resistance, '4178.461');
+  assert.deepEqual(canonical.support_resistance, {
+    support: ['4164.171'],
+    resistance: ['4178.461'],
+  });
+  const parsed = TradeAnalysisSchema.safeParse(canonical);
+  assert.equal(parsed.success, true, JSON.stringify(parsed.error?.flatten()));
+
+  const normalized = normalizeAnalysis(parsed.data);
+  assert.equal(normalized.status, 'success');
+  assert.equal(normalized.verdict, 'CONDITIONAL_PLAN');
+  assert.equal(normalized.conviction, 'LOW');
+  assert.equal(normalized.trade_plan.direction, 'BUY');
+  assert.equal(normalized.trade_plan.entry_type, 'trigger');
+  assert.equal(normalized.trade_plan.entry, 4164.171);
+  assert.equal(normalized.trade_plan.stop_loss, 4164.16);
+  assert.equal(normalized.trade_plan.take_profit_1, 4178.461);
+  assert.equal(
+    normalized.trade_plan.risk_reward,
+    Math.round((Math.abs(4178.461 - 4164.171) / Math.abs(4164.171 - 4164.16)) * 100) / 100,
+  );
+  assert.equal(normalized.trade_setup.type, 'buy');
+  assert.equal(normalized.trade_setup.entry_zone, '4164.171');
 });
 
 test('vision provider failures and malformed JSON remain distinct errors', async () => {
@@ -1354,7 +1463,7 @@ test('partial directional responses pass normalization without becoming actionab
 
 test('authenticated chart upload returns normalized candidate levels through the API', async () => {
   const providerAnalysis = {
-    status: 'no_trade',
+    status: 'success',
     chart: {
       is_chart: true,
       pair: 'EURUSD',
@@ -1377,7 +1486,24 @@ test('authenticated chart upload returns normalized candidate levels through the
       notes: 'A bullish candidate is present but not validated.',
       reasoning: ['Higher highs are visible.'],
     },
-    zones: { support: '100', resistance: '110', liquidity: 'not_clear' },
+    zones: { support: '1.10000', resistance: '1.10200', liquidity: 'not_clear' },
+    levels: { support: [1.1], resistance: [1.102, 1.103] },
+    bias: 'bullish',
+    price_position: 'at_support',
+    setup: 'trend_pullback',
+    verdict: 'TRADE_PLAN',
+    conviction: 'HIGH',
+    verdict_reason: 'BUY plan uses support 1.10000 and resistance 1.10200; price is at_support with a trend_pullback setup.',
+    trade_plan: {
+      direction: 'BUY',
+      entry_type: 'market',
+      trigger_event: null,
+      entry: 1.1,
+      stop_loss: 1.099,
+      take_profit_1: 1.102,
+      take_profit_2: 1.103,
+      risk_reward: 2,
+    },
     trade_setup: {
       type: 'buy',
       entry_zone: '1.10000',
@@ -1487,7 +1613,7 @@ test('authenticated chart upload returns normalized candidate levels through the
     const responseBody = await postAnalysis();
     assert.equal(responseBody.statusCode, 200);
     assert.equal(providerCalls, 1);
-    assert.equal(responseBody.body.status, 'no_trade');
+    assert.equal(responseBody.body.status, 'success');
     assert.equal(responseBody.body.analysis.volume, 'high');
     assert.equal(responseBody.body.trade_setup.type, 'buy');
     assert.equal(responseBody.body.trade_setup.entry_zone, '1.10000');

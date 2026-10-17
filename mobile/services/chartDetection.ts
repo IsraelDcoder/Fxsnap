@@ -353,6 +353,7 @@ async function sendChartAnalysis(path: string, body: Record<string, unknown>): P
     }
 
     const tradeSetup = normalizeChartTradeSetup(payload);
+    const tradePlan = normalizeChartTradePlan(payload);
     const takeProfitLevels = tradeSetup.take_profit_levels ?? [];
     const rawSeries = payload.price_series ?? payload.chart_data?.price_series;
     const priceSeries = Array.isArray(rawSeries)
@@ -366,7 +367,17 @@ async function sendChartAnalysis(path: string, body: Record<string, unknown>): P
       }).filter(Number.isFinite)
       : [];
     const latestVisiblePrice = normalizeLatestVisiblePrice(payload);
-    const supportResistance = payload.support_resistance ?? {};
+    const suppliedSupportResistance = payload.support_resistance ?? {};
+    const supportLevels = Array.isArray(suppliedSupportResistance.support) && suppliedSupportResistance.support.length
+      ? suppliedSupportResistance.support.map(String)
+      : tradePlan?.direction === 'BUY' ? [String(tradePlan.entry)] : [];
+    const resistanceLevels = Array.isArray(suppliedSupportResistance.resistance) && suppliedSupportResistance.resistance.length
+      ? suppliedSupportResistance.resistance.map(String)
+      : tradePlan?.direction === 'BUY' ? [String(tradePlan.takeProfit1)] : [];
+    const resolvedSupportResistance = {
+      support: supportLevels.length ? supportLevels : tradePlan?.direction === 'SELL' ? [String(tradePlan.takeProfit1)] : [],
+      resistance: resistanceLevels.length ? resistanceLevels : tradePlan?.direction === 'SELL' ? [String(tradePlan.entry)] : [],
+    };
 
     return {
       status,
@@ -381,8 +392,8 @@ async function sendChartAnalysis(path: string, body: Record<string, unknown>): P
           ? payload.analysis.reasoning.map((item: unknown) => String(item).trim()).filter(Boolean).slice(0, 5)
           : [],
       supportResistance: {
-        support: Array.isArray(supportResistance.support) ? supportResistance.support.map(String) : [],
-        resistance: Array.isArray(supportResistance.resistance) ? supportResistance.resistance.map(String) : [],
+        support: resolvedSupportResistance.support,
+        resistance: resolvedSupportResistance.resistance,
       },
       analysis: {
         trend: payload.analysis?.trend || 'neutral',
@@ -399,7 +410,7 @@ async function sendChartAnalysis(path: string, body: Record<string, unknown>): P
         liquidity: payload.zones?.liquidity || 'not_clear',
       },
       trade_setup: tradeSetup,
-      tradePlan: normalizeChartTradePlan(payload),
+      tradePlan,
       verdict: ['TRADE_PLAN', 'CONDITIONAL_PLAN', 'NO_TRADE'].includes(payload.verdict) ? payload.verdict : undefined,
       conviction: ['HIGH', 'MEDIUM', 'LOW'].includes(payload.conviction) ? payload.conviction : payload.conviction === null ? null : undefined,
       verdictReason: typeof payload.verdict_reason === 'string' ? payload.verdict_reason : undefined,

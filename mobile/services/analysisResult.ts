@@ -98,7 +98,7 @@ export function getMarketDevelopmentPlan(
     ? 'Wait for a confirmed bullish entry or retest.'
     : bias === 'bearish'
       ? 'Wait for a confirmed bearish entry or retest.'
-      : 'Wait for a clear break, rejection, or directional confirmation.');
+      : 'Wait for a clear break, rejection, or directional entry trigger.');
   const structure = analysis.analysis?.structure?.trim();
   const context = includeFullContext ? analysis.analysis?.notes?.trim() : undefined;
   const details = [structure, context]
@@ -113,11 +113,11 @@ export function formatDevelopingNote(note: string): string {
     .replace(/\bno[_ -]trade\b/gi, 'hold for now')
     .replace(/\bno[_ -]setup\b/gi, 'setup is still developing')
     .replace(/\bsetup (?:is )?not identified\b/gi, 'setup is still developing')
-    .replace(/\bnot a validated trade setup\b/gi, 'a setup still awaiting confirmation')
-    .replace(/\b(?:risk\s*\/\s*reward|rr)\s+(?:cannot|can't|could not)\s+be calculated(?:\s+without complete levels)?/gi, 'Risk/reward will be calculated when the price levels are confirmed')
-    .replace(/\bcould not be established\b/gi, 'awaiting chart confirmation')
-    .replace(/\bnot established\b/gi, 'awaiting confirmation')
-    .replace(/\bnot calculable\b/gi, 'calculated when levels are confirmed');
+    .replace(/\bnot a validated trade setup\b/gi, 'a setup still awaiting an entry trigger')
+    .replace(/\b(?:risk\s*\/\s*reward|rr)\s+(?:cannot|can't|could not)\s+be calculated(?:\s+without complete levels)?/gi, 'Risk/reward needs complete chart levels')
+    .replace(/\bcould not be established\b/gi, 'not available from the chart')
+    .replace(/\bnot established\b/gi, 'not available from the chart')
+    .replace(/\bnot calculable\b/gi, 'not available from the chart');
 }
 
 export function formatRiskReward(value: unknown): string {
@@ -155,14 +155,14 @@ export function getTradeReadinessLabel(
     && isValidPrice(takeProfit)
     && getRiskRewardRatio(riskReward) != null;
   if (normalizedDirection !== 'BUY' && normalizedDirection !== 'SELL') {
-    return 'WAIT FOR CONFIRMATION';
+    return 'HOLD';
   }
   if (tradeStatus === 'actionable' && hasCompleteSetup) return normalizedDirection;
   if (tradeStatus && tradeStatus.startsWith('waiting_')) {
     return hasCompleteSetup ? `${normalizedDirection} SETUP` : `${normalizedDirection} BIAS`;
   }
   if (tradeStatus === 'no_setup') return `${normalizedDirection} BIAS`;
-  return 'WAIT FOR CONFIRMATION';
+  return 'HOLD';
 }
 
 export function formatTradeReadiness(
