@@ -1,4 +1,5 @@
-import { LEARNING_CATEGORIES, getLearningLesson } from '@/data/learningContent';
+import { getLearningLesson } from '@/data/learningContent';
+import { getLearningLevelForLesson, isLearningLevelUnlocked, LEARNING_CURRICULUM } from '@/data/learningCurriculum';
 
 export const UNLOCK_MODE: 'journey' | 'free' = 'journey';
 
@@ -21,22 +22,20 @@ export function getLearningPathAppearance(index: number) {
 }
 
 export function getLearningJourneyLessons() {
-  return LEARNING_CATEGORIES.flatMap((category) => category.groups.flatMap((group) => (
-    group.lessonIds.map(getLearningLesson).filter((lesson): lesson is NonNullable<typeof lesson> => Boolean(lesson))
+  return LEARNING_CURRICULUM.flatMap((level) => level.units.flatMap((unit) => (
+    unit.lessonIds.map(getLearningLesson).filter((lesson): lesson is NonNullable<typeof lesson> => Boolean(lesson))
   )));
 }
 
 export function getLearningPathLessons(categoryId: string) {
-  const category = LEARNING_CATEGORIES.find((item) => item.id === categoryId);
-  if (!category) return [];
-  return category.groups.flatMap((group) => (
-    group.lessonIds.map(getLearningLesson).filter((lesson): lesson is NonNullable<typeof lesson> => Boolean(lesson))
-  ));
+  return getLearningJourneyLessons().filter((lesson) => lesson.categoryId === categoryId);
 }
 
 export function isLearningLessonUnlocked(lessonId: string, completedLessonIds: string[]) {
   if (UNLOCK_MODE === 'free') return true;
   if (completedLessonIds.includes(lessonId)) return true;
+  const level = getLearningLevelForLesson(lessonId);
+  if (!level || !isLearningLevelUnlocked(level.id, completedLessonIds)) return false;
   return areLearningPredecessorsComplete(lessonId, completedLessonIds);
 }
 

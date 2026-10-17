@@ -18,6 +18,7 @@ import { AmbientBackdrop } from '@/components/AmbientBackdrop';
 import { useColors } from '@/hooks/useColors';
 import { getEstimatedLessonMinutes, getLearningLesson, LEARNING_CATEGORIES, LEARNING_LESSONS } from '@/data/learningContent';
 import { getCurrentLearningStreak, getLearningProgress, type LearningProgress } from '@/services/learningProgress';
+import { getLearningLevelForLesson } from '@/data/learningCurriculum';
 import {
   getCurrentLearningLesson,
   getLearningJourneyLessons,
@@ -72,6 +73,7 @@ export default function LearningHubScreen({ previewMode = false }: { previewMode
 
   const completedLessonIds = progress?.completedLessonIds ?? [];
   const continueLesson = progress ? getCurrentLearningLesson(completedLessonIds) : undefined;
+  const currentLevel = continueLesson ? getLearningLevelForLesson(continueLesson.id) : undefined;
   const lessonJourney = getLearningJourneyLessons();
   const continueCategory = continueLesson
     ? LEARNING_CATEGORIES.find((category) => category.id === continueLesson.categoryId)
@@ -205,7 +207,7 @@ export default function LearningHubScreen({ previewMode = false }: { previewMode
                         <Text style={styles.journeyDuration}>{getEstimatedLessonMinutes(continueLesson)} MIN</Text>
                       </View>
                       <Text style={styles.journeyTitle}>{continueLesson.title}</Text>
-                      <Text style={styles.journeySubtitle}>You&apos;re on Chapter {continueChapter} • {continueCategory.title}</Text>
+                      <Text style={styles.journeySubtitle}>Level {currentLevel?.number ?? 1}: {currentLevel?.title ?? 'Trading Foundations'} · Chapter {continueChapter} • {continueCategory.title}</Text>
                       <View style={styles.miniPath}>
                         {[
                           ...continuePathLessons.slice(Math.max(0, continueChapter - 3), continueChapter - 1),

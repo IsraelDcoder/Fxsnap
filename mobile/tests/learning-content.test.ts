@@ -20,6 +20,8 @@ test('publishes all six populated Learning Hub categories', () => {
     assert.ok(category.description.length > 0);
     assert.ok(category.groups.length > 0);
     assert.ok(category.groups.every((group) => group.lessonIds.length > 0), `${category.title} has an empty topic group`);
+    const categoryLessonCount = category.groups.reduce((count, group) => count + group.lessonIds.length, 0);
+    assert.ok(categoryLessonCount >= 10, `${category.title} should have a substantial learning path`);
   }
 });
 

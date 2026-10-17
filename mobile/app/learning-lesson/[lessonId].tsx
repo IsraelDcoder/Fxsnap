@@ -43,6 +43,7 @@ import {
   markLessonCompleted,
   recordLessonOpened,
   saveLessonPosition,
+  saveLessonStepPosition,
   toggleLessonBookmark,
   type LearningProgress,
 } from '@/services/learningProgress';
@@ -54,6 +55,7 @@ import {
   getNextLearningLesson,
   isLearningLessonUnlocked,
 } from '@/services/learningJourney';
+import { getLearningLessonSteps, getLearningLevelForLesson } from '@/data/learningCurriculum';
 
 type FeatherIconName = keyof typeof Feather.glyphMap;
 
@@ -117,6 +119,9 @@ export default function LearningLessonScreen() {
         setProgress(value);
         setProgressError(null);
         lastSavedPosition.current = value.lessonPositions[lesson.id] ?? 0;
+        if (lesson.steps?.length) {
+          setStepIndex(Math.min(value.stepPositions[lesson.id] ?? 0, getLearningLessonSteps(lesson).length - 1));
+        }
         restorePending.current = !lesson.steps?.length && lastSavedPosition.current > 0;
         setProgressLoading(false);
       })
@@ -162,7 +167,8 @@ export default function LearningLessonScreen() {
   const categoryPosition = category ? Math.max(0, LEARNING_CATEGORIES.findIndex((item) => item.id === category.id)) : 0;
   const pathAccent = getLearningPathAppearance(categoryPosition).accent;
   const knowledgeCheck = lesson ? getLessonKnowledgeCheck(lesson) : null;
-  const steps = lesson?.steps ?? [];
+  const steps = useMemo(() => lesson ? getLearningLessonSteps(lesson) : [], [lesson]);
+  const learningLevel = lesson ? getLearningLevelForLesson(lesson.id) : undefined;
   const hasSteps = steps.length > 0;
   const currentStep = steps[stepIndex];
   const stepButtonLabel = currentStep?.type === 'check'
@@ -202,7 +208,25 @@ export default function LearningLessonScreen() {
       setStepCheckResult(null);
       return;
     }
-    setStepIndex((index) => Math.min(index + 1, steps.length - 1));
+    if (currentStep.type === 'check' && stepCheckResult === 'incorrect') {
+      setSelectedStepOption(null);
+      setStepCheckResult(null);
+      setWrongStepAttempts(0);
+      setRevealCorrectOption(false);
+      return;
+    }
+    const nextStepIndex = Math.min(stepIndex + 1, steps.length - 1);
+    setStepIndex(nextStepIndex);
+    if (lesson) {
+      void saveLessonStepPosition(lesson.id, nextStepIndex)
+        .then((value) => {
+          setProgress(value);
+          setProgressError(null);
+        })
+        .catch((error: unknown) => {
+          setProgressError(error instanceof Error ? error.message : 'Lesson step progress could not be saved.');
+        });
+    }
     setSelectedStepOption(null);
     setStepCheckResult(null);
     setWrongStepAttempts(0);
@@ -400,7 +424,7 @@ export default function LearningLessonScreen() {
           <Text style={[styles.headerLabel, { color: colors.textSecondary }]} numberOfLines={1}>{category.title}</Text>
           <Text style={[styles.headerProgressText, { color: pathAccent }]} numberOfLines={1}>
             {hasSteps
-              ? `STEP ${stepIndex + 1} OF ${steps.length} · ${lesson.topicGroup.toUpperCase()}`
+              ? `LEVEL ${learningLevel?.number ?? 1} OF 20 · STEP ${stepIndex + 1} OF ${steps.length}`
               : `LESSON ${lessonPosition.index} OF ${lessonPosition.total}`}
           </Text>
         </View>

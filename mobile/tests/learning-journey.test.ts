@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { LEARNING_CATEGORIES } from '../data/learningContent';
+import { LEARNING_CURRICULUM } from '../data/learningCurriculum';
 import {
   getLearningJourneyLessons,
   getLearningPathLessons,
@@ -15,7 +16,7 @@ const journey = getLearningJourneyLessons();
 test('uses curriculum category and lesson order for the journey', () => {
   assert.deepEqual(
     journey.map((lesson) => lesson.id),
-    LEARNING_CATEGORIES.flatMap((category) => category.groups.flatMap((group) => group.lessonIds)),
+    LEARNING_CURRICULUM.flatMap((level) => level.units.flatMap((unit) => unit.lessonIds)),
   );
 });
 
@@ -45,7 +46,7 @@ test('path lessons follow their existing grouped lesson order', () => {
   const category = LEARNING_CATEGORIES[0];
   assert.deepEqual(
     getLearningPathLessons(category.id).map((lesson) => lesson.id),
-    category.groups.flatMap((group) => group.lessonIds),
+    journey.filter((lesson) => lesson.categoryId === category.id).map((lesson) => lesson.id),
   );
 });
 

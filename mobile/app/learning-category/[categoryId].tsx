@@ -34,6 +34,7 @@ import {
   isLearningLessonUnlocked,
   isLearningPathUnlocked,
 } from '@/services/learningJourney';
+import { getLearningLevelForLesson } from '@/data/learningCurriculum';
 
 const PATH_NODE_X = [22, 50, 78, 50] as const;
 const PATH_ROW_HEIGHT = 112;
@@ -71,7 +72,9 @@ export default function LearningCategoryScreen() {
   const completedLessonIds = progress?.completedLessonIds ?? [];
   const pathUnlocked = Boolean(category && progress && isLearningPathUnlocked(category.id, completedLessonIds));
   const completedCount = lessons.filter((lesson) => completedLessonIds.includes(lesson.id)).length;
-  const currentLesson = lessons.find((lesson) => !completedLessonIds.includes(lesson.id));
+  const currentLesson = lessons.find((lesson) => (
+    !completedLessonIds.includes(lesson.id) && isLearningLessonUnlocked(lesson.id, completedLessonIds)
+  ));
   const categoryIndex = category ? Math.max(0, LEARNING_CATEGORIES.findIndex((item) => item.id === category.id)) : 0;
   const appearance = getLearningPathAppearance(categoryIndex);
   const pathHeight = lessons.length * PATH_ROW_HEIGHT;
@@ -247,6 +250,7 @@ export default function LearningCategoryScreen() {
             const completed = completedLessonIds.includes(lesson.id);
             const current = lesson.id === currentLesson?.id;
             const unlocked = isLearningLessonUnlocked(lesson.id, completedLessonIds);
+            const lessonLevel = getLearningLevelForLesson(lesson.id);
             const isShaking = shakingLessonId === lesson.id;
             const position = nodePositions[index];
             return (
@@ -284,7 +288,7 @@ export default function LearningCategoryScreen() {
                 >
                   <Text style={[styles.nodeTitle, { color: completed || unlocked ? colors.text : colors.textMuted }]} numberOfLines={2}>{lesson.title}</Text>
                   <Text style={[styles.nodeMeta, { color: completed ? appearance.accent : colors.textMuted }]}>
-                    {completed ? 'COMPLETED' : current ? `${getEstimatedLessonMinutes(lesson)} MIN` : 'LOCKED'}
+                    {`LEVEL ${lessonLevel?.number ?? '-'} · ${completed ? 'COMPLETED' : current ? `${getEstimatedLessonMinutes(lesson)} MIN` : unlocked ? 'READY' : 'LOCKED'}`}
                   </Text>
                 </TouchableOpacity>
                 {lockedHintId === lesson.id ? (

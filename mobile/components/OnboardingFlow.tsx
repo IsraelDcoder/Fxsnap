@@ -234,7 +234,7 @@ export default function OnboardingFlow() {
         preferredMarket: preferredMarket as AppSettings['preferredMarket'],
       });
       await completeOnboarding();
-      router.replace('/(tabs)/home');
+      router.replace({ pathname: '/paywall', params: { source: 'onboarding' } });
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : 'Unable to save your choices. Please try again.');
     } finally {

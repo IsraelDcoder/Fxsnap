@@ -59,6 +59,7 @@ export interface LearningLesson {
   commonMistakes: string[];
   relatedLessonIds: string[];
   toolRoute?: ToolRoute;
+  practicePrompt?: string;
 }
 
 const categoryDefinitions: {
@@ -1723,6 +1724,564 @@ const ARTICLE_LESSONS: LearningLesson[] = [
     commonMistakes: ["Reviewing only winning examples.", "Calling an unplanned lucky outcome a good process."],
     relatedLessonIds: ["strategies-rules-and-hypotheses", "risk-trade-planning", "strategies-backtesting-basics"],
   },
+  {
+    id: "fundamentals-choosing-a-forex-broker",
+    title: "Choosing and checking a forex broker",
+    shortDescription: "Compare regulation, execution terms, account safeguards, and costs before opening an account.",
+    categoryId: "fundamentals",
+    topicGroup: "Markets and instruments",
+    difficulty: "beginner",
+    estimatedMinutes: 8,
+    aliases: ["broker due diligence", "forex broker", "client money", "broker regulation"],
+    intro: "A broker affects how an order reaches the market and what protections and costs apply to your account.",
+    sections: [
+      {
+        heading: "Check the legal entity, not just the brand",
+        paragraphs: [
+          "A trading brand may operate through different legal entities in different countries. Before depositing funds, identify the entity that would hold your account and verify its authorisation directly with the relevant regulator's public register. Check that the register's website address is genuine, the firm name matches, and the permission covers the service being offered. A logo or a link on a broker's own website is not independent verification.",
+          "Regulation and compensation arrangements differ by jurisdiction and product. Read the client agreement to learn whether you are trading a rolling spot product, a contract for difference, or another instrument; what happens if the provider becomes insolvent; and how complaints are handled. Protections may not apply to every client or account type, so do not assume that a regulated brand guarantees reimbursement or prevents losses.",
+        ],
+      },
+      {
+        heading: "Compare the complete trading conditions",
+        paragraphs: [
+          "Review spreads, commissions, overnight financing, deposit and withdrawal charges, inactivity fees, minimum trade size, margin rules, and the broker's handling of volatile markets. A low advertised spread is only one component of total cost and may apply only under selected conditions. Compare the same instrument, account type, time period, and order size when evaluating published figures.",
+          "Read how orders are executed, whether partial fills or requotes can occur, and how stop orders behave around gaps. Test the platform and customer support with small, non-sensitive questions before committing. Never send money to a personal account or rely on pressure, guaranteed-return claims, or a salesperson's verbal promise. Keep records of the terms you accepted and use funds you can afford to lose.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Verify the exact legal entity and its permissions independently.", "Compare total costs, execution rules, and withdrawal terms before funding an account."],
+    commonMistakes: ["Assuming a familiar brand name identifies the regulated entity.", "Choosing a provider from a headline spread or promised returns alone."],
+    relatedLessonIds: ["fundamentals-market-basics", "fundamentals-orders-execution", "fundamentals-order-types-and-financing"],
+    practicePrompt: "Compare two hypothetical broker termsheets. List the legal entity, regulator, spread, commission, margin policy, and withdrawal rules you would verify before considering an account.",
+  },
+  {
+    id: "fundamentals-trading-account-equity-margin",
+    title: "Trading account balance, equity, and margin",
+    shortDescription: "Understand the account figures that change as positions and costs change.",
+    categoryId: "fundamentals",
+    topicGroup: "Markets and instruments",
+    difficulty: "beginner",
+    estimatedMinutes: 8,
+    aliases: ["account equity", "used margin", "free margin", "margin level"],
+    intro: "Balance, equity, and available margin describe different parts of an account; none is a measure of safe risk by itself.",
+    sections: [
+      {
+        heading: "Balance is not the same as equity",
+        paragraphs: [
+          "Account balance generally reflects booked deposits, withdrawals, and closed trade results. Equity commonly combines balance with the current unrealised result of open positions, with exact display rules set by the provider. If open positions move against you, equity can fall while the displayed balance has not yet changed. Financing, commissions, and other charges may also affect the values according to when the platform books them.",
+          "Free margin is often calculated from equity less margin currently required for open positions. Margin level is commonly expressed as equity divided by used margin, multiplied by 100, but firms can use different terms and thresholds. These figures describe collateral and current exposure; free margin is not a recommended amount to risk and a high margin level does not make a position low-risk.",
+        ],
+      },
+      {
+        heading: "Know the provider's intervention rules",
+        paragraphs: [
+          "A margin call, close-out level, or stop-out policy describes what a provider may do when account equity becomes inadequate relative to required margin. The trigger, order in which positions may be closed, warning method, and treatment during fast markets depend on the contract and provider. A warning may not arrive before action when prices move quickly or a market gaps.",
+          "Before trading, find the exact margin and liquidation terms for your instrument and account jurisdiction. Work through a hypothetical adverse move using the provider's calculator, including costs and a possible gap. Keep position risk and account-level exposure within written limits rather than using all available margin. If the account display or contract terms are unclear, ask the provider before opening a position.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Balance, equity, and free margin are different account measures.", "Margin availability is not a substitute for a risk limit or a guaranteed buffer."],
+    commonMistakes: ["Treating free margin as money that is safe to expose.", "Assuming margin-call or stop-out rules are identical across providers."],
+    relatedLessonIds: ["fundamentals-order-types-and-financing", "risk-leverage-and-ruin", "risk-portfolio-exposure"],
+    practicePrompt: "Use a hypothetical account statement to distinguish balance, unrealised P/L, equity, used margin, and free margin. Then explain which provider rules you would check before trading.",
+  },
+  {
+    id: "technical-timeframes-and-candle-close",
+    title: "Timeframes, candle closes, and chart context",
+    shortDescription: "Compare chart intervals and avoid mixing unfinished and completed candle evidence.",
+    categoryId: "technical-analysis",
+    topicGroup: "Tools and chart reading",
+    difficulty: "beginner",
+    estimatedMinutes: 8,
+    aliases: ["chart timeframe", "timeframe alignment", "candle close", "multi timeframe analysis"],
+    intro: "A timeframe changes how price data is grouped; it does not change the underlying market or guarantee a clearer signal.",
+    sections: [
+      {
+        heading: "A candle summarises an interval",
+        paragraphs: [
+          "On a one-hour chart, each completed candle summarises the open, high, low, and close recorded during an hour under the chart provider's time convention. A daily candle groups a longer interval. The same market movement can look like a large sequence of small candles on one chart and a few wider candles on another. Neither view is automatically the correct one; each answers questions at a different scale.",
+          "Until its interval ends, a candle's high, low, and close can still change. A wick that appears to reject a level during an unfinished candle may disappear or become a body before the close. If a method requires a candle close beyond a level, apply that rule only after the relevant candle is complete and note the data feed and timezone used.",
+        ],
+      },
+      {
+        heading: "Keep context and execution rules distinct",
+        paragraphs: [
+          "Some traders use a higher timeframe to describe broad context and a lower timeframe to specify an entry condition. This can organise observation, but adding charts does not create independent evidence when the same price data is being viewed repeatedly. Decide in advance which chart defines the market condition, which defines the trigger, and what would invalidate the idea.",
+          "Write down the chosen intervals before reviewing a chart. Compare like-for-like historical examples and do not switch timeframes after seeing an inconvenient candle. A higher interval may hide detail and a lower interval may add noise, spreads, and decision pressure. Choose intervals that match a tested plan and your available review time, then record uncertainty rather than calling visual agreement a guarantee.",
+        ],
+      },
+    ],
+    keyTakeaways: ["An unfinished candle can change before its interval closes.", "Define the role of each timeframe before interpreting a chart."],
+    commonMistakes: ["Calling an intrabar wick a confirmed candle-close event.", "Adding timeframes until a chart seems to agree with a preferred view."],
+    relatedLessonIds: ["technical-forming-candles", "technical-chart-reading", "technical-market-structure"],
+    practicePrompt: "Choose one completed and one still-forming candle in a chart replay. Record their intervals, what can still change, and which timeframe your hypothetical rule uses for context versus trigger.",
+  },
+  {
+    id: "risk-setting-a-risk-budget",
+    title: "Setting a risk budget before a trade",
+    shortDescription: "Translate a written account-level loss limit into a consistent per-idea budget.",
+    categoryId: "risk-management",
+    topicGroup: "Position sizing",
+    difficulty: "beginner",
+    estimatedMinutes: 8,
+    aliases: ["risk budget", "risk per trade", "account risk limit"],
+    intro: "A risk budget is a planning limit for a possible loss, not a target that must be used on every trade.",
+    sections: [
+      {
+        heading: "Choose the limit before looking for a setup",
+        paragraphs: [
+          "A risk budget begins with a clear account reference, such as current equity or a separately defined capital amount, and a maximum planned loss for one idea or a group of correlated positions. If an educational example uses a 0.5% budget on a hypothetical $10,000 account, the arithmetic amount is $50 before fees, slippage, and gaps. The example does not recommend that percentage or account size.",
+          "A budget should reflect personal circumstances, experience, instrument behavior, and the possibility that the realised loss can exceed the planned amount. A stop order is not a guarantee of an exit at its trigger. Define daily and weekly loss limits as well as per-position limits, and decide what happens when a limit is reached before emotions or market movement can influence the rule.",
+        ],
+      },
+      {
+        heading: "Let the invalidation distance determine size",
+        paragraphs: [
+          "After identifying where a trade idea would be invalidated, measure the entry-to-stop distance in the instrument's correct units. Position size is then derived from the cash risk budget and the value of that distance for the specific contract. A wider stop generally requires a smaller size to keep the same planned cash exposure; a tighter stop does not justify a larger position unless the calculation, costs, and execution assumptions still fit the budget.",
+          "Check the result against minimum size, lot increments, pip or tick value, account currency conversion, commissions, and margin rules. If the smallest permitted size exceeds the budget, skip the setup or use a suitable instrument; do not quietly increase the risk limit. Record the assumptions so the calculation can be repeated and audited.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Set a cash risk ceiling before deciding position size.", "If the instrument cannot fit the written limit, declining the trade is valid."],
+    commonMistakes: ["Choosing position size first and moving the stop to make it fit.", "Treating the planned stop loss as a guaranteed maximum realised loss."],
+    relatedLessonIds: ["risk-position-sizing", "risk-trade-planning", "risk-stop-and-gap-risk"],
+    practicePrompt: "For a hypothetical account, select a clearly labeled educational cash-risk ceiling. Write the invalidation point first, then list the assumptions needed to calculate size without exceeding that ceiling.",
+  },
+  {
+    id: "risk-calculating-pip-value",
+    title: "Pip value, stop distance, and position size",
+    shortDescription: "Connect price movement units to the account-currency exposure of a forex position.",
+    categoryId: "risk-management",
+    topicGroup: "Position sizing",
+    difficulty: "beginner",
+    estimatedMinutes: 9,
+    aliases: ["pip value calculation", "forex position size", "stop distance calculation"],
+    intro: "A pip count alone does not tell you the cash risk; contract size and account currency matter.",
+    sections: [
+      {
+        heading: "Measure movement using the instrument's convention",
+        paragraphs: [
+          "Many non-JPY forex quotes use a pip convention of 0.0001, while many JPY pairs use 0.01; platforms may also display fractional pipettes. Confirm the convention and contract specification for the exact instrument rather than assuming every symbol uses the same decimal place. For a hypothetical EUR/USD quote, a move from 1.0800 to 1.0820 is 20 conventional pips, while a provider may display those points differently.",
+          "Pip value depends on trade size and the currency in which the pair's profit or loss is denominated. If that quote currency differs from the account currency, conversion rates affect the cash result. Contract size, lot increments, and the provider's treatment of commissions and financing also matter. Use the broker's contract details or a verified calculator and record the assumptions used.",
+        ],
+      },
+      {
+        heading: "Work from the loss limit toward size",
+        paragraphs: [
+          "First define a hypothetical maximum cash risk. Next identify a structurally meaningful invalidation price and calculate the number of pips between entry and stop using the instrument's convention. Convert that stop distance to cash risk per lot using the correct pip value, then divide the budget by that per-lot exposure. Round down to a size the account can actually place; never round up beyond the risk limit.",
+          "For an illustration only, if a 25-pip stop would risk $25 per standard lot under the verified contract assumptions and a planned budget is $50, the arithmetic result is two lots before additional costs and execution uncertainty. This is not advice to use those values. Recalculate whenever the instrument, account currency, price, stop distance, or contract changes.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Pip value changes with position size, contract terms, and currency conversion.", "Verify the instrument's specification before relying on a size calculation."],
+    commonMistakes: ["Assuming all pairs have the same pip value.", "Using displayed decimal points as pips without checking the quote convention."],
+    relatedLessonIds: ["fundamentals-forex-prices-pips", "risk-position-sizing", "risk-risk-reward"],
+    practicePrompt: "Using an instrument specification supplied by your broker, calculate pip distance to a hypothetical stop and identify how contract size and account-currency conversion affect the result.",
+  },
+  {
+    id: "risk-understanding-drawdown",
+    title: "Drawdown, recovery, and capital resilience",
+    shortDescription: "Measure declines from a prior account peak and understand why recovery is asymmetric.",
+    categoryId: "risk-management",
+    topicGroup: "Protection and portfolio risk",
+    difficulty: "intermediate",
+    estimatedMinutes: 8,
+    aliases: ["maximum drawdown", "drawdown recovery", "capital preservation"],
+    intro: "Drawdown describes a decline from a previous equity peak; managing it requires limits set before a stressful period.",
+    sections: [
+      {
+        heading: "Calculate a drawdown consistently",
+        paragraphs: [
+          "A percentage drawdown is commonly measured as the fall from a prior equity peak to a later trough, divided by that peak. If a hypothetical account falls from $10,000 to $9,000, the decline is 10%. Returning from $9,000 to $10,000 then requires an 11.11% gain on the smaller remaining balance, before costs or further losses. A deeper fall creates a larger recovery hurdle.",
+          "Specify whether a report uses closed balance, intraday equity, or end-of-day equity, and how deposits and withdrawals are treated. Otherwise two reports may describe the same trading period differently. Track both the size and duration of drawdowns, the rules followed, and the market conditions. A short profitable period does not erase the need to understand earlier risk.",
+        ],
+      },
+      {
+        heading: "Set protective responses in advance",
+        paragraphs: [
+          "A drawdown response can include reducing exposure, pausing new trades, reviewing execution and rule adherence, or seeking independent help. The thresholds should be chosen before a drawdown begins and should account for the strategy's documented variability and the learner's financial circumstances. No threshold makes trading safe, and increasing size to recover losses can accelerate deterioration.",
+          "Use a defined review sample rather than changing a strategy after each loss. Compare realised results with expected costs, risk assumptions, and planned limits. If the strategy behaves outside its documented conditions, stop and investigate instead of rationalising the deviation. Capital preservation is partly about keeping the ability to make future decisions, not forcing a rapid return to a previous account peak.",
+        ],
+      },
+    ],
+    keyTakeaways: ["The percentage gain needed to recover rises as capital falls.", "Define review and exposure-reduction rules before a drawdown occurs."],
+    commonMistakes: ["Increasing position size to recover losses quickly.", "Comparing drawdowns without checking how deposits and equity peaks were measured."],
+    relatedLessonIds: ["risk-portfolio-exposure", "risk-leverage-and-ruin", "risk-streaks-and-loss-limits"],
+    practicePrompt: "Calculate the percentage decline from a hypothetical equity peak, then calculate the gain needed to return to that peak. Write one precommitted review or exposure-reduction rule.",
+  },
+  {
+    id: "fundamental-interest-rate-differentials",
+    title: "Interest rates and currency differentials",
+    shortDescription: "Compare policy rates and expectations without assuming a mechanical currency direction.",
+    categoryId: "fundamental-analysis",
+    topicGroup: "Economic context",
+    difficulty: "intermediate",
+    estimatedMinutes: 9,
+    aliases: ["interest-rate differential", "central bank rates", "rate expectations"],
+    intro: "Interest rates influence currency valuation through several channels, but the relationship is conditional and often anticipated.",
+    sections: [
+      {
+        heading: "Compare policies and the path expected",
+        paragraphs: [
+          "A forex pair expresses one currency relative to another, so analysis often compares economic conditions and policy expectations for both economies. A policy rate is one input among inflation, growth, employment, fiscal conditions, risk appetite, and capital flows. A higher current rate does not automatically mean that the currency will strengthen; markets may have expected it already or may focus on the likely direction and credibility of future policy.",
+          "Central banks communicate through decisions, statements, forecasts, minutes, and speeches. Markets can revise expectations before a formal rate change, and different instruments reflect different horizons. When comparing two economies, state the timeframe and evidence being considered. Do not reduce a complex relative valuation question to a single rate number or imply that one release determines a pair's movement.",
+        ],
+      },
+      {
+        heading: "Separate observation from interpretation",
+        paragraphs: [
+          "An analyst can record the current policy rates, recent inflation and employment trends, and the market-implied path where reliable data is available. The next step is to identify what is already expected and what could challenge that view. Expectations are estimates, not promises, and market-implied pricing can shift as liquidity and information change.",
+          "For a classroom comparison, write two plausible scenarios: policy expectations become more hawkish in one economy relative to the other, or they move in the opposite direction. Note what evidence would support each scenario and what remains unknown. This exercise teaches conditional reasoning; it does not provide a trading signal. Check release timestamps and sources, and avoid presenting a causal explanation as proven from a price move alone.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Forex analysis is relative and includes expectations, not only current rate levels.", "State evidence and uncertainty separately from an interpretation."],
+    commonMistakes: ["Assuming the currency with the highest current policy rate must appreciate.", "Treating a market-implied policy path as a guaranteed outcome."],
+    relatedLessonIds: ["fundamental-economic-policy", "fundamental-economic-drivers", "fundamental-market-expectations"],
+    practicePrompt: "Compare two economies using a current policy rate and one published expectation measure. Write what the comparison suggests, one alternative explanation, and what it cannot establish.",
+  },
+  {
+    id: "fundamental-reading-employment-data",
+    title: "Reading employment reports carefully",
+    shortDescription: "Distinguish headline employment numbers from participation, wages, revisions, and context.",
+    categoryId: "fundamental-analysis",
+    topicGroup: "Economic context",
+    difficulty: "intermediate",
+    estimatedMinutes: 9,
+    aliases: ["jobs report", "employment data", "unemployment rate", "wage growth"],
+    intro: "An employment report is a collection of measures with different definitions, release schedules, and limitations.",
+    sections: [
+      {
+        heading: "Know what each measure represents",
+        paragraphs: [
+          "Employment releases may report payroll changes, unemployment, labour-force participation, hours worked, wages, or job vacancies. These measures can come from different surveys and definitions, cover different populations, and be revised later. A headline change is therefore not a complete description of the labour market. Read the release notes and compare the current figure with a consistent series.",
+          "The unemployment rate generally depends on who is counted in the labour force and who is actively seeking work. A change can reflect people entering or leaving the labour force as well as hiring or job losses. Wage growth can affect inflation and household income, but interpretation depends on productivity, composition, prior values, and the broader economic context. One data point rarely settles those questions.",
+        ],
+      },
+      {
+        heading: "Compare the release with expectations responsibly",
+        paragraphs: [
+          "Before a release, record the source, publication time, consensus estimate, and previous value. After publication, note the actual values and any revisions, then identify which parts were stronger or weaker than expected. Consensus is a surveyed or compiled estimate, not a neutral truth or a promise about price reaction. Different participants may focus on different components.",
+          "A report can surprise in one component while revisions or other measures point another way. Prices may also have moved beforehand or react to unrelated information. In a study, save the full release and timestamp, then compare comparable historical events rather than selecting only dramatic examples. Treat any explanation for a market move as a hypothesis, and state what additional evidence would be needed to support it.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Employment releases contain several measures that can tell different stories.", "Check definitions, revisions, and expectations before interpreting a headline."],
+    commonMistakes: ["Equating one payroll estimate with the entire state of employment.", "Assuming a positive headline must cause a specific currency move."],
+    relatedLessonIds: ["fundamental-economic-releases", "fundamental-economic-drivers", "fundamentals-events-calendar"],
+    practicePrompt: "Find a historical employment release and identify its source, headline measure, one secondary measure, revision, consensus, and one reason a single number may mislead.",
+  },
+  {
+    id: "fundamental-event-preparation",
+    title: "Preparing a plan for scheduled forex events",
+    shortDescription: "Use a calendar to identify exposure and execution risks before a release.",
+    categoryId: "fundamental-analysis",
+    topicGroup: "Events and research",
+    difficulty: "beginner",
+    estimatedMinutes: 8,
+    aliases: ["news trading risk", "forex event plan", "economic calendar preparation"],
+    intro: "An event plan helps you decide how to handle uncertainty; it does not predict the release or its price reaction.",
+    sections: [
+      {
+        heading: "Verify the event and affected instruments",
+        paragraphs: [
+          "Start with a reliable calendar and verify the event name, releasing authority, local time conversion, and whether the schedule can change. Identify which currencies may be directly relevant and whether a central bank decision, inflation report, or employment release is involved. The label 'high impact' is a prioritisation aid, not a guarantee of volatility or direction.",
+          "Review whether you already have exposure in the affected currency, including positions in correlated instruments. Write down the planned risk, invalidation conditions, and any limits for spread or slippage. Remember that a stop can execute beyond its trigger during a gap or fast market. If you cannot evaluate the contract rules or total exposure, reducing activity or staying out is a reasonable plan.",
+        ],
+      },
+      {
+        heading: "Choose actions before the release",
+        paragraphs: [
+          "A written event plan can specify whether you will avoid opening new positions for a defined window, reduce or close existing exposure, or continue only if pre-established conditions remain satisfied. There is no universally correct choice; it depends on a tested method and personal risk constraints. Avoid inventing rules after seeing the first price movement.",
+          "After the event, record the actual values, revisions, execution conditions, and what you did against the plan. Compare the market's behavior with multiple explanations instead of claiming the report caused every move. Review the process separately from the result, and do not increase risk because the announcement appears to confirm a prior opinion. Event preparation is risk management, not a promise of advantage.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Check event timing and existing currency exposure before the release.", "Decide how to handle the event before observing its immediate price reaction."],
+    commonMistakes: ["Treating a calendar impact label as a directional forecast.", "Assuming stops and spreads behave normally during a release."],
+    relatedLessonIds: ["fundamentals-events-calendar", "fundamental-market-expectations", "risk-trade-planning"],
+    practicePrompt: "Select a scheduled release from a reliable calendar. Draft a hypothetical before-event checklist for time, currency exposure, spread risk, position limits, and conditions for standing aside.",
+  },
+  {
+    id: "psychology-fear-and-greed",
+    title: "Recognising fear and greed in trading decisions",
+    shortDescription: "Identify emotional pressure and use a pause to return to written risk rules.",
+    categoryId: "trading-psychology",
+    topicGroup: "Emotions and discipline",
+    difficulty: "beginner",
+    estimatedMinutes: 8,
+    aliases: ["fear of loss", "greed in trading", "emotional trading"],
+    intro: "Emotions are information about your state, not instructions to enter, exit, or increase a position.",
+    sections: [
+      {
+        heading: "Notice the decision pressure",
+        paragraphs: [
+          "Fear may appear as avoiding a valid planned action, closing early without a rule, or repeatedly moving a stop because a loss feels uncomfortable. Greed may appear as increasing size after a win, removing an exit, or taking an unplanned setup because a move seems exciting. These behaviors are not diagnoses; they are observable prompts to pause and check the written process.",
+          "Emotional reactions can be intensified by fatigue, stress outside trading, financial pressure, recent wins or losses, and fast-changing prices. A trader can feel confident and still be wrong, or feel uneasy while following a sound risk limit. The goal is not to suppress emotion or force confidence. It is to avoid letting a temporary state silently rewrite exposure rules.",
+        ],
+      },
+      {
+        heading: "Use a practical pause and boundary",
+        paragraphs: [
+          "Before acting, stop and state the planned setup, invalidation, maximum loss, and reason the decision is being considered now. Compare each item with the written plan. If the action is not allowed by the plan, wait or decline it. A brief breathing or movement break may help some learners reset attention, but it does not remove financial risk or replace professional support where needed.",
+          "Afterward, journal the trigger, feeling, choice, and outcome without judging yourself by profit alone. Look for repeated links, such as trading after a loss or changing rules near a target. Set a precommitted pause rule for those situations and ask a trusted person or qualified professional for help if trading distress affects wellbeing. Protecting health is more important than continuing to trade.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Notice emotional pressure, then compare the proposed action with written risk rules.", "Review decisions by process and wellbeing, not only by profit or loss."],
+    commonMistakes: ["Treating a strong emotion as proof that a trade must be taken.", "Increasing exposure to recover a loss or extend a winning streak."],
+    relatedLessonIds: ["psychology-process-over-outcome", "psychology-losses", "psychology-routines"],
+    practicePrompt: "Describe a hypothetical moment of fear or excitement before a trading decision. Name the observable behavior, the written rule to check, and a safe pause you could take.",
+  },
+  {
+    id: "psychology-post-loss-reset",
+    title: "A process for pausing after a loss",
+    shortDescription: "Use a structured reset to prevent one loss from turning into unplanned exposure.",
+    categoryId: "trading-psychology",
+    topicGroup: "Emotions and discipline",
+    difficulty: "beginner",
+    estimatedMinutes: 8,
+    aliases: ["after a losing trade", "revenge trading prevention", "post-loss routine"],
+    intro: "A loss is a point to review the plan and your state, not a debt the next trade must repay.",
+    sections: [
+      {
+        heading: "Separate the result from the rule check",
+        paragraphs: [
+          "First establish what happened: the planned entry, stop or invalidation, size, execution, costs, and exit. Compare those facts with the rules that were written before the trade. A loss that followed the plan is different from a loss caused by a rule breach, but neither single outcome proves whether a method is effective. Avoid rewriting the rules immediately to make the last result feel preventable.",
+          "Notice whether you feel pressure to trade again, increase size, or recover a specific amount. Those urges can narrow attention and lead to a position that was not evaluated on its own merits. If you are not able to assess the next decision calmly or the session limit has been reached, stop trading for the planned period. There is no requirement to take another trade.",
+        ],
+      },
+      {
+        heading: "Reset using a written checklist",
+        paragraphs: [
+          "A reset can include stepping away from the screen, recording the trade, checking remaining daily and weekly limits, and rereading the entry criteria before considering another setup. Keep the checklist brief enough to use under pressure. If a rule was broken, describe the behavior specifically and decide on a practical prevention step, such as disabling one-click orders or ending the session after a defined breach.",
+          "Review repeated losses as a sample with costs and market conditions included. Seek qualified support if trading causes persistent distress or harms finances or relationships. Avoid self-punishment and avoid framing recovery as a challenge. The purpose of a pause is to protect decision quality and capital, not to guarantee that the next trade will succeed.",
+        ],
+      },
+    ],
+    keyTakeaways: ["A planned loss does not create an obligation to take another trade.", "Use prewritten session limits and a repeatable post-trade reset."],
+    commonMistakes: ["Increasing size to win back a specific amount.", "Changing a strategy based on one losing example."],
+    relatedLessonIds: ["psychology-revenge-and-overtrading", "risk-streaks-and-loss-limits", "psychology-journaling"],
+    practicePrompt: "Write a five-step post-loss reset for a hypothetical session, including a risk-limit check, journaling prompt, and a clear condition for ending the session.",
+  },
+  {
+    id: "psychology-confirmation-bias",
+    title: "Confirmation bias and alternative scenarios",
+    shortDescription: "Challenge a preferred market view by recording evidence that could contradict it.",
+    categoryId: "trading-psychology",
+    topicGroup: "Decision-making",
+    difficulty: "intermediate",
+    estimatedMinutes: 8,
+    aliases: ["confirmation bias", "alternative market scenarios", "trading cognitive bias"],
+    intro: "When you favor a view, it is easy to notice supporting evidence and discount facts that challenge it.",
+    sections: [
+      {
+        heading: "Make the view testable",
+        paragraphs: [
+          "Confirmation bias describes a tendency to seek, interpret, or remember information in ways that support an existing belief. In chart work, a trader may mark only the levels that fit a bullish view, describe every pullback as temporary, or switch timeframes when contrary evidence appears. The same pattern can affect fundamental research when only favorable forecasts or headlines are collected.",
+          "Convert a broad view into a conditional statement with observable evidence. For example: 'The range remains intact while price stays between the marked boundaries; a completed close outside it would require a new assessment.' This statement does not predict which outcome will occur. It identifies what would challenge the current description and helps prevent a belief from becoming impossible to disprove.",
+        ],
+      },
+      {
+        heading: "Write a credible competing explanation",
+        paragraphs: [
+          "Before acting, record at least one plausible alternative scenario, the evidence that would support it, and what information is missing. Try to use the same timeframe, data source, and standard of proof for both scenarios. Ask what observation would make you reduce confidence or stand aside. Do not treat a token counterargument as sufficient if the actual evidence has not been checked.",
+          "Review whether your decision changed after the market moved or after reading a persuasive post. Keep dated notes so hindsight does not rewrite the original thesis. Over time, compare the accuracy and usefulness of the criteria, not just the outcome of one position. A balanced process cannot eliminate bias, but it makes assumptions more visible and gives you a defined reason to revise or reject an idea.",
+        ],
+      },
+    ],
+    keyTakeaways: ["State evidence that would challenge a preferred market view.", "Compare alternatives using the same data and decision rules."],
+    commonMistakes: ["Changing timeframes or criteria only after contrary evidence appears.", "Collecting information that supports a view while ignoring its source or quality."],
+    relatedLessonIds: ["psychology-biases-and-fomo", "technical-chart-reading", "fundamentals-research-sources"],
+    practicePrompt: "Take a hypothetical directional chart view and write one observation that supports it, one that challenges it, and one rule-based condition that would make you reassess.",
+  },
+  {
+    id: "psychology-boundaries-and-screen-time",
+    title: "Trading boundaries, breaks, and screen time",
+    shortDescription: "Set practical limits for attention and activity so trading does not consume every decision.",
+    categoryId: "trading-psychology",
+    topicGroup: "Review and wellbeing",
+    difficulty: "beginner",
+    estimatedMinutes: 8,
+    aliases: ["trading screen time", "trading wellbeing", "healthy trading boundaries"],
+    intro: "A trading routine includes limits on when not to watch or trade, not only rules for market entries.",
+    sections: [
+      {
+        heading: "Define a realistic session",
+        paragraphs: [
+          "Continuous screen watching can increase fatigue and create pressure to act on ordinary price movement. Decide in advance which markets and times you can review, what information is necessary, and how long a session will last. A schedule should fit work, study, sleep, and personal responsibilities. There is no need to monitor every market or remain available around the clock to learn effectively.",
+          "Create clear start and stop conditions, such as ending at a planned time, after a loss limit, or when concentration is impaired. Disable unnecessary alerts and do not use leverage or trade while distracted. If your method requires monitoring that you cannot realistically provide, reconsider the method in a simulation rather than compromising sleep or essential responsibilities.",
+        ],
+      },
+      {
+        heading: "Monitor the effect on wellbeing",
+        paragraphs: [
+          "Track whether trading changes your sleep, mood, relationships, study, or ability to meet financial obligations. Treat repeated negative effects as a signal to reduce activity or stop and seek appropriate support. Do not use trading to solve urgent financial problems or risk money needed for essential expenses. Market access and educational content do not establish that trading is suitable for you.",
+          "At the end of a session, record what you learned and close the platform when the review is complete. A deliberate break helps distinguish study from live decision pressure. If you feel unable to stop despite harm, consider speaking with a healthcare professional or a support service in your region. Protecting your health and life outside trading comes before maintaining a streak or meeting a screen-time target.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Predefine session boundaries that protect rest and responsibilities.", "Persistent harm or distress is a reason to reduce activity and seek support."],
+    commonMistakes: ["Assuming more screen time always improves skill.", "Trading with money needed for essentials or while unable to focus."],
+    relatedLessonIds: ["psychology-routines", "psychology-losses", "psychology-journaling"],
+    practicePrompt: "Draft a realistic study or simulated-trading schedule with a start, stop, break, and interruption rule that protects sleep and other responsibilities.",
+  },
+  {
+    id: "strategies-understanding-expectancy",
+    title: "Expectancy: evaluating a series of trades",
+    shortDescription: "Combine outcome frequency and average win/loss in a sample without promising future results.",
+    categoryId: "strategies-practice",
+    topicGroup: "Backtesting",
+    difficulty: "intermediate",
+    estimatedMinutes: 9,
+    aliases: ["trading expectancy", "expected value", "average win loss"],
+    intro: "Expectancy is a summary of average historical outcomes under stated assumptions, not a guarantee about the next trade.",
+    sections: [
+      {
+        heading: "Use consistent units and include costs",
+        paragraphs: [
+          "A simple expectancy estimate can be expressed as the proportion of winning outcomes multiplied by the average win, minus the proportion of losing outcomes multiplied by the average loss. If a hypothetical sample wins 40% of the time with an average gain of 2R and loses 60% with an average loss of 1R, the arithmetic estimate is 0.2R per trade before any omitted costs. R is a consistent unit of planned risk, not necessarily a fixed currency amount.",
+          "The estimate depends on how trades were selected, measured, and executed. Include commissions, spread, financing, slippage, skipped signals, and any difference between the tested and tradable market. If wins and losses are not independent or if rules changed during the sample, a single average can hide important structure. Record the sample definition and calculation so another person can reproduce it.",
+        ],
+      },
+      {
+        heading: "Interpret the estimate with uncertainty",
+        paragraphs: [
+          "A positive historical estimate does not show that the edge will persist. Small samples can be dominated by a few outcomes, and market conditions can change. Compare results across time periods and conditions, examine drawdown and losing sequences, and use out-of-sample data where possible. Avoid reporting only the most favorable subset or changing assumptions after inspecting results.",
+          "For a learning exercise, calculate expectancy from a clearly labeled hypothetical list of outcomes, then change the win rate, average win, and average loss to see how sensitive the result is. Keep every value illustrative rather than a forecast. A strategy should also be judged on implementation feasibility, risk limits, and data quality. Statistical summaries support review; they do not prove future profitability.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Expectancy combines outcome frequency and average win/loss under stated assumptions.", "Historical expectancy is uncertain and must include costs and a reproducible sample."],
+    commonMistakes: ["Treating a backtest estimate as a promised future return.", "Ignoring costs or selecting only a favorable subset of trades."],
+    relatedLessonIds: ["risk-risk-reward", "strategies-backtesting-basics", "strategies-rules-and-hypotheses"],
+    practicePrompt: "Calculate expectancy from a small, clearly labeled hypothetical outcome list in R units. Recalculate after including an illustrative transaction cost and note the limits of the sample.",
+  },
+  {
+    id: "strategies-defining-a-test-sample",
+    title: "Choosing a useful historical test sample",
+    shortDescription: "Define eligible markets, periods, and observations before evaluating a strategy.",
+    categoryId: "strategies-practice",
+    topicGroup: "Backtesting",
+    difficulty: "intermediate",
+    estimatedMinutes: 9,
+    aliases: ["backtest sample size", "historical test sample", "selection bias trading"],
+    intro: "A test is only as useful as its rules, data, and sample selection are clear and reproducible.",
+    sections: [
+      {
+        heading: "Specify the population before testing",
+        paragraphs: [
+          "Write down the instruments, timeframe, date range, trading sessions, market conditions, and entry rules that define an eligible observation. Include what counts as a signal, how overlapping positions are handled, and how exits are measured. If you change these rules after seeing results, record a new version and reserve fresh data for evaluation rather than quietly reusing the same sample.",
+          "Historical data may contain missing bars, different session boundaries, survivorship effects, or unrealistic execution assumptions. Check the source, timestamps, price adjustments, and whether bid/ask spread is represented. A chart can make past setups look obvious because the outcome is already known. Apply a written method consistently, including examples that fail, rather than selecting only memorable winners.",
+        ],
+      },
+      {
+        heading: "Use enough diverse observations",
+        paragraphs: [
+          "There is no single sample count that proves a strategy works. More independent and varied observations can reduce the influence of one unusual result, but they cannot correct poor rules or biased data. Trades clustered in one short period may share the same market conditions and therefore provide less variety than their raw count suggests. Record sample size alongside the period and context.",
+          "Separate rule development from evaluation where possible: use one sample to define and refine a hypothesis, then use another period or a forward simulation to check whether the rules remain plausible. Report losing sequences, drawdown, costs, and deviations, not only a win rate. Treat the result as evidence with limitations and never convert a historical sample into a certainty about future market behavior.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Define eligible observations and data assumptions before viewing results.", "A larger raw trade count does not remove shared-condition or selection bias."],
+    commonMistakes: ["Selecting historical examples after seeing their outcomes.", "Changing rules on the same sample and presenting it as independent validation."],
+    relatedLessonIds: ["strategies-backtesting-basics", "strategies-rules-and-hypotheses", "strategies-understanding-expectancy"],
+    practicePrompt: "Write a test protocol naming instrument, interval, date range, eligibility rules, data source, cost assumptions, and how you will separate development from evaluation samples.",
+  },
+  {
+    id: "strategies-overfitting-and-out-of-sample",
+    title: "Overfitting and out-of-sample testing",
+    shortDescription: "Recognise when repeated tuning describes historical noise rather than a durable method.",
+    categoryId: "strategies-practice",
+    topicGroup: "Backtesting",
+    difficulty: "advanced",
+    estimatedMinutes: 9,
+    aliases: ["overfitting a strategy", "out of sample test", "walk forward testing"],
+    intro: "A strategy can fit historical data extremely well and still fail to generalise to unseen conditions.",
+    sections: [
+      {
+        heading: "How a backtest becomes overfit",
+        paragraphs: [
+          "Every extra filter, parameter, instrument, and date range gives a researcher another opportunity to select a result that looks unusually good by chance. This is especially risky when many variations are tried but only the winning version is reported. The final rules may describe random details of the sample rather than a repeatable market behavior. Complex rules are not automatically wrong, but each needs a reason that can be stated before testing.",
+          "Warning signs include sharp performance deterioration after a small parameter change, a result driven by a few trades, many filters chosen after inspecting winners, or reliance on ideal fills. Keep a record of every tested variation and the date it was selected. That history helps reviewers see how much search occurred and reduces the temptation to present only the best result.",
+        ],
+      },
+      {
+        heading: "Reserve data for an honest check",
+        paragraphs: [
+          "An out-of-sample period is held aside while rules are developed. Evaluate the locked rules once on that data, including realistic costs and the same execution assumptions. If you modify the strategy after seeing the holdout result, that period has become part of development and is no longer an untouched validation sample. A later period or forward simulation would then be needed for another check.",
+          "Walk-forward evaluation can repeat development and testing across sequential windows, but it still depends on disciplined rules and reliable data. Results remain uncertain and may not represent future liquidity or regulation. Compare robustness across plausible assumptions rather than searching for the single best configuration. The goal is to learn where a method fails as well as where it appeared to work.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Repeatedly tuning rules on one dataset increases the risk of fitting noise.", "A holdout stops being independent once its results guide a rule change."],
+    commonMistakes: ["Reporting only the best of many unreported parameter combinations.", "Treating one successful out-of-sample test as proof of future performance."],
+    relatedLessonIds: ["strategies-backtesting-basics", "strategies-defining-a-test-sample", "strategies-rules-and-hypotheses"],
+    practicePrompt: "Review a hypothetical strategy tuned through many variations. List signs of overfitting, define an untouched evaluation period, and state what action would invalidate that holdout.",
+  },
+  {
+    id: "strategies-writing-a-trading-checklist",
+    title: "Writing a repeatable pre-trade checklist",
+    shortDescription: "Turn a strategy into observable entry, risk, execution, and exclusion rules.",
+    categoryId: "strategies-practice",
+    topicGroup: "Strategy design",
+    difficulty: "beginner",
+    estimatedMinutes: 8,
+    aliases: ["pre-trade checklist", "trading rules checklist", "setup checklist"],
+    intro: "A checklist makes the decision process visible and helps identify conditions where the best action is to stand aside.",
+    sections: [
+      {
+        heading: "Write criteria another person could check",
+        paragraphs: [
+          "A useful checklist identifies the instrument and timeframe, the market condition required, the exact entry trigger, and the evidence that invalidates the idea. Replace vague terms such as 'strong trend' with observable definitions your method can apply consistently. Include position-size calculation, maximum planned risk, target or exit logic, and how spread, slippage, or gaps affect the plan.",
+          "Specify exclusions too: a missing price reference, an event window, a spread above a threshold, insufficient time to monitor, or a daily risk limit already reached. A no-trade outcome is part of a complete strategy. Rules should be concise enough to use before entry, while detailed definitions and examples belong in the strategy document and test protocol.",
+        ],
+      },
+      {
+        heading: "Test the checklist for ambiguity",
+        paragraphs: [
+          "Apply the checklist to historical examples without looking first at what happened next. Mark each item as yes, no, or unknown, and record where two reviewers might disagree. If an item cannot be answered from available data, define the missing evidence or remove the criterion. Do not resolve ambiguity by selecting whichever interpretation produces a favorable result.",
+          "After testing, version the checklist and keep the old version for comparison. During a live or simulated session, record exceptions rather than editing rules mid-trade. Review adherence and outcomes separately. A checklist supports consistency but cannot remove uncertainty, guarantee a fill, or replace an appropriate risk limit.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Define entry, invalidation, sizing, execution, and exclusions before placing a trade.", "Treat no-trade conditions as explicit parts of the strategy."],
+    commonMistakes: ["Using subjective checklist items that change after the outcome is known.", "Ignoring missing evidence because a setup otherwise looks attractive."],
+    relatedLessonIds: ["strategies-entry-exit-and-review", "strategies-rules-and-hypotheses", "risk-trade-planning"],
+    practicePrompt: "Create a one-page hypothetical setup checklist with objective entry criteria, invalidation, sizing, cost limits, event exclusions, and a no-trade condition.",
+  },
+  {
+    id: "strategies-scenario-rehearsal",
+    title: "Rehearsing alternative market scenarios",
+    shortDescription: "Practise conditional planning for more than one outcome using historical or simulated charts.",
+    categoryId: "strategies-practice",
+    topicGroup: "Simulated practice",
+    difficulty: "intermediate",
+    estimatedMinutes: 9,
+    aliases: ["scenario planning", "historical chart practice", "trading simulation"],
+    intro: "Scenario rehearsal develops a process for responding to evidence; it does not predict which path the market will take.",
+    sections: [
+      {
+        heading: "Frame the exercise without hindsight",
+        paragraphs: [
+          "Choose a historical chart and hide the data to the right of a selected point. Record the instrument, timeframe, visible price, and levels that can be identified from the available chart. Write two plausible paths, such as a hold at a range boundary or a completed break beyond it. For each, state what observable event would change your assessment and what would invalidate the idea.",
+          "Do not name a pattern solely because you already know how the chart ended. Avoid moving levels after revealing later candles. Include a no-trade scenario where evidence is mixed, a level is unclear, or costs and risk do not fit. If you use a replay tool, verify that future candles and indicators are not visible in the interface.",
+        ],
+      },
+      {
+        heading: "Review the decision process",
+        paragraphs: [
+          "Reveal the next segment one interval at a time and note which prewritten condition occurred, if any. Record whether the plan would have armed, invalidated, or remained inactive. Use the same cost and execution assumptions throughout and distinguish a theoretical trigger from a fill that could realistically have occurred.",
+          "After the exercise, compare your notes with the full chart and identify hindsight judgments, missing information, and rule ambiguities. Score process adherence separately from whether the eventual move aligned with one scenario. Repeat across examples that resolve in different ways. The objective is consistent conditional reasoning and safer practice, not learning to claim that a past move was obvious.",
+        ],
+      },
+    ],
+    keyTakeaways: ["Write alternative scenarios and invalidation rules before revealing later price data.", "Evaluate process consistency separately from the direction of the eventual move."],
+    commonMistakes: ["Using future chart data to choose levels for a supposedly blind exercise.", "Treating one correctly guessed outcome as proof of skill or profitability."],
+    relatedLessonIds: ["strategies-breakout-example", "technical-chart-reading", "strategies-paper-practice"],
+    practicePrompt: "Use chart replay with future candles hidden. Record two conditional scenarios, their invalidation evidence, and a no-trade case before revealing the next segment.",
+  },
 ];
 
 export const LEARNING_LESSONS: LearningLesson[] = ARTICLE_LESSONS.map((lesson) => ({
@@ -1781,6 +2340,7 @@ export function getLessonKnowledgeCheck(lesson: LearningLesson) {
 }
 
 export function getLessonPracticePrompt(lesson: LearningLesson): string {
+  if (lesson.practicePrompt?.trim()) return lesson.practicePrompt.trim();
   const prompts: Record<CategoryId, string> = {
     fundamentals: "Choose an instrument you follow. Find its trading hours, contract terms, typical costs, and one condition that could make execution unreliable.",
     "technical-analysis": "On a chart, mark the timeframe, current structure, and nearby invalidation. Write down what evidence would change your read; do not treat one pattern as a forecast.",

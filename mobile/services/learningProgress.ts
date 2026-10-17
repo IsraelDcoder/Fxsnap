@@ -10,6 +10,7 @@ export interface LearningProgress {
   bookmarkedLessonIds: string[];
   completedLessonIds: string[];
   lessonPositions: Record<string, number>;
+  stepPositions: Record<string, number>;
   lastCompletionDate: string | null;
   streakCount: number;
 }
@@ -20,6 +21,7 @@ const emptyProgress: LearningProgress = {
   bookmarkedLessonIds: [],
   completedLessonIds: [],
   lessonPositions: {},
+  stepPositions: {},
   lastCompletionDate: null,
   streakCount: 0,
 };
@@ -34,20 +36,23 @@ function normalizeProgress(value: unknown): LearningProgress {
   const stringList = (list: unknown) => Array.isArray(list)
     ? [...new Set(list.filter((item): item is string => typeof item === 'string' && item.length > 0))]
     : [];
-  const rawPositions = data.lessonPositions && typeof data.lessonPositions === 'object'
-    ? data.lessonPositions as Record<string, unknown>
-    : {};
-  const lessonPositions = Object.fromEntries(
-    Object.entries(rawPositions)
-      .filter(([, position]) => typeof position === 'number' && Number.isFinite(position) && position >= 0)
-      .map(([id, position]) => [id, Math.floor(position as number)]),
-  );
+  const normalizePositions = (value: unknown) => {
+    const rawPositions = value && typeof value === 'object' && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : {};
+    return Object.fromEntries(
+      Object.entries(rawPositions)
+        .filter(([, position]) => typeof position === 'number' && Number.isFinite(position) && position >= 0)
+        .map(([id, position]) => [id, Math.floor(position as number)]),
+    );
+  };
   return {
     lastOpenedLessonId: typeof data.lastOpenedLessonId === 'string' ? data.lastOpenedLessonId : null,
     recentLessonIds: stringList(data.recentLessonIds).slice(0, MAX_RECENT_LESSONS),
     bookmarkedLessonIds: stringList(data.bookmarkedLessonIds),
     completedLessonIds: stringList(data.completedLessonIds),
-    lessonPositions,
+    lessonPositions: normalizePositions(data.lessonPositions),
+    stepPositions: normalizePositions(data.stepPositions),
     lastCompletionDate: typeof data.lastCompletionDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(data.lastCompletionDate)
       ? data.lastCompletionDate
       : null,
@@ -114,6 +119,16 @@ export function saveLessonPosition(lessonId: string, position: number) {
   }));
 }
 
+export function saveLessonStepPosition(lessonId: string, position: number) {
+  if (!Number.isInteger(position) || position < 0) {
+    return Promise.reject(new Error('Lesson step position must be a non-negative integer.'));
+  }
+  return updateLearningProgress((progress) => ({
+    ...progress,
+    stepPositions: { ...progress.stepPositions, [lessonId]: position },
+  }));
+}
+
 export function toggleLessonBookmark(lessonId: string) {
   return updateLearningProgress((progress) => ({
     ...progress,
@@ -137,6 +152,7 @@ export function markLessonCompleted(lessonId: string) {
       ...progress,
       completedLessonIds: [...progress.completedLessonIds, lessonId],
       lessonPositions: { ...progress.lessonPositions, [lessonId]: 0 },
+      stepPositions: { ...progress.stepPositions, [lessonId]: 0 },
       lastCompletionDate: today,
       streakCount,
     };
