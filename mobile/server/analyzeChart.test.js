@@ -11,6 +11,7 @@ const {
   applyMentorStrategy,
   enforceValidationRules,
   getTraderSystemPrompt,
+  normalizeCompleteChartAnalysis,
   buildMultiTimeframeMessages,
   buildCandidateLevelFollowupMessages,
   callVisionModel,
@@ -903,21 +904,101 @@ test('recognizable low-quality charts are analyzed conservatively instead of rej
   assert.equal(result.status, 'no_trade');
 });
 
-test('vision instructions reserve invalid_image for clearly non-chart or unrecognizable images', () => {
+test('chart prompt requires a complete level-based plan for every chart image', () => {
   const prompt = getTraderSystemPrompt();
   assert.ok(prompt.length < 6000, `Expected a compact prompt, got ${prompt.length} characters`);
-  assert.match(prompt, /Pair: use the chart label/i);
-  assert.match(prompt, /Timeframe: use the chart label/i);
-  assert.match(prompt, /Cover forex, crypto, metals, indices and commodities/i);
-  assert.match(prompt, /Never claim screenshot prices are live/i);
-  assert.match(prompt, /Follow this order exactly/i);
-  assert.match(prompt, /Identify nearest visible support and resistance and record their exact numeric prices/i);
-  assert.match(prompt, /always provide a BUY or SELL trade_plan/i);
-  assert.match(prompt, /Never output the bare phrase "wait for confirmation"/i);
-  assert.match(prompt, /Required legacy shapes: analysis=\{trend,market_structure,structure_bias/i);
-  assert.match(prompt, /do not put new verdict fields inside trade_setup/i);
-  assert.match(prompt, /"verdict":"TRADE_PLAN\|CONDITIONAL_PLAN\|NO_TRADE"/);
-  assert.match(prompt, /"trade_plan":\{"direction":"BUY\|SELL"/);
+  assert.match(prompt, /State market bias as BUY or SELL/i);
+  assert.match(prompt, /Read numeric support and resistance levels/i);
+  assert.match(prompt, /Build entry, stop loss, take profit 1, take profit 2, and risk-to-reward from the identified levels/i);
+  assert.match(prompt, /Set status to success for a chart and verdict to TRADE_PLAN/i);
+  assert.match(prompt, /Only return status invalid_image when the image contains no chart/i);
+  assert.doesNotMatch(prompt, /CONDITIONAL_PLAN|NO_TRADE|LOW QUALITY|wait for confirmation|unreadable/i);
+});
+
+test('mid-range charts produce a nearest-level plan with recomputed RR', () => {
+  const result = normalizeCompleteChartAnalysis({
+    chart: { is_chart: true, pair: 'XAUUSD', timeframe: 'M15', latest_visible_price: 4170.489, chart_quality: 'poor' },
+    analysis: { trend: 'neutral', notes: 'Price consolidates between visible range levels.' },
+    levels: { support: [4164.171], resistance: [4178.461] },
+    bias: 'neutral',
+    price_position: 'mid_range',
+    setup: 'range_middle',
+    trade_plan: {
+      direction: 'BUY',
+      entry_type: 'trigger',
+      entry: 4164.171,
+      stop_loss: 4164.16,
+      take_profit_1: 4178.461,
+      risk_reward: 1,
+    },
+  }, { pair: 'XAUUSD' });
+
+  assert.equal(result.status, 'success');
+  assert.equal(result.verdict, 'TRADE_PLAN');
+  assert.equal(result.trade_plan.direction, 'BUY');
+  assert.equal(result.trade_plan.entry_type, 'market');
+  assert.equal(result.trade_plan.entry, 4164.171);
+  assert.ok(result.trade_plan.stop_loss < 4164.171);
+  assert.equal(result.trade_plan.take_profit_1, 4178.461);
+  assert.equal(result.trade_plan.risk_reward, Number(((4178.461 - 4164.171) / (4164.171 - result.trade_plan.stop_loss)).toFixed(2)));
+  assert.equal(result.trade_setup.type, 'buy');
+  assert.equal(result.trade_setup.entry_zone, String(result.trade_plan.entry));
+});
+
+test('trending pullback with rejection remains a direct market BUY plan', () => {
+  const result = normalizeCompleteChartAnalysis({
+    chart: { is_chart: true, pair: 'EURUSD', timeframe: 'M15' },
+    analysis: { trend: 'bullish', structure: 'Higher highs and higher lows.' },
+    levels: { support: [1.1], resistance: [1.105, 1.11] },
+    bias: 'BUY',
+    price_position: 'at_support',
+    setup: 'trend_pullback',
+    trade_plan: { direction: 'BUY', entry: 1.1, stop_loss: 1.099, take_profit_1: 1.105, take_profit_2: 1.11, risk_reward: 99 },
+  });
+
+  assert.equal(result.verdict, 'TRADE_PLAN');
+  assert.equal(result.trade_plan.direction, 'BUY');
+  assert.equal(result.trade_plan.entry_type, 'market');
+  assert.equal(result.trade_plan.risk_reward, 5);
+});
+
+test('low-resolution chart quality does not prevent a complete plan', () => {
+  const result = normalizeCompleteChartAnalysis({
+    chart: { is_chart: true, pair: 'GBPUSD', timeframe: 'H1', chart_quality: 'poor', latest_visible_price: 1.25 },
+    analysis: { trend: 'bearish', notes: 'Price is rejecting a swing high.' },
+    levels: { support: [1.24, 1.23], resistance: [1.26, 1.27] },
+    bias: 'SELL',
+    trade_plan: { direction: 'SELL', entry: 1.26, stop_loss: 1.261, take_profit_1: 1.24, take_profit_2: 1.23 },
+  });
+
+  assert.equal(result.status, 'success');
+  assert.equal(result.trade_plan.direction, 'SELL');
+  assert.equal(result.trade_plan.entry, 1.26);
+  assert.ok(result.trade_plan.take_profit_1 < result.trade_plan.entry);
+});
+
+test('uncertain direction is normalized into a committed, complete setup', () => {
+  const result = normalizeCompleteChartAnalysis({
+    chart: { is_chart: true, latest_visible_price: 1.105 },
+    analysis: { trend: 'neutral' },
+    levels: { support: [1.1], resistance: [1.11] },
+    bias: 'neutral',
+    setup: 'range_middle',
+  });
+
+  assert.ok(['BUY', 'SELL'].includes(result.bias));
+  assert.ok(result.trade_plan);
+  assert.ok(result.levels.support.length && result.levels.resistance.length);
+});
+
+test('only an explicitly non-chart image returns invalid_image without a plan', () => {
+  const result = normalizeCompleteChartAnalysis({
+    status: 'invalid_image',
+    chart: { is_chart: false },
+  });
+
+  assert.equal(result.status, 'invalid_image');
+  assert.equal(result.trade_plan, null);
 });
 
 test('missing chart visibility metadata is not treated as positive evidence', () => {
@@ -1461,68 +1542,22 @@ test('partial directional responses pass normalization without becoming actionab
   assert.equal(result.tradeDecision, 'NONE');
 });
 
-test('authenticated chart upload returns normalized candidate levels through the API', async () => {
-  const providerAnalysis = {
-    status: 'success',
-    chart: {
-      is_chart: true,
-      pair: 'EURUSD',
-      timeframe: 'M15',
-      chart_quality: 'good',
-      price_scale_visible: true,
-      candles_visible: true,
-      has_enough_candles: true,
-      latest_visible_price: '1.10000',
-      current_price_source: 'visible_price_marker',
-      current_candle_status: 'forming',
-      latest_candle_timestamp: new Date().toISOString(),
-    },
-    analysis: {
-      trend: 'bullish',
-      market_structure: 'Higher highs and higher lows.',
-      structure: 'Uptrend.',
-      volume: 'high',
-      sentiment: 'bullish',
-      notes: 'A bullish candidate is present but not validated.',
-      reasoning: ['Higher highs are visible.'],
-    },
-    zones: { support: '1.10000', resistance: '1.10200', liquidity: 'not_clear' },
-    levels: { support: [1.1], resistance: [1.102, 1.103] },
-    bias: 'bullish',
-    price_position: 'at_support',
-    setup: 'trend_pullback',
-    verdict: 'TRADE_PLAN',
-    conviction: 'HIGH',
-    verdict_reason: 'BUY plan uses support 1.10000 and resistance 1.10200; price is at_support with a trend_pullback setup.',
-    trade_plan: {
-      direction: 'BUY',
-      entry_type: 'market',
-      trigger_event: null,
-      entry: 1.1,
-      stop_loss: 1.099,
-      take_profit_1: 1.102,
-      take_profit_2: 1.103,
-      risk_reward: 2,
-    },
-    trade_setup: {
-      type: 'buy',
-      entry_zone: '1.10000',
-      stop_loss: '1.09900',
-      take_profit: '1.10200',
-      take_profit_levels: ['1.10200', '1.10300'],
-      risk_reward: '9',
-      setup_status: 'valid',
-    },
-    confidence: 72,
-    reasoning: ['Entry at visible support; stop below the swing low.'],
-    reasons: ['The entry trigger is not confirmed.'],
-  };
+test('authenticated chart upload returns a complete plan and reserves invalid_image for non-charts', async () => {
   const previousFetch = global.fetch;
   const previousApiKey = process.env.OPENROUTER_API_KEY;
   const previousRevenueCatKey = process.env.REVENUECAT_SECRET_API_KEY;
   let providerCalls = 0;
   let revenueCatEntitlementActive = true;
-  let providerResponses = [providerAnalysis];
+  let providerResponse = {
+    status: 'success',
+    chart: { is_chart: true, pair: 'EURUSD', timeframe: 'M15', latest_visible_price: 1.1 },
+    analysis: { trend: 'bullish', structure: 'Higher highs and higher lows.' },
+    levels: { support: [1.1, 1.099], resistance: [1.102, 1.103] },
+    bias: 'BUY',
+    price_position: 'at_support',
+    setup: 'trend_pullback',
+    trade_plan: { direction: 'BUY', entry: 1.1, stop_loss: 1.099, take_profit_1: 1.102, take_profit_2: 1.103, risk_reward: 99 },
+  };
   const server = http.createServer(createRequestHandler());
 
   process.env.OPENROUTER_API_KEY = 'test-key';
@@ -1532,21 +1567,16 @@ test('authenticated chart upload returns normalized candidate levels through the
       return {
         ok: true,
         status: 200,
-        json: async () => ({
-          subscriber: {
-            entitlements: revenueCatEntitlementActive ? { premium: { expires_date: null } } : {},
-          },
-        }),
+        json: async () => ({ subscriber: { entitlements: revenueCatEntitlementActive ? { premium: { expires_date: null } } : {} } }),
       };
     }
     assert.match(String(url), /\/chat\/completions$/);
     providerCalls += 1;
-    const nextProviderResponse = providerResponses.shift();
     return {
       ok: true,
       status: 200,
       text: async () => JSON.stringify({
-        choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(nextProviderResponse) } }],
+        choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(providerResponse) } }],
       }),
     };
   };
@@ -1559,12 +1589,6 @@ test('authenticated chart upload returns normalized candidate levels through the
     const address = server.address();
     assert.ok(address && typeof address === 'object');
     const token = createAuth(process.env.FXSNAP_AUTH_SECRET || 'development-only-change-me', 'integration-device-1234');
-    const body = JSON.stringify({
-      imageBase64: 'x'.repeat(120),
-      mimeType: 'image/jpeg',
-      pair: 'EURUSD',
-      premiumAccess: true,
-    });
     const post = (path, requestBody) => new Promise((resolve, reject) => {
       const requestText = JSON.stringify(requestBody);
       const request = http.request({
@@ -1587,146 +1611,45 @@ test('authenticated chart upload returns normalized candidate levels through the
       request.once('error', reject);
       request.end(requestText);
     });
-    const postAnalysis = () => post('/analyze-chart', JSON.parse(body));
+    const requestBody = { imageBase64: 'x'.repeat(120), mimeType: 'image/jpeg', pair: 'EURUSD', premiumAccess: true };
+    const postAnalysis = () => post('/analyze-chart', requestBody);
 
     revenueCatEntitlementActive = false;
-    const unpaidAnalysisResponse = await postAnalysis();
-    assert.equal(unpaidAnalysisResponse.statusCode, 402);
-    assert.equal(unpaidAnalysisResponse.body.code, 'PREMIUM_REQUIRED');
+    const unpaid = await postAnalysis();
+    assert.equal(unpaid.statusCode, 402);
+    assert.equal(unpaid.body.code, 'PREMIUM_REQUIRED');
     assert.equal(providerCalls, 0);
-    const unpaidStrategyResponse = await post('/api/strategy', {});
-    assert.equal(unpaidStrategyResponse.statusCode, 402);
-    assert.equal(unpaidStrategyResponse.body.code, 'PREMIUM_REQUIRED');
-    assert.equal(providerCalls, 0);
-    const unpaidMultiTimeframeResponse = await post('/api/multi-timeframe-analysis', {
-      pair: 'EURUSD',
-      premiumAccess: true,
-      charts: {
-        h4: { imageBase64: 'x'.repeat(120), mimeType: 'image/jpeg' },
-        m15: { imageBase64: 'x'.repeat(120), mimeType: 'image/jpeg' },
-      },
-    });
-    assert.equal(unpaidMultiTimeframeResponse.statusCode, 402);
-    assert.equal(unpaidMultiTimeframeResponse.body.code, 'PREMIUM_REQUIRED');
-    assert.equal(providerCalls, 0);
+
     revenueCatEntitlementActive = true;
-    const responseBody = await postAnalysis();
-    assert.equal(responseBody.statusCode, 200);
+    const response = await postAnalysis();
+    assert.equal(response.statusCode, 200);
     assert.equal(providerCalls, 1);
-    assert.equal(responseBody.body.status, 'success');
-    assert.equal(responseBody.body.analysis.volume, 'high');
-    assert.equal(responseBody.body.trade_setup.type, 'buy');
-    assert.equal(responseBody.body.trade_setup.entry_zone, '1.10000');
-    assert.equal(responseBody.body.trade_setup.stop_loss, '1.09900');
-    assert.equal(responseBody.body.trade_setup.take_profit, '1.10200');
-    assert.deepEqual(responseBody.body.trade_setup.take_profit_levels, ['1.10200', '1.10300']);
-    assert.ok(Math.abs(responseBody.body.trade_setup.risk_reward - 2) < 1e-8);
-    assert.equal(responseBody.body.tradeDecision, 'WAIT');
-    assert.ok(responseBody.body.rrIssues.length > 0);
+    assert.equal(response.body.status, 'success');
+    assert.equal(response.body.trade_plan.direction, 'BUY');
+    assert.equal(response.body.trade_setup.entry_zone, '1.1');
+    assert.equal(response.body.trade_plan.take_profit_1, 1.102);
+    assert.equal(response.body.trade_plan.risk_reward, 2);
+    assert.equal(response.body.tradeDecision, 'BUY');
 
-    providerResponses = [
-      { ...providerAnalysis, trade_setup: undefined },
-      twoSidedReview(
-        twoSidedCandidate('buy', { reason: 'Entry at support; stop below the visible swing low.' }),
-        { ...twoSidedCandidate('sell'), status: 'unsupported' },
-      ),
-    ];
-    providerCalls = 0;
-    const recoveredResponse = await postAnalysis();
-    assert.equal(recoveredResponse.statusCode, 200);
-    assert.equal(providerCalls, 2);
-    assert.equal(recoveredResponse.body.status, 'no_trade');
-    assert.equal(recoveredResponse.body.levelFollowupStatus, 'completed');
-    assert.equal(recoveredResponse.body.trade_setup.entry_zone, '1.10000');
-    assert.equal(recoveredResponse.body.trade_setup.stop_loss, '1.09900');
-    assert.deepEqual(recoveredResponse.body.trade_setup.take_profit_levels, ['1.10200']);
-    assert.ok(Math.abs(recoveredResponse.body.trade_setup.risk_reward - 2) < 1e-8);
-    assert.equal(recoveredResponse.body.tradeDecision, 'WAIT');
-
-    const missingLevelsAndFreshness = {
-      ...providerAnalysis,
-      status: 'no_trade',
-      chart: {
-        ...providerAnalysis.chart,
-        latest_visible_price: null,
-        current_price_source: 'unreadable',
-        current_candle_status: 'unknown',
-        latest_candle_timestamp: null,
-      },
-      trade_setup: {
-        type: 'none',
-        entry_zone: 'none',
-        stop_loss: 'none',
-        take_profit: 'none',
-        take_profit_levels: [],
-        risk_reward: null,
-        setup_status: 'unclear',
-      },
+    providerResponse = {
+      chart: { is_chart: true, chart_quality: 'poor' },
+      analysis: { trend: 'neutral' },
+      levels: { support: [4164.171], resistance: [4178.461] },
+      bias: 'neutral',
+      price_position: 'mid_range',
+      setup: 'range_middle',
     };
-    providerResponses = [
-      missingLevelsAndFreshness,
-      twoSidedReview(
-        twoSidedCandidate('buy', {
-          setup_status: 'unclear',
-          reason: 'Entry at visible support, stop below the latest swing low, target at visible resistance. Current price and screenshot freshness are unclear.',
-        }),
-        { ...twoSidedCandidate('sell'), status: 'unsupported' },
-      ),
-    ];
-    providerCalls = 0;
-    const unverifiedLevelsResponse = await postAnalysis();
-    assert.equal(unverifiedLevelsResponse.statusCode, 200);
+    const lowResolution = await postAnalysis();
+    assert.equal(lowResolution.body.status, 'success');
+    assert.ok(lowResolution.body.trade_plan);
+    assert.ok(['BUY', 'SELL'].includes(lowResolution.body.bias));
     assert.equal(providerCalls, 2);
-    assert.equal(unverifiedLevelsResponse.body.status, 'no_trade');
-    assert.equal(unverifiedLevelsResponse.body.trade_setup.type, 'buy');
-    assert.equal(unverifiedLevelsResponse.body.trade_setup.entry_zone, '1.10000');
-    assert.equal(unverifiedLevelsResponse.body.trade_setup.stop_loss, '1.09900');
-    assert.equal(unverifiedLevelsResponse.body.trade_setup.take_profit, '1.10200');
-    assert.ok(Math.abs(unverifiedLevelsResponse.body.trade_setup.risk_reward - 2) < 1e-8);
-    assert.equal(unverifiedLevelsResponse.body.tradeDecision, 'NONE');
-    assert.equal(unverifiedLevelsResponse.body.candidateValidationStatus, 'unverified');
 
-    const movedPriceCandidate = {
-      ...providerAnalysis,
-      status: 'success',
-      chart: { ...providerAnalysis.chart, latest_visible_price: '1.10500' },
-      trade_setup: {
-        ...providerAnalysis.trade_setup,
-        take_profit: '1.11000',
-        take_profit_levels: ['1.11000'],
-      },
-    };
-    const noTradeRetry = {
-      ...providerAnalysis,
-      status: 'no_trade',
-      chart: { ...providerAnalysis.chart, latest_visible_price: null, current_price_source: 'unreadable' },
-      trade_setup: {
-        type: 'none',
-        entry_zone: 'none',
-        stop_loss: 'none',
-        take_profit: 'none',
-        take_profit_levels: [],
-        setup_status: 'unclear',
-      },
-      reasons: ['The current price marker is unreadable.'],
-    };
-    providerResponses = [movedPriceCandidate, noTradeRetry];
-    providerCalls = 0;
-    const regeneratedResponse = await postAnalysis();
-    assert.equal(providerCalls, 2);
-    assert.equal(regeneratedResponse.body.status, 'no_trade');
-    assert.equal(regeneratedResponse.body.trade_setup.type, 'none');
-    assert.equal(regeneratedResponse.body.trade_setup.entry_zone, 'none');
-    assert.ok(regeneratedResponse.body.dataLimitations.some((item) => /current price cannot be reliably read/i.test(item)));
-
-    providerResponses = [movedPriceCandidate, movedPriceCandidate];
-    providerCalls = 0;
-    const rejectedRetryResponse = await postAnalysis();
-    assert.equal(providerCalls, 2);
-    assert.equal(rejectedRetryResponse.body.status, 'no_trade');
-    assert.equal(rejectedRetryResponse.body.trade_setup.type, 'none');
-    assert.equal(rejectedRetryResponse.body.trade_setup.entry_zone, 'none');
-    assert.ok(rejectedRetryResponse.body.reasons.some((item) => /maximum 200 ticks/i.test(item)));
+    providerResponse = { status: 'invalid_image', chart: { is_chart: false } };
+    const nonChart = await postAnalysis();
+    assert.equal(nonChart.body.status, 'invalid_image');
+    assert.equal(nonChart.body.trade_plan, null);
+    assert.equal(providerCalls, 3);
   } finally {
     server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));

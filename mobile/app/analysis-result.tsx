@@ -729,23 +729,21 @@ export default function AnalysisResultScreen() {
 
         {hasTradePlan && currentAnalysis?.tradePlan ? (
           <View style={[styles.levelsCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
-            <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>TRADE PLAN</Text>
-            <TradeLevelRow label="Direction" value={currentAnalysis.tradePlan.direction} color={currentAnalysis.tradePlan.direction === 'BUY' ? colors.buy : colors.sell} />
-            <View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
-            <TradeLevelRow label="Entry" value={entryLevel} />
-            <View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
-            <TradeLevelRow label="Stop Loss" value={stopLevel} color={colors.sell} />
-            <View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
-            <TradeLevelRow label="Take Profit" value={tp1Level} color={colors.buy} />
-            <View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
-            <TradeLevelRow label="Risk : Reward" value={riskRewardText} color={colors.buy} />
-            {currentAnalysis.conviction === 'LOW'
-              ? <Text style={[styles.reasoningText, { color: colors.sell }]}>{/LOW QUALITY.*SKIP/i.test(currentAnalysis.verdictReason || '')
-                ? currentAnalysis.verdictReason
-                : `${currentAnalysis.verdictReason ? `${currentAnalysis.verdictReason} ` : ''}LOW QUALITY — RECOMMENDED: SKIP.`}</Text>
-              : currentAnalysis.verdictReason
-                ? <Text style={[styles.reasoningText, { color: colors.textSecondary }]}>{currentAnalysis.verdictReason}</Text>
-                : null}
+        <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>{currentAnalysis.conviction === 'LOW' ? 'TRADE PLAN · LOW CONVICTION' : 'TRADE PLAN'}</Text>
+        <TradeLevelRow label="Direction" value={currentAnalysis.tradePlan.direction} color={currentAnalysis.tradePlan.direction === 'BUY' ? colors.buy : colors.sell} />
+        <View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
+        <TradeLevelRow label="Entry" value={entryLevel} />
+        <View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
+        <TradeLevelRow label="Stop Loss" value={stopLevel} color={colors.sell} />
+        <View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
+        <TradeLevelRow label="Take Profit" value={tp1Level} color={colors.buy} />
+        <View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
+        <TradeLevelRow label="Risk : Reward" value={riskRewardText} color={colors.buy} />
+        <Text style={[styles.reasoningText, { color: colors.textSecondary, marginTop: 12 }]}>
+          {currentAnalysis.conviction === 'LOW'
+            ? (currentAnalysis.verdictReason || 'HOLD — Review the chart structure and the identified levels before entering.')
+            : currentAnalysis.verdictReason || 'HOLD — Review the chart structure and the identified levels before entering.'}
+        </Text>
           </View>
         ) : null}
 
@@ -768,7 +766,7 @@ export default function AnalysisResultScreen() {
               {hasDirectionalBiasOnly ? <Text style={[styles.bodyMuted, { color: colors.textSecondary }]}>{`Directional call: ${directionalCallLabel}. Entry, stop-loss, and take-profit levels are not validated. Hold until a complete plan is available.`}</Text> : null}
               {currentPrice != null ? <View style={styles.confidenceLine}><Text style={[styles.bodyMuted, { color: colors.textSecondary }]}>Latest visible price (screenshot)</Text><Text style={[styles.confidenceText, { color: colors.text }]}>{marketEntryText}</Text></View> : null}
             </Animated.View>
-            {hasTradePlan ? (
+            {hasTradePlan && currentAnalysis?.tradePlan ? (
               <View style={[styles.levelsCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
                 <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>{currentAnalysis.conviction === 'LOW' ? 'TRADE PLAN · LOW CONVICTION' : 'TRADE PLAN'}</Text>
                 <TradeLevelRow label="Direction" value={tradeDirection || '—'} color={tradeDirection === 'SELL' ? colors.sell : colors.buy} />
@@ -782,7 +780,7 @@ export default function AnalysisResultScreen() {
                 <TradeLevelRow label="Risk : Reward" value={riskRewardText} color={colors.buy} />
                 <Text style={[styles.reasoningText, { color: colors.textSecondary, marginTop: 12 }]}>
                   {currentAnalysis.conviction === 'LOW'
-                    ? currentAnalysis.verdictReason || 'LOW QUALITY — RECOMMENDED: SKIP.'
+                  ? (currentAnalysis.verdictReason || 'LOW QUALITY — RECOMMENDED: SKIP.')
                     : currentAnalysis.tradePlan.entryType === 'trigger'
                       ? `HOLD — Enter only after ${(currentAnalysis.tradePlan.triggerEvent || 'retest_hold').replace(/_/g, ' ')} at ${entryLevel}.`
                       : 'HOLD — Verify the planned levels against current market conditions before entering.'}

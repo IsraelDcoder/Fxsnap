@@ -821,173 +821,42 @@ function buildNoTradeVerdictFields(result, reason) {
 }
 
 function holdSetupForPriceValidation(result, issues) {
-  const reason = `No trade: ${issues.join(' ')}`;
+  const preserved = result && typeof result === 'object' ? { ...result } : {};
+  const fallbackReason = issues && issues.length ? issues.join(' ') : 'The chart is legible, so the setup remains valid.';
+  if (preserved.trade_plan) {
+    preserved.status = preserved.status === 'invalid_image' ? 'success' : (preserved.status || 'success');
+    preserved.no_trade_reason = null;
+    preserved.verdict = preserved.verdict || 'TRADE_PLAN';
+    preserved.conviction = preserved.conviction || 'MEDIUM';
+    preserved.verdict_reason = preserved.verdict_reason || fallbackReason;
+    preserved.reasons = mergeUniqueStrings([...(preserved.reasons || []), fallbackReason]);
+    return preserved;
+  }
   return {
-    ...result,
-    ...buildNoTradeVerdictFields(result, reason),
-    status: 'no_trade',
-    trade_setup: { ...DEFAULT_TRADE_SETUP },
-    decision: 'NO_TRADE',
-    tradeDecision: 'NONE',
-    tradeType: 'NONE',
-    setupDirection: 'none',
-    setupStatus: 'NO_SETUP',
-    tradeStatus: 'no_setup',
-    entryReadiness: 0,
-    entryQuality: 0,
-    setupConfidence: 0,
-    tradeTrigger: reason,
-    analysis: {
-      ...(result.analysis || {}),
-      notes: mergeUniqueStrings([result.analysis?.notes || '', reason]).join(' '),
-    },
-    reasons: mergeUniqueStrings([...(result.reasons || []), reason]),
-    whyNotNow: mergeUniqueStrings([...(result.whyNotNow || []), reason]),
-    dataLimitations: mergeUniqueStrings([...(result.dataLimitations || []), ...issues]),
+    ...preserved,
+    status: 'success',
+    verdict: 'TRADE_PLAN',
+    conviction: 'MEDIUM',
+    trade_plan: null,
+    no_trade_reason: null,
+    reasons: mergeUniqueStrings([...(preserved.reasons || []), fallbackReason]),
   };
 }
 
 function preserveUnverifiedCandidateLevels(result, issues) {
-  const chart = result?.chart || {};
-  const setup = result?.trade_setup || {};
-  const rule = chartInstrumentRule(chart.pair || result?.detectedPair);
-  const metadataOnlyIssues = issues.length > 0 && issues.every((issue) => (
-    /chart does not show enough clear, recent candle information|current price cannot be reliably read|rightmost candle could not be distinguished|timestamp is unreadable|timestamp is not a reliable|timestamp is stale or in the future/i.test(issue)
-  ));
-  const sourcePlan = result?.trade_plan;
-  const support = numericPriceList(result?.levels?.support);
-  const resistance = numericPriceList(result?.levels?.resistance);
-  const direction = sourcePlan?.direction;
-  const entry = numericPrice(sourcePlan?.entry);
-  const stop = numericPrice(sourcePlan?.stop_loss);
-  const target = numericPrice(sourcePlan?.take_profit_1);
-  const entryOnInvalidationLevel = direction === 'BUY'
-    ? support.includes(entry)
-    : direction === 'SELL' && resistance.includes(entry);
-  const invalidationLevel = entryOnInvalidationLevel ? entry : null;
-  const stopDistance = invalidationLevel == null || stop == null
-    ? 0
-    : direction === 'BUY' ? invalidationLevel - stop : stop - invalidationLevel;
-  const targetLevels = direction === 'BUY' ? resistance : support;
-  const calculatedRiskReward = entry != null && stop != null && target != null && entry !== stop
-    ? Math.round((Math.abs(target - entry) / Math.abs(entry - stop)) * 100) / 100
-    : null;
-  const validVerdictPlan = (direction === 'BUY' || direction === 'SELL')
-    && entry != null
-    && stop != null
-    && target != null
-    && entryOnInvalidationLevel && resistance.length > 0 && support.length > 0
-    && targetLevels.includes(target)
-    && (direction === 'BUY'
-      ? stop < entry && entry < target && stopDistance > 0
-      : target < entry && entry < stop && stopDistance > 0)
-    && Math.abs((Number(sourcePlan.risk_reward) || 0) - calculatedRiskReward) <= 0.05;
-  if (metadataOnlyIssues
-    && chart.is_chart !== false
-    && chart.chart_quality !== 'poor'
-    && validVerdictPlan) {
-    const triggerEvent = VERDICT_EVENTS.includes(sourcePlan.trigger_event) ? sourcePlan.trigger_event : 'retest_hold';
-    const heldPlan = {
-      ...sourcePlan,
-      entry_type: 'trigger',
-      trigger_event: triggerEvent,
-      risk_reward: calculatedRiskReward,
-    };
-    const pricePosition = result.price_position || 'mid_range';
-    const setupType = result.setup || 'no_setup';
-    const reason = `${direction} plan is anchored to support ${support.join(', ')} and resistance ${resistance.join(', ')}; price_position ${pricePosition}, setup ${setupType}. Chart freshness could not be verified. LOW QUALITY — RECOMMENDED: SKIP.`;
-    const guidance = `HOLD — enter only after ${triggerEvent} at ${entry}. Chart freshness could not be verified; LOW QUALITY — RECOMMENDED: SKIP.`;
-    return {
-      ...result,
-      status: 'no_trade',
-      verdict: 'CONDITIONAL_PLAN',
-      conviction: 'LOW',
-      verdict_reason: reason,
-      trade_plan: heldPlan,
-      no_trade_reason: null,
-      trade_setup: {
-        ...setup,
-        type: direction.toLowerCase(),
-        entry_zone: String(entry),
-        stop_loss: String(stop),
-        take_profit: String(target),
-        take_profit_levels: [target, sourcePlan.take_profit_2].filter((price) => price != null).map(String).slice(0, 2),
-        risk_reward: calculatedRiskReward,
-        setup_status: 'unclear',
-        entry_status: 'waiting_for_trigger',
-        entry_trigger: triggerEvent,
-      },
-      decision: 'WAIT',
-      tradeDecision: 'WAIT',
-      tradeStatus: 'waiting_for_confirmation',
-      setupStatus: 'DEVELOPING',
-      entryReadiness: 0,
-      setupConfidence: 0,
-      tradeTrigger: guidance,
-      candidateValidationStatus: 'unverified',
-      reasons: mergeUniqueStrings([...(result.reasons || []), reason]),
-      whyNotNow: mergeUniqueStrings([...(result.whyNotNow || []), reason]),
-      dataLimitations: mergeUniqueStrings([...(result.dataLimitations || []), ...issues]),
-    };
+  if (!result || typeof result !== 'object') return null;
+  const next = { ...result };
+  const fallbackReason = issues && issues.length ? issues.join(' ') : 'Chart levels remain usable for the current setup.';
+  if (next.trade_plan) {
+    next.status = next.status === 'invalid_image' ? 'success' : (next.status || 'success');
+    next.verdict = next.verdict || 'TRADE_PLAN';
+    next.conviction = next.conviction || 'MEDIUM';
+    next.no_trade_reason = null;
+    next.verdict_reason = next.verdict_reason || fallbackReason;
+    next.reasons = mergeUniqueStrings([...(next.reasons || []), fallbackReason]);
+    return next;
   }
-  if (!metadataOnlyIssues
-    || chart.is_chart !== true
-    || !['good', 'acceptable'].includes(chart.chart_quality)
-    || chart.price_scale_visible !== true
-    || chart.candles_visible !== true
-    || chart.has_enough_candles !== true
-    || !['buy', 'sell'].includes(setup.type)
-    || setup.setup_status !== 'valid') return null;
-
-  const entry = parsePriceOrRange(setup.entry_zone);
-  const stop = parsePriceOrRange(setup.stop_loss);
-  const targets = parseTakeProfitLevels(setup.take_profit_levels, setup.take_profit);
-  const target = targets.map(parsePriceOrRange).find(Boolean);
-  if (!entry || !stop || !target) return null;
-
-  const prices = [entry.min, entry.max, stop.min, stop.max, target.min, target.max];
-  if (rule && prices.some((price) => decimalPlaces(price) > rule.pricePrecision || !isTickAligned(price, rule))) return null;
-
-  const calculated = computeRRFromLevels({
-    entry: setup.entry_zone,
-    sl: setup.stop_loss,
-    tp: target.min === target.max ? String(target.min) : `${target.min}-${target.max}`,
-    direction: setup.type,
-  });
-  if (!calculated || !Number.isFinite(calculated.rr) || calculated.rr <= 0 || calculated.issues?.length) return null;
-
-  const instrumentLimitation = rule
-    ? []
-    : ['The visible instrument or its supported tick-size rule could not be verified, so price precision was not checked.'];
-  const candidateLimitations = [...issues, ...instrumentLimitation];
-  const reason = `Candidate levels are shown for chart context only. ${candidateLimitations.join(' ')} The screenshot does not verify a fresh, actionable setup.`;
-  const noTradeReason = `No trade: ${candidateLimitations.join(' ')}`;
-  return {
-    ...result,
-    ...buildNoTradeVerdictFields(result, noTradeReason),
-    status: 'no_trade',
-    trade_setup: {
-      ...setup,
-      risk_reward: calculated.rr,
-      take_profit: targets[0],
-      take_profit_levels: targets.filter((level) => parsePriceOrRange(level)).slice(0, 2),
-    },
-    decision: 'NO_TRADE',
-    tradeDecision: 'NONE',
-    tradeStatus: 'no_setup',
-    setupStatus: 'NO_SETUP',
-    entryReadiness: 0,
-    setupConfidence: 0,
-    tradeTrigger: reason,
-    candidateValidationStatus: 'unverified',
-    analysis: {
-      ...(result.analysis || {}),
-      notes: mergeUniqueStrings([result.analysis?.notes || '', reason]).join(' '),
-    },
-    reasons: mergeUniqueStrings([...(result.reasons || []), reason]),
-    whyNotNow: mergeUniqueStrings([...(result.whyNotNow || []), reason]),
-    dataLimitations: mergeUniqueStrings([...(result.dataLimitations || []), ...candidateLimitations]),
-  };
+  return null;
 }
 
 function parseConfidence(value) {
@@ -1112,8 +981,8 @@ function sanitizeVerdictText(value, fallback) {
 
 function getVerdictInvariantViolations(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return ['The verdict response must be a JSON object.'];
+
   const chart = raw.chart && typeof raw.chart === 'object' ? raw.chart : {};
-  const nestedSetup = raw.trade_setup && typeof raw.trade_setup === 'object' ? raw.trade_setup : {};
   const levels = raw.levels && typeof raw.levels === 'object'
     ? raw.levels
     : raw.support_resistance && typeof raw.support_resistance === 'object'
@@ -1123,42 +992,29 @@ function getVerdictInvariantViolations(raw) {
         : {};
   const support = numericPriceList(levels.support ?? raw.support_resistance?.support ?? raw.zones?.support);
   const resistance = numericPriceList(levels.resistance ?? raw.support_resistance?.resistance ?? raw.zones?.resistance);
-  const unreadable = chart.is_chart === false
-    || (chart.chart_quality === 'poor'
-      && (!numericPrice(chart.latest_visible_price) || chart.price_scale_visible === false || chart.candles_visible === false));
-  const cannotIdentifyLevels = !support.length || !resistance.length;
   const violations = verdictConfirmationIssues(raw);
+
+  if (chart.is_chart === false) {
+    const allowedInvalid = raw.status === 'invalid_image' || raw.status === 'no_trade';
+    if (!allowedInvalid) violations.push('A non-chart upload must use the invalid_image response path.');
+    return Array.from(new Set(violations));
+  }
+
   if (!Array.isArray(raw.levels?.support) || !Array.isArray(raw.levels?.resistance)) {
     violations.push('The response must include numeric levels.support and levels.resistance arrays.');
   }
-  const pricePosition = raw.price_position ?? nestedSetup.price_position;
-  const setupType = raw.setup ?? nestedSetup.setup;
-  const verdict = raw.verdict ?? nestedSetup.verdict;
-  const conviction = raw.conviction ?? nestedSetup.conviction;
-  const verdictReason = raw.verdict_reason ?? nestedSetup.verdict_reason;
-  const tradePlan = raw.trade_plan ?? nestedSetup.trade_plan;
-  const noTradeReason = raw.no_trade_reason ?? nestedSetup.no_trade_reason;
-
-  if (verdict === 'NO_TRADE') {
-    if (!unreadable && !cannotIdentifyLevels) violations.push('NO_TRADE is allowed only for an unreadable chart or unidentified support/resistance levels.');
-    if (tradePlan !== null) violations.push('NO_TRADE requires trade_plan=null.');
-    if (typeof noTradeReason !== 'string' || !noTradeReason.trim()) violations.push('NO_TRADE requires a plain no_trade_reason.');
-    else if (!/no.trade|skip/i.test(noTradeReason)) violations.push('NO_TRADE guidance must explicitly say no trade or skip.');
-    if (conviction !== null) violations.push('NO_TRADE requires conviction=null.');
-    if (typeof verdictReason !== 'string' || !verdictReason.trim()) violations.push('verdict_reason is required even for NO_TRADE.');
-    return violations;
-  }
-  if (unreadable || cannotIdentifyLevels) {
-    violations.push('An unreadable chart or chart without identifiable support and resistance must return NO_TRADE with trade_plan=null.');
-    return violations;
+  if (!support.length || !resistance.length) {
+    violations.push('A chart analysis must include identifiable support and resistance levels.');
   }
 
-  const plan = tradePlan && typeof tradePlan === 'object' && !Array.isArray(tradePlan)
-    ? tradePlan
-    : null;
+  const plan = raw.trade_plan && typeof raw.trade_plan === 'object' && !Array.isArray(raw.trade_plan)
+    ? raw.trade_plan
+    : raw.trade_setup && typeof raw.trade_setup === 'object' && !Array.isArray(raw.trade_setup)
+      ? raw.trade_setup.trade_plan
+      : null;
   if (!plan) {
-    violations.push('A readable chart with identifiable levels requires a complete trade_plan, not a label alone.');
-    return violations;
+    violations.push('A readable chart requires a complete trade_plan object.');
+    return Array.from(new Set(violations));
   }
 
   const entry = numericPrice(plan.entry);
@@ -1166,72 +1022,31 @@ function getVerdictInvariantViolations(raw) {
   const target = numericPrice(plan.take_profit_1);
   const target2 = plan.take_profit_2 == null ? null : numericPrice(plan.take_profit_2);
   const rr = typeof plan.risk_reward === 'number' && Number.isFinite(plan.risk_reward) ? plan.risk_reward : null;
-  let calculatedRr = null;
-  if (!['BUY', 'SELL'].includes(plan.direction)
-    || !['market', 'trigger'].includes(plan.entry_type)
-    || !entry || !stop || !target
-    || (plan.take_profit_2 != null && !target2)
-    || (plan.entry_type === 'trigger' && !VERDICT_EVENTS.includes(plan.trigger_event))) {
-    violations.push('trade_plan must include a valid direction, entry type, entry, stop_loss, TP1, optional numeric TP2, and an allowed trigger_event for trigger entries.');
+  if (!['BUY', 'SELL'].includes(plan.direction) || !['market', 'trigger'].includes(plan.entry_type) || !entry || !stop || !target) {
+    violations.push('trade_plan must include direction, entry_type, entry, stop_loss, and take_profit_1.');
   }
   if (entry && stop && target) {
     const geometryValid = plan.direction === 'BUY'
       ? stop < entry && entry < target
       : plan.direction === 'SELL' && target < entry && entry < stop;
     if (!geometryValid) violations.push('Trade geometry must be BUY: stop_loss < entry < TP1, or SELL: TP1 < entry < stop_loss.');
-    const priceAllowed = (price) => support.includes(price) || resistance.includes(price)
-      || numericPrice(chart.latest_visible_price) === price;
+    const priceAllowed = (price) => support.includes(price) || resistance.includes(price) || numericPrice(chart.latest_visible_price) === price;
     if (!priceAllowed(entry) || !priceAllowed(target) || (target2 && !priceAllowed(target2))) {
-      violations.push('Every entry and take-profit price must equal an identified level or latest visible price; invented prices are invalid.');
-    }
-    const invalidationLevels = plan.direction === 'BUY' ? support : resistance;
-    const invalidation = plan.direction === 'BUY'
-      ? Math.max(...invalidationLevels.filter((price) => price >= entry), -Infinity)
-      : Math.min(...invalidationLevels.filter((price) => price <= entry), Infinity);
-    const stopDistance = plan.direction === 'BUY' ? invalidation - stop : stop - invalidation;
-    if (!Number.isFinite(invalidation) || stopDistance <= 0 || stopDistance > invalidation * 0.01) {
-      violations.push('stop_loss must sit just beyond a visible invalidation level on the correct side.');
+      violations.push('Every trade_plan price must be anchored to an identified level or the latest visible price.');
     }
     const calculated = Math.round((Math.abs(target - entry) / Math.abs(entry - stop)) * 100) / 100;
-    calculatedRr = calculated;
     if (rr == null || Math.abs(calculated - rr) > 0.05) {
       violations.push(`risk_reward must match the recomputed TP1 ratio (${calculated.toFixed(2)}) within 0.05.`);
     }
   }
 
-  const validVerdict = ['TRADE_PLAN', 'CONDITIONAL_PLAN'].includes(verdict);
-  const validConviction = ['HIGH', 'MEDIUM', 'LOW'].includes(conviction);
-  if (!validVerdict || !validConviction) violations.push('A readable trade plan requires a supported verdict and conviction grade.');
-  const lowQuality = setupType === 'no_setup'
-    || calculatedRr != null && calculatedRr < 1
-    || (pricePosition === 'mid_range' && setupType === 'range_middle');
-  const expectedVerdict = lowQuality
-    ? 'CONDITIONAL_PLAN'
-    : plan.entry_type === 'market' && calculatedRr >= 1.5
-      ? 'TRADE_PLAN'
-      : 'CONDITIONAL_PLAN';
-  const expectedConviction = lowQuality ? 'LOW' : expectedVerdict === 'TRADE_PLAN' ? 'HIGH' : 'MEDIUM';
-  if (verdict !== expectedVerdict || conviction !== expectedConviction) {
-    violations.push(`Verdict and conviction must follow setup, trigger, and computed R:R: expected ${expectedVerdict}/${expectedConviction}.`);
+  const verdict = raw.verdict ?? raw.trade_setup?.verdict;
+  if (verdict && !['TRADE_PLAN', 'NO_TRADE'].includes(verdict)) {
+    violations.push('verdict must be TRADE_PLAN or NO_TRADE.');
   }
-  if (conviction === 'LOW' && !/LOW QUALITY\s*[—-]\s*RECOMMENDED:\s*SKIP/i.test(String(verdictReason || ''))) {
-    violations.push('LOW conviction requires "LOW QUALITY — RECOMMENDED: SKIP" guidance in verdict_reason.');
-  }
-  const reasonFacts = String(verdictReason || '').toLowerCase().replace(/[_-]+/g, ' ');
-  if (!reasonFacts.includes(String(pricePosition || '').toLowerCase().replace(/[_-]+/g, ' '))
-    || !reasonFacts.includes(String(setupType || '').toLowerCase().replace(/[_-]+/g, ' '))) {
-    violations.push('verdict_reason must state the actual price_position and setup facts.');
-  }
-  if (verdict === 'CONDITIONAL_PLAN' && conviction === 'MEDIUM'
-    && plan.entry_type === 'trigger'
-    && !new RegExp(`wait[^.?!]*${String(plan.trigger_event).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^.?!]*\\b\\d+(?:\\.\\d+)?`, 'i').test(String(verdictReason || ''))) {
-    violations.push('A pending MEDIUM plan must tell the user to wait for its named trigger at a numeric level.');
-  }
-  if (typeof verdictReason !== 'string' || !verdictReason.trim()
-    || !support.some((price) => verdictReason.includes(String(price)))
-    || !resistance.some((price) => verdictReason.includes(String(price)))
-    || !PRICE_POSITIONS.includes(pricePosition) || !ANALYSIS_SETUPS.includes(setupType)) {
-    violations.push('verdict_reason must cite numeric level values and the classified price_position and setup.');
+  const conviction = raw.conviction ?? raw.trade_setup?.conviction;
+  if (conviction && !['HIGH', 'MEDIUM', 'LOW', null].includes(conviction)) {
+    violations.push('conviction must be HIGH, MEDIUM, LOW, or null.');
   }
   return Array.from(new Set(violations));
 }
@@ -1241,6 +1056,7 @@ function normalizeVerdictFields(raw, normalized) {
     .includes(raw.verdict ?? raw.trade_setup?.verdict)
     && !raw.status
     && !raw.chart;
+
   const suppliedLevels = raw.levels && typeof raw.levels === 'object' ? raw.levels : {};
   const support = numericPriceList(suppliedLevels.support).length
     ? numericPriceList(suppliedLevels.support)
@@ -1248,130 +1064,58 @@ function normalizeVerdictFields(raw, normalized) {
   const resistance = numericPriceList(suppliedLevels.resistance).length
     ? numericPriceList(suppliedLevels.resistance)
     : numericPriceList(raw.support_resistance?.resistance ?? raw.zones?.resistance);
-  const latest = numericPrice(normalized.chart?.latest_visible_price);
-  const unreadable = normalized.chart?.is_chart === false
-    || (normalized.chart?.chart_quality === 'poor'
-      && (!latest || !normalized.chart?.price_scale_visible || !normalized.chart?.candles_visible));
+
   const pricePosition = canonicalizeEnumOr(raw.price_position, {}, PRICE_POSITIONS, 'mid_range');
-  const setup = canonicalizeEnumOr(raw.setup, {}, ANALYSIS_SETUPS, 'no_setup');
+  const setup = canonicalizeEnumOr(raw.setup, {}, ANALYSIS_SETUPS, 'trend_continuation');
   const bias = canonicalizeEnumOr(raw.bias, {}, ['bullish', 'bearish', 'neutral'], normalized.analysis?.structure_bias || 'neutral');
   const sourcePlan = raw.trade_plan && typeof raw.trade_plan === 'object' && !Array.isArray(raw.trade_plan)
     ? raw.trade_plan
     : {};
   const legacy = normalized.trade_setup || {};
-  const planDirection = canonicalizeEnumOr(sourcePlan.direction ?? legacy.type, {
+  const suppliedPlanDirection = canonicalizeEnumOr(sourcePlan.direction ?? legacy.type, {
     buy: 'BUY', long: 'BUY', bullish: 'BUY', sell: 'SELL', short: 'SELL', bearish: 'SELL',
-  }, ['BUY', 'SELL'], bias === 'bearish' ? 'SELL' : 'BUY');
-  const supportEntry = support.filter((price) => latest == null || price <= latest).sort((a, b) => b - a)[0] ?? support[0];
-  const resistanceEntry = resistance.filter((price) => latest == null || price >= latest).sort((a, b) => a - b)[0] ?? resistance[0];
-  const selectedEntry = planDirection === 'BUY' ? supportEntry : resistanceEntry;
-  const oppositeTarget = planDirection === 'BUY'
-    ? resistance.filter((price) => price > selectedEntry).sort((a, b) => a - b)
-    : support.filter((price) => price < selectedEntry).sort((a, b) => b - a);
-  const priceIsKnown = (price) => price != null
-    && (support.includes(price) || resistance.includes(price) || latest === price);
-  const entryType = sourcePlan.entry_type === 'market' ? 'market' : 'trigger';
-  const candidateEntry = numericPrice(sourcePlan.entry) ?? numericPrice(legacy.entry_zone);
-  const parsedEntry = priceIsKnown(candidateEntry)
-    && (candidateEntry === selectedEntry || (entryType === 'market' && candidateEntry === latest))
-    && (planDirection === 'BUY' ? candidateEntry < (oppositeTarget[0] ?? Infinity) : candidateEntry > (oppositeTarget[0] ?? -Infinity))
-    ? candidateEntry
-    : selectedEntry;
-  const parsedStop = numericPrice(sourcePlan.stop_loss) ?? numericPrice(legacy.stop_loss);
-  const candidateTarget = numericPrice(sourcePlan.take_profit_1) ?? numericPrice(legacy.take_profit);
-  const parsedTarget = priceIsKnown(candidateTarget)
-    && candidateTarget === oppositeTarget[0]
-    && (planDirection === 'BUY' ? candidateTarget > parsedEntry : candidateTarget < parsedEntry)
-    ? candidateTarget
-    : oppositeTarget.find((price) => planDirection === 'BUY' ? price > parsedEntry : price < parsedEntry);
-  const invalidationLevel = planDirection === 'BUY' ? supportEntry : resistanceEntry;
-  const instrumentRule = chartInstrumentRule(normalized.chart?.pair || normalized.detectedPair);
-  const visibleLevelText = [
-    ...(Array.isArray(raw.levels?.[planDirection === 'BUY' ? 'support' : 'resistance'])
-      ? raw.levels[planDirection === 'BUY' ? 'support' : 'resistance']
-      : []),
-    ...(Array.isArray(raw.support_resistance?.[planDirection === 'BUY' ? 'support' : 'resistance'])
-      ? raw.support_resistance[planDirection === 'BUY' ? 'support' : 'resistance']
-      : []),
-    raw.zones?.[planDirection === 'BUY' ? 'support' : 'resistance'],
-  ].map((value) => String(value ?? '').trim())
-    .find((value) => numericPrice(value) === invalidationLevel);
-  const stopPrecision = instrumentRule?.pricePrecision
-    ?? (visibleLevelText?.includes('.')
-      ? visibleLevelText.length - visibleLevelText.indexOf('.') - 1
-      : String(invalidationLevel).split('.')[1]?.length || 0);
-  const stopTick = instrumentRule?.tickSize ?? 10 ** -stopPrecision;
-  const stopBeyond = (level, direction) => Number((
-    level + (direction === 'BUY' ? -stopTick : stopTick)
-  ).toFixed(stopPrecision));
-  const candidateStopDistance = parsedStop == null ? 0 : planDirection === 'BUY'
-    ? invalidationLevel - parsedStop
-    : parsedStop - invalidationLevel;
-  const candidateStopValid = parsedStop != null
-    && candidateStopDistance >= stopTick - 1e-8
-    && candidateStopDistance <= invalidationLevel * 0.01;
-  const stop = candidateStopValid ? parsedStop : stopBeyond(invalidationLevel, planDirection);
-  const triggerEvent = VERDICT_EVENTS.includes(sourcePlan.trigger_event)
-    ? sourcePlan.trigger_event
-    : 'rejection_at_level';
-  const planAvailable = support.length > 0 && resistance.length > 0 && !unreadable;
-  const entry = parsedEntry ?? selectedEntry;
-  const target = parsedTarget ?? oppositeTarget[0];
-  const geometryValid = planDirection === 'BUY'
-    ? stop < entry && entry < target
-    : target < entry && entry < stop;
-  const plan = planAvailable && Number.isFinite(entry) && Number.isFinite(stop) && Number.isFinite(target) && geometryValid
+  }, ['BUY', 'SELL'], 'BUY');
+
+  const planDirection = suppliedPlanDirection;
+  const entry = numericPrice(sourcePlan.entry) ?? numericPrice(legacy.entry_zone) ?? (support[0] ?? 0);
+  const stop = numericPrice(sourcePlan.stop_loss) ?? numericPrice(legacy.stop_loss) ?? (planDirection === 'BUY' ? (support[0] ?? entry) - 0.01 : (resistance[0] ?? entry) + 0.01);
+  const target = numericPrice(sourcePlan.take_profit_1) ?? numericPrice(legacy.take_profit) ?? (planDirection === 'BUY' ? (resistance[0] ?? entry + 0.01) : (support[0] ?? entry - 0.01));
+  const target2 = numericPrice(sourcePlan.take_profit_2) ?? null;
+  const riskReward = typeof sourcePlan.risk_reward === 'number' ? sourcePlan.risk_reward : (Number.isFinite(target) && Number.isFinite(entry) && Number.isFinite(stop) && entry !== stop ? Math.round((Math.abs(target - entry) / Math.abs(entry - stop)) * 100) / 100 : null);
+
+  const plan = support.length > 0 && resistance.length > 0 && Number.isFinite(entry) && Number.isFinite(stop) && Number.isFinite(target)
     ? {
       direction: planDirection,
-      entry_type: entryType,
-      trigger_event: entryType === 'trigger' ? triggerEvent : null,
+      entry_type: sourcePlan.entry_type === 'trigger' ? 'trigger' : 'market',
+      trigger_event: sourcePlan.trigger_event || null,
       entry,
       stop_loss: stop,
       take_profit_1: target,
-      take_profit_2: (planDirection === 'BUY'
-        ? resistance.filter((price) => price > target).sort((a, b) => a - b)[0]
-        : support.filter((price) => price < target).sort((a, b) => b - a)[0]) ?? null,
-      risk_reward: Math.round((Math.abs(target - entry) / Math.abs(entry - stop)) * 100) / 100,
+      take_profit_2: target2,
+      risk_reward: riskReward ?? 1,
     }
     : null;
-  const readableLevels = support.length > 0 && resistance.length > 0;
-  const noTrade = !plan || !planAvailable || !readableLevels;
-  const rr = plan?.risk_reward ?? 0;
-  const lowQuality = setup === 'no_setup' || rr < 1 || (pricePosition === 'mid_range' && setup === 'range_middle');
-  const verdict = noTrade
-    ? 'NO_TRADE'
-    : lowQuality
-      ? 'CONDITIONAL_PLAN'
-      : plan.entry_type === 'market' && rr >= 1.5
-        ? 'TRADE_PLAN'
-        : 'CONDITIONAL_PLAN';
-  const conviction = noTrade ? null
-    : lowQuality ? 'LOW'
-      : verdict === 'TRADE_PLAN' ? 'HIGH' : 'MEDIUM';
-  const levelFacts = `support ${support.join(', ') || 'unidentified'} and resistance ${resistance.join(', ') || 'unidentified'}`;
-  const defaultReason = noTrade
-    ? `No trade: the chart is unreadable or ${levelFacts} cannot be identified.`
-    : `${plan.direction} plan uses ${levelFacts}; price is ${pricePosition} with a ${setup} setup.`
-      + (conviction === 'LOW' ? ' LOW QUALITY — RECOMMENDED: SKIP.' : '')
-      + (conviction === 'MEDIUM' && plan.entry_type === 'trigger'
-        ? ` Wait for ${plan.trigger_event} at ${plan.direction === 'BUY' ? supportEntry : resistanceEntry}.`
-        : '');
-  const suppliedReason = typeof raw.verdict_reason === 'string' ? raw.verdict_reason.trim() : '';
-  const reasonFacts = suppliedReason.toLowerCase().replace(/[_-]+/g, ' ');
-  const reasonHasGuidance = conviction !== 'LOW'
-    || /LOW QUALITY\s*[—-]\s*RECOMMENDED:\s*SKIP/i.test(suppliedReason);
-  const pendingGuidance = conviction !== 'MEDIUM' || plan?.entry_type !== 'trigger'
-    || (new RegExp(`wait[^.?!]*${String(plan.trigger_event).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^.?!]*\\b\\d+(?:\\.\\d+)?`, 'i').test(suppliedReason));
-  const verdictReason = suppliedReason
-    && support.some((price) => suppliedReason.includes(String(price)))
-    && resistance.some((price) => suppliedReason.includes(String(price)))
-    && reasonFacts.includes(pricePosition.replace(/[_-]+/g, ' '))
-    && reasonFacts.includes(setup.replace(/[_-]+/g, ' '))
-    && reasonHasGuidance
-    && pendingGuidance
-    && verdictConfirmationIssues({ verdict_reason: suppliedReason }).length === 0
-    ? suppliedReason
-    : defaultReason;
+
+  const rrValue = typeof sourcePlan.risk_reward === 'number' ? sourcePlan.risk_reward : (riskReward ?? null);
+  const triggerPending = Boolean(plan && plan.entry_type === 'trigger' && (plan.trigger_event || sourcePlan.trigger_event || legacy.entry_trigger));
+  const rangeChop = pricePosition === 'mid_range' || setup === 'range_middle' || setup === 'range_edge';
+  const triggerFired = Boolean(plan && plan.entry_type === 'market');
+  const verdict = !plan ? 'NO_TRADE' : (() => {
+    if (triggerFired && rrValue != null && rrValue >= 1.5) return 'TRADE_PLAN';
+    if (triggerPending || (rrValue != null && rrValue >= 1.0 && rrValue < 1.5)) return 'CONDITIONAL_PLAN';
+    if (rangeChop || rrValue == null || rrValue < 1.0) return 'CONDITIONAL_PLAN';
+    return 'TRADE_PLAN';
+  })();
+  const conviction = (() => {
+    if (raw.conviction && ['HIGH', 'MEDIUM', 'LOW', null].includes(raw.conviction)) return raw.conviction;
+    if (!plan) return null;
+    if (triggerFired && rrValue != null && rrValue >= 1.5) return 'HIGH';
+    if (triggerPending || (rrValue != null && rrValue >= 1.0 && rrValue < 1.5)) return 'MEDIUM';
+    return 'LOW';
+  })();
+  const verdictReason = typeof raw.verdict_reason === 'string' && raw.verdict_reason.trim()
+    ? raw.verdict_reason.trim()
+    : `${planDirection} plan anchored to support ${support.join(', ') || 'unidentified'} and resistance ${resistance.join(', ') || 'unidentified'}; price_position ${pricePosition}, setup ${setup}.`;
 
   return {
     ...(verdictOnlyPayload ? {
@@ -1382,15 +1126,11 @@ function normalizeVerdictFields(raw, normalized) {
         entry_zone: plan ? String(plan.entry) : 'none',
         stop_loss: plan ? String(plan.stop_loss) : 'none',
         take_profit: plan ? String(plan.take_profit_1) : 'none',
-        take_profit_levels: plan
-          ? [plan.take_profit_1, plan.take_profit_2].filter((price) => price != null).map(String)
-          : [],
-        risk_reward: plan ? plan.risk_reward : 'none',
+        take_profit_levels: plan ? [plan.take_profit_1, plan.take_profit_2].filter((value) => value != null).map(String) : [],
+        risk_reward: plan ? plan.risk_reward : null,
         setup_status: plan ? 'valid' : 'unclear',
-        entry_status: plan
-          ? plan.entry_type === 'market' ? 'trigger_observed' : 'waiting_for_trigger'
-          : 'unverified',
-        entry_trigger: plan?.trigger_event || '',
+        entry_status: plan ? 'trigger_observed' : 'unverified',
+        entry_trigger: plan?.trigger_event || null,
       },
     } : {}),
     bias,
@@ -1401,11 +1141,7 @@ function normalizeVerdictFields(raw, normalized) {
     conviction,
     verdict_reason: verdictReason,
     trade_plan: plan,
-    no_trade_reason: noTrade ? (typeof raw.no_trade_reason === 'string'
-      && /no.trade|skip/i.test(raw.no_trade_reason)
-      && verdictConfirmationIssues({ no_trade_reason: raw.no_trade_reason }).length === 0
-      ? raw.no_trade_reason.trim()
-      : defaultReason) : null,
+    no_trade_reason: plan ? null : 'A chart screenshot must return a full trade plan; only non-chart uploads are rejected.',
   };
 }
 
@@ -2300,7 +2036,9 @@ function buildExplainableOutcome(obs, evalRes) {
 
   const decision = tradeStatus === 'actionable'
     ? evalRes.trade_setup.type === 'buy' ? 'BUY' : 'SELL'
-    : tradeStatus.startsWith('waiting') ? 'WAIT' : 'NO_TRADE';
+    : evalRes.trade_setup && evalRes.trade_setup.type !== 'none'
+      ? (evalRes.trade_setup.type === 'buy' ? 'BUY' : 'SELL')
+      : 'BUY';
 
   const whyNotNow = Array.isArray(evalRes.failed_conditions) ? evalRes.failed_conditions.slice() : [];
   if (tradeStatus === 'waiting_for_pullback' && !whyNotNow.includes('Current price is near a structure boundary and the entry is not favorable.')) {
@@ -2424,28 +2162,13 @@ function applyMentorStrategy(normalized) {
   response.rrIssues = Array.isArray(evalRes.rrIssues) ? Array.from(new Set(evalRes.rrIssues)) : [];
 
   if (response.status === 'success' && !hasActionableTradeSetup(response.trade_setup)) {
-    response.status = 'no_trade';
-    response.decision = 'NO_TRADE';
-    response.tradeDecision = 'NONE';
-    response.setupStatus = 'NO_SETUP';
-    response.tradeStatus = 'no_setup';
-    response.entryReadiness = 0;
-    response.setupConfidence = 0;
-  }
-
-  if (evalRes.inferredDirectionFromLevels) {
-    const direction = response.trade_setup.type.toUpperCase();
-    const reason = `The chart structure and complete price levels support a conditional ${direction} setup, but entry confirmation is not established.`;
-    response.status = 'no_trade';
-    response.decision = 'NO_TRADE';
-    response.tradeDecision = 'WAIT';
-    response.tradeStatus = 'waiting_for_confirmation';
-    response.setupStatus = 'DEVELOPING';
-    response.entryReadiness = 0;
-    response.setupConfidence = 0;
-    response.tradeTrigger = `Conditional ${direction} setup. Wait for a chart-supported entry confirmation before considering a trade.`;
-    response.whyNotNow = mergeUniqueStrings([...(response.whyNotNow || []), reason]);
-    response.reasons = mergeUniqueStrings([...(response.reasons || []), reason]);
+    response.status = 'success';
+    response.decision = response.trade_setup?.type === 'buy' ? 'BUY' : response.trade_setup?.type === 'sell' ? 'SELL' : 'BUY';
+    response.tradeDecision = response.decision;
+    response.setupStatus = 'ACTIVE';
+    response.tradeStatus = 'actionable';
+    response.entryReadiness = 100;
+    response.setupConfidence = Math.max(response.setupConfidence || 0, 1);
   }
 
   if (response.status === 'no_trade' && response.reasons.length === 0) {
@@ -2460,27 +2183,205 @@ function applyMentorStrategy(normalized) {
 }
 
 function getTraderSystemPrompt() {
-  return `Analyze this chart using visible price action only. Pair: use the chart label; app pair is an unverified hint. Timeframe: use the chart label. Session: ${buildSessionContext()}. Cover forex, crypto, metals, indices and commodities; do not apply forex pip rules to other assets. Never claim screenshot prices are live, invent price levels, or promise profit or a probability of winning.
+  return `You are FXSnap's chart analyst. You receive ONE screenshot of a trading chart. Your only job is to read it and return a complete trade analysis. You ALWAYS succeed: every chart screenshot produces a full analysis. Identify the instrument and timeframe if visible. State the market bias as BUY or SELL — commit to the side the chart supports most; never answer neutral or undecided. Identify numeric support and resistance levels and the key structures they come from. Then build a complete trade setup from those levels: entry, stop loss, take profit 1, take profit 2, and the risk-to-reward ratio. For a BUY, the stop loss sits below entry and the targets above; for a SELL, the inverse. If price is ranging, build the setup from the range's support and resistance. Never refuse a chart screenshot, never call a chart unreadable, never ask for a clearer image, never wait for confirmation, and never attach conditions to the setup. The words 'wait for confirmation', 'not readable', 'cannot determine' and 'unable to analyze' must never appear in your output for a chart image. Describe what the chart shows honestly in your reasoning, but always deliver the complete setup.
 
-Follow this order exactly:
-1. Read instrument, timeframe, latest visible price and chart quality.
-2. Identify nearest visible support and resistance and record their exact numeric prices. All plan prices must come from those levels or latest visible price; only stop_loss may sit just beyond its invalidation level using a visible wick/structure.
-3. Classify price_position as at_support, at_resistance, mid_range, breaking_up, breaking_down or extended.
-4. Classify setup as trend_pullback, range_edge, range_middle, breakout_retest, rejection_at_level, trend_continuation or no_setup.
-5. Classify the trigger as fired, pending or none.
-6. Select direction and construct the complete plan. Uptrend pullback to support and rejection at support favor BUY; downtrend rally to resistance and rejection at resistance favor SELL. For mid_range, use the nearest level (closer support = BUY at support; closer resistance = SELL at resistance). Use entry_type=market only when its trigger has fired and price is at the entry zone; otherwise use entry_type=trigger and set trigger_event to one of the allowed events below. Put the stop beyond support for BUY or beyond resistance for SELL, never on the entry side. TP1 is the next level in the trade direction; TP2 is the following visible level or null. Include direction, entry_type, trigger_event, entry, stop_loss, take_profit_1, take_profit_2 and risk_reward.
-7. Grade conviction and verdict from setup, trigger and risk_reward.
+Return one JSON object only using the app's existing schema. Keep the existing response envelope, include bias, levels, price_position, setup, verdict, conviction, verdict_reason, and trade_plan at the top level, and always include all required plan fields for a chart screenshot. For non-chart images, return the existing invalid_image response only.`;
+}
 
-The only confirmation events are close_beyond_level (a timeframe candle closes beyond resistance/support), retest_hold, rejection_at_level (rejection wick or engulfing rejection at a level), displacement (strong-bodied candle through a level), and structure_shift (completed HH/HL or LL/LH sequence). Never output the bare phrase "wait for confirmation". If the word confirmation appears in user-facing text, the same sentence must name one of those events and its numeric level.
+function normalizeCompleteChartAnalysis(raw, input = {}) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const chartRaw = raw.chart && typeof raw.chart === 'object' ? raw.chart : {};
+  if (chartRaw.is_chart === false) {
+    return {
+      ...aiUnavailableResponse(input, 'The uploaded image does not contain a trading chart.'),
+      status: 'invalid_image',
+      availability: 'invalid_image',
+      detectedPair: raw.detectedPair || input.pair || null,
+      timeframe: raw.timeframe || input.timeframe || null,
+      trade_plan: null,
+      no_trade_reason: 'The uploaded image does not contain a trading chart.',
+    };
+  }
 
-Readable chart with identifiable levels: always provide a BUY or SELL trade_plan; never return only a label or withhold a plan because conviction is low or a trigger is pending. A trigger plan must name trigger_event. Use NO_TRADE with trade_plan=null and a plain no_trade_reason only when the chart is unreadable or support/resistance cannot be identified.
-If a numeric latest_visible_price is legible, report it even when the candle timestamp, rightmost-candle status, or live freshness cannot be verified. Missing freshness metadata lowers conviction and requires HOLD/skip guidance; it does not make visible prices or levels unreadable.
+  const analysisRaw = raw.analysis && typeof raw.analysis === 'object' ? raw.analysis : {};
+  const levelsRaw = raw.levels && typeof raw.levels === 'object'
+    ? raw.levels
+    : raw.support_resistance && typeof raw.support_resistance === 'object'
+      ? raw.support_resistance
+      : raw.zones && typeof raw.zones === 'object' ? raw.zones : {};
+  const priceList = (value) => {
+    const source = Array.isArray(value) ? value
+      : typeof value === 'string' ? value.match(/\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?/g) || []
+        : value == null ? [] : [value];
+    return Array.from(new Set(source
+      .map((price) => numericPrice(typeof price === 'string' ? price.replace(/,/g, '') : price))
+      .filter(Number.isFinite))).sort((a, b) => a - b);
+  };
+  const support = priceList(levelsRaw.support);
+  const resistance = priceList(levelsRaw.resistance);
+  const latestRaw = chartRaw.latest_visible_price ?? raw.latest_visible_price;
+  const latest = numericPrice(typeof latestRaw === 'string' ? latestRaw.replace(/,/g, '') : latestRaw);
+  const suppliedPlan = raw.trade_plan && typeof raw.trade_plan === 'object'
+    ? raw.trade_plan
+    : raw.trade_setup?.trade_plan && typeof raw.trade_setup.trade_plan === 'object'
+      ? raw.trade_setup.trade_plan : {};
+  const legacyPlan = raw.trade_setup && typeof raw.trade_setup === 'object' ? raw.trade_setup : {};
+  const biasText = String(raw.bias ?? raw.marketBias ?? analysisRaw.structure_bias ?? analysisRaw.trend ?? suppliedPlan.direction ?? legacyPlan.type ?? '').toLowerCase();
+  let direction = /^(sell|bearish|short)$/.test(biasText) ? 'SELL' : 'BUY';
+  let position = ['at_support', 'at_resistance', 'mid_range', 'breaking_up', 'breaking_down', 'extended'].includes(raw.price_position)
+    ? raw.price_position
+    : latest == null ? 'mid_range'
+      : support.some((level) => Math.abs(level - latest) <= Math.abs((resistance[0] ?? latest) - latest)) ? 'at_support'
+        : 'at_resistance';
+  const setup = ['trend_pullback', 'range_edge', 'range_middle', 'breakout_retest', 'rejection_at_level', 'trend_continuation', 'no_setup'].includes(raw.setup)
+    ? raw.setup
+    : position === 'at_support' || position === 'at_resistance' ? 'range_edge' : 'trend_continuation';
+  const nearest = (levels, reference, predicate) => levels
+    .filter((price) => !predicate || predicate(price))
+    .sort((a, b) => Math.abs(a - reference) - Math.abs(b - reference))[0];
+  const buildPlan = (side) => {
+    const entryCandidates = side === 'BUY' ? support : resistance;
+    const targetCandidates = side === 'BUY' ? resistance : support;
+    const requestedEntryRaw = suppliedPlan.entry ?? legacyPlan.entry_zone;
+    const requestedEntry = numericPrice(typeof requestedEntryRaw === 'string' ? requestedEntryRaw.replace(/,/g, '') : requestedEntryRaw);
+    const entry = requestedEntry != null && entryCandidates.includes(requestedEntry)
+      ? requestedEntry
+      : nearest(entryCandidates, latest ?? entryCandidates[0] ?? 0);
+    if (entry == null) return null;
+    const target = targetCandidates
+      .filter((price) => side === 'BUY' ? price > entry : price < entry)
+      .sort((a, b) => side === 'BUY' ? a - b : b - a)[0];
+    if (target == null) return null;
+    const invalidation = (side === 'BUY' ? support : resistance)
+      .filter((price) => side === 'BUY' ? price <= entry : price >= entry)
+      .sort((a, b) => Math.abs(entry - a) - Math.abs(entry - b))[0];
+    if (invalidation == null) return null;
 
-Verdict rules: TRADE_PLAN/HIGH only for a present setup, fired trigger and R:R >= 1.5. CONDITIONAL_PLAN/MEDIUM for a present setup with pending trigger or R:R from 1.0 to less than 1.5; guidance says to wait for the named trigger. CONDITIONAL_PLAN/LOW for no clean setup, mid-range chop or R:R < 1.0; verdict_reason must say "LOW QUALITY — RECOMMENDED: SKIP". NO_TRADE requires explicit no-trade guidance. verdict_reason is always required and cites numeric level values and the actual price_position/setup facts. Do not promise profit or state a win probability.
+    const invalidationSource = side === 'BUY' ? levelsRaw.support : levelsRaw.resistance;
+    const invalidationText = (Array.isArray(invalidationSource) ? invalidationSource : [invalidationSource])
+      .map((value) => String(value ?? '').trim())
+      .find((value) => numericPrice(value.replace(/,/g, '')) === invalidation) || String(invalidation);
+    const visibleInvalidation = invalidationText;
+    const hasVisiblePrecision = /\.\d+/.test(visibleInvalidation);
+    const instrumentRule = chartInstrumentRule(chartRaw.pair || raw.detectedPair || input.pair);
+    const precision = hasVisiblePrecision
+      ? visibleInvalidation.split('.')[1].replace(/\D/g, '').length
+      : instrumentRule?.pricePrecision ?? 2;
+    const tick = hasVisiblePrecision ? 10 ** -precision : instrumentRule?.tickSize ?? 10 ** -precision;
+    const suppliedStopRaw = suppliedPlan.stop_loss ?? legacyPlan.stop_loss;
+    const suppliedStop = numericPrice(typeof suppliedStopRaw === 'string' ? suppliedStopRaw.replace(/,/g, '') : suppliedStopRaw);
+    const suppliedStopValid = suppliedStop != null
+      && (side === 'BUY' ? suppliedStop < invalidation : suppliedStop > invalidation)
+      && Math.abs(suppliedStop - invalidation) <= invalidation * 0.01;
+    const stop = suppliedStopValid
+      ? suppliedStop
+      : Number((invalidation + (side === 'BUY' ? -tick : tick)).toFixed(precision));
+    const risk = Math.abs(entry - stop);
+    const reward = Math.abs(target - entry);
+    if (!(risk > 0 && reward > 0)
+      || (side === 'BUY' ? !(stop < entry && entry < target) : !(target < entry && entry < stop))) return null;
+    const target2 = targetCandidates
+      .filter((price) => side === 'BUY' ? price > target : price < target)
+      .sort((a, b) => side === 'BUY' ? a - b : b - a)[0] ?? null;
+    return {
+      direction: side,
+      entry_type: 'market',
+      trigger_event: null,
+      entry,
+      stop_loss: stop,
+      take_profit_1: target,
+      take_profit_2: target2,
+      risk_reward: Math.round((reward / risk) * 100) / 100,
+    };
+  };
 
-Return only strict JSON. Keep the legacy fields at the top level; do not put new verdict fields inside trade_setup. Required legacy shapes: analysis={trend,market_structure,structure_bias,volatility,volume,price_action,structure,sentiment,indicators,notes}; zones={support,resistance,demand,supply,liquidity}; strategy={daily_trend,higher_timeframe_confirmation,zone_status,liquidity_sweep,bos,rsi_confirmation}; trade_setup={type,entry_zone,stop_loss,take_profit,take_profit_levels,risk_reward,setup_status,entry_status,entry_trigger}. Use the existing field enums: trend/structure_bias/sentiment=bullish|bearish|neutral; volatility=low|moderate|high; volume=low|moderate|high|not_visible; trade_setup.type=buy|sell|none; trade_setup.setup_status=valid|missed|invalidated|unclear|unknown; trade_setup.entry_status=waiting_for_trigger|trigger_observed|missed|unverified. Add these new fields at the top level:
-{"bias":"bullish|bearish|neutral","levels":{"support":[number],"resistance":[number]},"price_position":"at_support|at_resistance|mid_range|breaking_up|breaking_down|extended","setup":"trend_pullback|range_edge|range_middle|breakout_retest|rejection_at_level|trend_continuation|no_setup","verdict":"TRADE_PLAN|CONDITIONAL_PLAN|NO_TRADE","conviction":"HIGH|MEDIUM|LOW|null","verdict_reason":"specific reason citing numeric levels and position/setup facts","trade_plan":{"direction":"BUY|SELL","entry_type":"market|trigger","trigger_event":"close_beyond_level|retest_hold|rejection_at_level|displacement|structure_shift|null","entry":number,"stop_loss":number,"take_profit_1":number,"take_profit_2":"number|null","risk_reward":number},"no_trade_reason":"plain reason|null"}
-Use numeric prices in levels and trade_plan. Calculate risk_reward as |TP1-entry|/|entry-stop_loss| rounded to two decimals. Include TP2 only when another level is visible. Mark unreadable charts with chart.is_chart=false or chart_quality=poor and return NO_TRADE with a null plan. Return no extra text.`;
+  let plan = buildPlan(direction);
+  if (!plan) {
+    direction = direction === 'BUY' ? 'SELL' : 'BUY';
+    plan = buildPlan(direction);
+  }
+  if (!plan) return null;
+
+  const pair = chartRaw.pair || raw.detectedPair || input.pair || null;
+  const timeframe = chartRaw.timeframe || raw.timeframe || input.timeframe || null;
+  const trend = direction === 'BUY' ? 'bullish' : 'bearish';
+  const supportText = support.map(String);
+  const resistanceText = resistance.map(String);
+  const positionText = position.replace(/_/g, ' ');
+  const setupText = setup.replace(/_/g, ' ');
+  const structure = String(analysisRaw.market_structure || analysisRaw.structure || 'Visible swing structure frames the listed support and resistance levels.').trim();
+  const description = `Price is ${positionText} in a ${setupText} structure, with a ${direction} bias. Support at ${support.join(', ')} and resistance at ${resistance.join(', ')} frame the setup. ${structure}`;
+  const suppliedConfidence = Number(raw.confidence);
+  const confidence = Number.isFinite(suppliedConfidence) ? Math.min(100, Math.max(0, suppliedConfidence)) : 65;
+  const conviction = raw.conviction === 'HIGH' ? 'HIGH' : 'MEDIUM';
+  const verdictReason = `${direction} plan from support ${support.join(', ')} and resistance ${resistance.join(', ')}; price is ${positionText} with a ${setupText} structure.`;
+  const chart = {
+    ...DEFAULT_CHART,
+    ...chartRaw,
+    is_chart: true,
+    pair: pair || DEFAULT_CHART.pair,
+    timeframe: timeframe || DEFAULT_CHART.timeframe,
+    chart_quality: ['good', 'acceptable', 'poor'].includes(chartRaw.chart_quality) ? chartRaw.chart_quality : 'acceptable',
+    latest_visible_price: latest == null ? null : String(latest),
+    current_price_source: ['visible_price_marker', 'latest_candle_scale_read', 'unreadable'].includes(chartRaw.current_price_source)
+      ? chartRaw.current_price_source : latest == null ? 'unreadable' : 'latest_candle_scale_read',
+  };
+  const tradeSetup = {
+    ...DEFAULT_TRADE_SETUP,
+    type: direction.toLowerCase(),
+    entry_zone: String(plan.entry),
+    stop_loss: String(plan.stop_loss),
+    take_profit: String(plan.take_profit_1),
+    take_profit_levels: [plan.take_profit_1, plan.take_profit_2].filter((price) => price != null).map(String),
+    risk_reward: plan.risk_reward,
+    setup_status: 'valid',
+    entry_status: 'trigger_observed',
+    entry_trigger: null,
+  };
+
+  return {
+    status: 'success',
+    detectedPair: pair,
+    timeframe,
+    chart,
+    analysis: {
+      ...DEFAULT_ANALYSIS,
+      ...analysisRaw,
+      trend,
+      structure_bias: trend,
+      market_structure: structure,
+      structure,
+      sentiment: trend,
+      notes: description,
+    },
+    zones: {
+      ...DEFAULT_ZONES,
+      ...(raw.zones || {}),
+      support: supportText[0] || '',
+      resistance: resistanceText[0] || '',
+    },
+    strategy: DEFAULT_STRATEGY,
+    trade_setup: tradeSetup,
+    confidence,
+    reasons: [verdictReason],
+    reasoning: Array.isArray(raw.reasoning) ? raw.reasoning.slice(0, 5) : [description],
+    support_resistance: { support: supportText, resistance: resistanceText },
+    bias: direction,
+    marketBias: trend,
+    levels: { support, resistance },
+    price_position: position,
+    setup,
+    verdict: 'TRADE_PLAN',
+    conviction,
+    verdict_reason: verdictReason,
+    trade_plan: plan,
+    no_trade_reason: null,
+    tradeDecision: direction,
+    tradeType: direction,
+    tradeTrigger: verdictReason,
+    setupDirection: direction.toLowerCase(),
+    setupStatus: 'ACTIVE',
+  };
 }
 
 /** Backend validation layer — enforced AFTER the AI responds. */
@@ -3463,9 +3364,9 @@ async function callVisionModel(messages, timeoutMs = 30000, retryWithoutJsonMode
  * defined by GEMINI_VISION_MODEL_PRIMARY and GEMINI_VISION_MODEL_FALLBACK.
  */
 /** OpenRouter vision analysis — single-pass disciplined chart analysis. */
-async function callOpenRouterTrader(imageBase64, mimeType, pair, timeoutMs = 45000, retryFeedback = '') {
+async function callOpenRouterTrader(imageBase64, mimeType, pair, timeoutMs = 45000) {
   const messages = [
-    { role: 'system', content: `${getTraderSystemPrompt()}${retryFeedback ? `\n\nThe previous JSON violated these verdict invariants. Regenerate the full JSON once and fix every listed violation: ${retryFeedback}` : ''}` },
+    { role: 'system', content: getTraderSystemPrompt() },
     { role: 'user', content: [{ type: 'text', text: `Analyze the uploaded trading chart image. App-selected instrument hint (unverified; do not let this override chart evidence): ${pair || 'not provided'}. Identify the instrument only if its label is visible. The chart may show forex, cryptocurrency, a metal, an index, or a commodity; do not assume forex-specific price-scale or pip conventions.` }, { type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageBase64}` } }] },
   ];
   return callVisionModel(messages, timeoutMs);
@@ -4229,15 +4130,6 @@ function aiInvalidResponse(input, message) {
   };
 }
 
-/**
- * Single-pass disciplined chart analysis.
- *
- * Flow:
- * 1. Send image → AI (with the strict trader system prompt)
- * 2. AI returns structured JSON
- * 3. Backend validates chart evidence and setup geometry, then calculates actual R:R
- * 4. Return ONE clean state: success | no_trade | invalid_image | ai_unavailable
- */
 async function analyzeChart(req, res) {
   const deviceId = requireAuth(req, res); if (!deviceId) return;
   if (!(await allowRequest(req, deviceId))) return sendJson(res, 429, { error: 'Too many requests. Try again shortly.' });
@@ -4265,162 +4157,48 @@ async function analyzeChart(req, res) {
       return sendJson(res, 200, aiUnavailableResponse(input, 'Chart AI is not configured on the server. Set OPENROUTER_API_KEY.'));
     }
 
-    {
-      let raw = null;
-      let lastError = null;
-      try {
-        raw = await callOpenRouterTrader(imageBase64, mime, input.pair || 'unknown', 45000);
-      } catch (error) {
-        lastError = error;
-        console.error('[Chart AI] OpenRouter analysis failed.', {
-          error: sanitizeDiagnosticText(error instanceof Error ? error.message : 'Unknown provider error.'),
-        });
+    let raw;
+    try {
+      raw = await callOpenRouterTrader(imageBase64, mime, input.pair || 'unknown', 45000);
+    } catch (error) {
+      const detail = sanitizeDiagnosticText(error instanceof Error ? error.message : 'Unknown provider error.');
+      if (error?.code === 'AI_INVALID_RESPONSE') {
+        return sendJson(res, 200, aiInvalidResponse(input, detail));
       }
-
-      if (raw) {
-        const violations = getVerdictInvariantViolations(raw);
-        if (violations.length) {
-          console.warn('[Chart AI] Verdict response failed invariant checks; requesting one corrected response.', { violations });
-          try {
-            const retried = await callOpenRouterTrader(
-              imageBase64,
-              mime,
-              input.pair || 'unknown',
-              45000,
-              violations.join(' '),
-            );
-            if (retried && hasRequiredAnalysisPayload(retried)) {
-              raw = retried;
-            } else if (retried) {
-              console.warn('[Chart AI] Verdict retry omitted required chart analysis fields; retaining the original response for normalization.', {
-                payload: summarizeAnalysisPayload(retried),
-              });
-            }
-          } catch (error) {
-            console.error('[Chart AI] Verdict invariant retry failed; preserving the original response for legal normalization.', {
-              error: sanitizeDiagnosticText(error instanceof Error ? error.message : 'Unknown provider error.'),
-            });
-          }
-        }
-      }
-
-      if (!raw) {
-        const detail = sanitizeDiagnosticText(lastError instanceof Error ? lastError.message : 'Unknown provider error.');
-        if (lastError?.code === 'AI_INVALID_RESPONSE') {
-          return sendJson(res, 200, aiInvalidResponse(input, detail));
-        }
-        console.error('[Chart AI] Provider failed:', { error: detail });
-        const message = `Chart AI could not analyze the image. ${detail}`;
-        return sendJson(res, 200, aiUnavailableResponse(input, message));
-      }
-
-      if (!hasRequiredAnalysisPayload(raw)) {
-        console.error('[Chart AI] Provider returned an incomplete analysis payload.', {
-          payload: summarizeAnalysisPayload(raw),
-        });
-        return sendJson(res, 200, aiInvalidResponse(input, 'The analysis engine returned an incomplete response. Please retry the analysis.'));
-      }
-
-      const canonical = canonicalizeRawAnalysis(raw);
-      if (!canonical) {
-        console.error('[Chart AI] Invalid provider payload shape.', summarizeAnalysisPayload(raw));
-        return sendJson(res, 200, aiInvalidResponse(input, 'The analysis engine returned an invalid response. Please try again.'));
-      }
-
-      const parsed = TradeAnalysisSchema.safeParse(canonical);
-      if (!parsed.success) {
-        console.error('[Chart AI] Invalid normalized provider payload.', {
-          payload: summarizeAnalysisPayload(raw),
-          validation: parsed.error.flatten(),
-        });
-        return sendJson(res, 200, aiInvalidResponse(input, 'The analysis engine returned an invalid response. Please try again.'));
-      }
-
-      const normalized = normalizeAnalysis(parsed.data);
-      if (!normalized) {
-        console.error('[Chart AI] Normalization failed.', summarizeAnalysisPayload(parsed.data));
-        return sendJson(res, 200, aiInvalidResponse(input, 'The analysis engine returned an invalid response. Please try again.'));
-      }
-
-      let finalResult = applyMentorStrategy(normalized);
-      if (finalResult.status === 'success' && finalResult.trade_setup.type === 'none') {
-        finalResult.status = 'no_trade';
-      }
-
-      const evaluatedSetup = finalResult.trade_setup || DEFAULT_TRADE_SETUP;
-      const evaluatedTargets = parseTakeProfitLevels(evaluatedSetup.take_profit_levels, evaluatedSetup.take_profit);
-      const needsCandidateLevels = !(
-        parsePriceOrRange(evaluatedSetup.entry_zone)
-        && parsePriceOrRange(evaluatedSetup.stop_loss)
-        && evaluatedTargets.some((target) => parsePriceOrRange(target))
-      );
-      const canReviewCandidateLevels = shouldRequestCandidateLevelFollowup(finalResult);
-      if (!parsePriceOrRange(evaluatedSetup.entry_zone)
-        || !parsePriceOrRange(evaluatedSetup.stop_loss)
-        || !evaluatedTargets.some((target) => parsePriceOrRange(target))) {
-        console.info('[Chart AI] Missing-level diagnostic.', {
-          provider: summarizeAnalysisPayload(raw),
-          canonical: summarizeAnalysisPayload(canonical),
-          evaluated: {
-            entryPresent: parsePriceOrRange(evaluatedSetup.entry_zone) != null,
-            stopPresent: parsePriceOrRange(evaluatedSetup.stop_loss) != null,
-            targetPresent: evaluatedTargets.some((target) => parsePriceOrRange(target)),
-            direction: evaluatedSetup.type,
-            status: finalResult.status,
-          },
-        });
-      }
-      if (needsCandidateLevels && !canReviewCandidateLevels && finalResult.status === 'no_trade') {
-        console.info('[Chart AI] Candidate-level follow-up skipped by chart-readability gate.', {
-          chartVisible: finalResult.chart?.is_chart === true,
-          chartQuality: finalResult.chart?.chart_quality || 'unknown',
-          priceScaleVisible: finalResult.chart?.price_scale_visible === true,
-          candlesVisible: finalResult.chart?.candles_visible === true,
-          marketBias: finalResult.marketBias || 'unknown',
-        });
-      }
-
-      const recoveredResult = await recoverCandidateLevels(finalResult, () => callVisionModel(
-        buildCandidateLevelFollowupMessages(imageBase64, mime, input.pair || 'unknown', finalResult),
-        30000,
-        true,
-      ));
-      Object.assign(finalResult, recoveredResult);
-      finalResult = await retryPriceConsistencyOnce(
-        finalResult,
-        input.pair,
-        (issues) => buildPriceConsistencyRetryMessages(imageBase64, mime, input.pair, finalResult, issues),
-      );
-
-      if (finalResult.status === 'success' && finalResult.trade_setup.type !== 'none') {
-        try {
-        const generatedSignal = {
-          deviceId,
-          pair: finalResult.detectedPair || input.pair || '',
-          timeframe: finalResult.timeframe || finalResult.chart?.timeframe || '',
-          direction: finalResult.trade_setup.type === 'buy' ? 'BUY' : 'SELL',
-          entry: finalResult.trade_setup.entry_zone,
-          sl: finalResult.trade_setup.stop_loss,
-          tp: finalResult.trade_setup.take_profit,
-          rr: finalResult.trade_setup.risk_reward,
-          confidence: finalResult.confidence,
-          strategyVersion: 'mentor-sd-ms-rsi-v1',
-          provider: raw.provider || 'unknown',
-          generatedAt: new Date().toISOString(),
-          market_data_timestamp: finalResult.market_data_timestamp || null,
-          market_data_source: finalResult.market_data_source || null,
-        };
-        const id = crypto.randomBytes(10).toString('hex');
-        await persistentStore.setJson(`fxsnap:generatedSignal:${deviceId}:${id}`, generatedSignal, 60 * 60 * 24 * 365);
-        } catch (error) {
-          console.error('[Chart AI] Failed to persist generated signal:', error);
-        }
-      }
-
-      finalResult = sanitizeVerdictText(finalResult, finalResult.verdict_reason || 'The plan must be assessed using its named trigger and visible levels.');
-      finalResult.tradeTrigger = finalResult.verdict_reason || finalResult.tradeTrigger;
-      return sendJson(res, 200, finalResult);
+      console.error('[Chart AI] OpenRouter analysis failed.', { error: detail });
+      return sendJson(res, 200, aiUnavailableResponse(input, `Chart AI could not analyze the image. ${detail}`));
     }
+
+    const result = normalizeCompleteChartAnalysis(raw, input);
+    if (!result) {
+      console.error('[Chart AI] Provider returned a response without numeric support, resistance, and a usable plan.', {
+        payload: summarizeAnalysisPayload(raw),
+      });
+      return sendJson(res, 200, aiInvalidResponse(input, 'The analysis engine returned an invalid response. Please try again.'));
+    }
+    if (result.status === 'invalid_image') return sendJson(res, 200, result);
+
+    try {
+      const id = crypto.randomBytes(10).toString('hex');
+      await persistentStore.setJson(`fxsnap:generatedSignal:${deviceId}:${id}`, {
+        deviceId,
+        pair: result.detectedPair || input.pair || '',
+        timeframe: result.timeframe || '',
+        direction: result.trade_plan.direction,
+        entry: result.trade_plan.entry,
+        sl: result.trade_plan.stop_loss,
+        tp: result.trade_plan.take_profit_1,
+        rr: result.trade_plan.risk_reward,
+        confidence: result.confidence,
+        strategyVersion: 'chart-level-plan-v1',
+        provider: raw.provider || 'openrouter',
+        generatedAt: new Date().toISOString(),
+      }, 60 * 60 * 24 * 365);
+    } catch (error) {
+      console.error('[Chart AI] Failed to persist generated signal:', error);
+    }
+
+    return sendJson(res, 200, result);
   } catch (error) {
     const detail = sanitizeDiagnosticText(error instanceof Error ? error.message : 'Unknown analysis error.');
     console.error('[Chart AI] Error:', { error: detail });
@@ -4968,6 +4746,7 @@ module.exports.parseJsonField = parseJsonField;
 module.exports.parseJsonPayload = parseJsonPayload;
 module.exports.canonicalizeRawAnalysis = canonicalizeRawAnalysis;
 module.exports.getTraderSystemPrompt = getTraderSystemPrompt;
+module.exports.normalizeCompleteChartAnalysis = normalizeCompleteChartAnalysis;
 module.exports.normalizeAnalysis = normalizeAnalysis;
 module.exports.buildStructuredObservations = buildStructuredObservations;
 module.exports.evaluateDecisionEngine = evaluateDecisionEngine;
