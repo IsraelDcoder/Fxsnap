@@ -3,8 +3,9 @@ import { Modal, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'r
 import Animated, { useAnimatedStyle, useReducedMotion, useSharedValue, withSequence, withSpring } from 'react-native-reanimated';
 import { Image } from 'expo-image';
 import { Feather } from '@expo/vector-icons';
+import Svg, { Line, Rect } from 'react-native-svg';
 import { AnimatedTouchableOpacity as TouchableOpacity } from '@/components/AnimatedTouchableOpacity';
-import { COMMUNITY_REACTIONS, type CommunityMessage, type CommunityReaction } from '@/services/community';
+import { COMMUNITY_REACTIONS, type CommunityMessage, type CommunityPoll, type CommunityReaction } from '@/services/community';
 import { COMMUNITY_CATEGORIES } from '@/services/community';
 import { formatCompactCommunityCount } from '@/services/communityFormatting';
 import { CommunityReactionTapGuard } from '@/services/communityReactionInteraction';
@@ -27,12 +28,38 @@ function relativeTime(isoDate: string) {
   return `${Math.floor(hours / 24)}d`;
 }
 
+type PreviewPollData = {
+  question: string;
+  totalVotes: number;
+  options: Array<{ label: string; percentage: number }>;
+};
+
+function parsePreviewPoll(value: unknown): PreviewPollData | null {
+  if (!value || typeof value !== 'object') return null;
+  const poll = value as Record<string, unknown>;
+  if (typeof poll.question !== 'string' || typeof poll.totalVotes !== 'number' || !Array.isArray(poll.options)) return null;
+  const options = poll.options.flatMap((item) => {
+    if (!item || typeof item !== 'object') return [];
+    const option = item as Record<string, unknown>;
+    if (typeof option.label !== 'string' || typeof option.percentage !== 'number') return [];
+    return [{ label: option.label, percentage: Math.max(0, Math.min(100, option.percentage)) }];
+  });
+  return options.length ? { question: poll.question, totalVotes: poll.totalVotes, options } : null;
+}
+
 export default function CommunityPostCard({
   post,
+  palette,
   ownAccount,
   onReact,
   reactionBusy = false,
   onComment,
+  onRepost,
+  repostBusy = false,
+  onSave,
+  saveBusy = false,
+  onPollVote,
+  pollBusy = false,
   onShare,
   onMore,
   onFollow,
@@ -41,10 +68,17 @@ export default function CommunityPostCard({
   feedStyle = false,
 }: {
   post: CommunityMessage;
+  palette?: ReturnType<typeof useColors>;
   ownAccount: boolean;
   onReact: (reaction: CommunityReaction) => void;
   reactionBusy?: boolean;
   onComment: () => void;
+  onRepost?: () => void;
+  repostBusy?: boolean;
+  onSave?: () => void;
+  saveBusy?: boolean;
+  onPollVote?: (optionId: string) => void;
+  pollBusy?: boolean;
   onShare: (shareableView: View | null) => void;
   onMore: (shareableView: View | null) => void;
   onFollow: () => void;
@@ -52,7 +86,8 @@ export default function CommunityPostCard({
   compact?: boolean;
   feedStyle?: boolean;
 }) {
-  const colors = useColors();
+  const defaultColors = useColors();
+  const colors = palette || defaultColors;
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const reduceMotion = useReducedMotion();
   const shareableViewRef = useRef<View>(null);
@@ -64,8 +99,11 @@ export default function CommunityPostCard({
     transform: [{ scale: reactionScale.value }],
   }));
   const [reactionPicker, setReactionPicker] = useState<{ left: number; top: number } | null>(null);
+  const [expandedBody, setExpandedBody] = useState(false);
   const selectedReaction = post.reactions.find((item) => item.reacted);
   const selectedReactionInfo = COMMUNITY_REACTIONS.find((item) => item.id === selectedReaction?.reaction);
+  const repostCount = Number.isFinite(post.repostCount) ? post.repostCount : 0;
+  const repostedByMe = post.repostedByMe === true;
   const reactionCount = post.reactions
     .filter((item) => item.reaction !== 'like')
     .reduce((total, item) => total + item.count, 0);
@@ -123,7 +161,10 @@ export default function CommunityPostCard({
     : null;
   const analysisAge = sourceCreatedAt ? Math.max(0, Date.now() - Date.parse(sourceCreatedAt)) : 0;
   const staleAnalysis = Boolean(analysis && analysisAge >= 60 * 60_000);
-
+  const previewDiscussion = __DEV__ && post.payload.previewDiscussion === true;
+  const previewTrade = __DEV__ && post.payload.previewTrade === true;
+  const previewPoll = __DEV__ ? parsePreviewPoll(post.payload.previewPoll) : null;
+  const poll = parseCommunityPoll(post.payload.poll);
   return (
     <View ref={shareableViewRef} collapsable={false} style={[
       styles.card,
@@ -196,16 +237,50 @@ export default function CommunityPostCard({
       </View>
 
       {post.body ? (
-        <TouchableOpacity
+        <>
+          <TouchableOpacity
+            onPress={onComment}
+            disabled={!compact}
+            accessibilityRole={compact ? 'button' : undefined}
+            accessibilityLabel={compact ? 'Open post discussion' : undefined}
+          >
+            <Text style={[styles.body, compact && styles.compactBody, { color: colors.text }]} numberOfLines={compact ? 6 : post.body.length > 560 && !expandedBody ? 6 : undefined}>
+              {post.body}
+            </Text>
+          </TouchableOpacity>
+          {!compact && post.body.length > 560 ? (
+            <TouchableOpacity
+              onPress={() => setExpandedBody((expanded) => !expanded)}
+              accessibilityRole="button"
+              accessibilityLabel={expandedBody ? 'Show less post text' : 'Read more post text'}
+            >
+              <Text style={[styles.readMore, { color: colors.buy }]}>{expandedBody ? 'Show less' : 'Read more'}</Text>
+            </TouchableOpacity>
+          ) : null}
+        </>
+      ) : null}
+
+      {previewDiscussion ? (
+        <PreviewDiscussionCard
+          instrument="EURUSD"
+          heading="EUR/USD · H1 Timeframe"
+          label="Market Discussion"
+          summary="Let’s discuss confirmation strategies and risk management."
           onPress={onComment}
-          disabled={!compact}
-          accessibilityRole={compact ? 'button' : undefined}
-          accessibilityLabel={compact ? 'Open post discussion' : undefined}
-        >
-          <Text style={[styles.body, compact && styles.compactBody, { color: colors.text }]} numberOfLines={compact ? 6 : undefined}>
-            {post.body}
-          </Text>
-        </TouchableOpacity>
+          colors={colors}
+        />
+      ) : null}
+      {previewPoll ? <PreviewPollCard poll={previewPoll} colors={colors} /> : null}
+      {poll ? <CommunityPollCard poll={poll} colors={colors} onVote={onPollVote} busy={pollBusy} /> : null}
+      {previewTrade ? (
+        <PreviewDiscussionCard
+          instrument="XAUUSD"
+          heading="Gold · H1 Timeframe"
+          label="TP Hit"
+          summary="Gold reached the first target. Shared for discussion."
+          onPress={onComment}
+          colors={colors}
+        />
       ) : null}
 
       {signal ? (
@@ -337,12 +412,40 @@ export default function CommunityPostCard({
             {compact || feedStyle ? formatCompactCommunityCount(post.commentCount) : `Discuss${post.commentCount ? ` · ${formatCompactCommunityCount(post.commentCount)}` : ''}`}
           </Text>
         </TouchableOpacity>
-        <View style={[styles.engagementAction, compact && styles.compactAction, feedStyle && styles.feedAction]} accessible accessibilityLabel={`${post.viewCount} views`}>
-          <Feather name="eye" size={compact || feedStyle ? 15 : 17} color={colors.textSecondary} />
-          <Text style={[styles.actionLabel, (compact || feedStyle) && styles.compactActionLabel, { color: colors.textSecondary }]}>
-            {ownAccount ? `Views ${post.viewCount.toLocaleString()}` : formatCompactCommunityCount(post.viewCount)}
-          </Text>
-        </View>
+        {onRepost ? (
+          <TouchableOpacity
+            onPress={onRepost}
+            disabled={repostBusy}
+            style={[styles.action, compact && styles.compactAction, feedStyle && styles.feedAction]}
+            accessibilityRole="button"
+            accessibilityLabel={`${repostedByMe ? 'Undo repost' : 'Repost'}. ${formatCompactCommunityCount(repostCount)} reposts.`}
+            accessibilityState={{ selected: repostedByMe, disabled: repostBusy }}
+          >
+            <Feather
+              name="repeat"
+              size={compact || feedStyle ? 15 : 17}
+              color={repostedByMe ? colors.buy : colors.textSecondary}
+              style={repostBusy ? { opacity: 0.55 } : undefined}
+            />
+            <Text style={[styles.actionLabel, (compact || feedStyle) && styles.compactActionLabel, { color: repostedByMe ? colors.buy : colors.textSecondary }]}>
+              {compact || feedStyle
+                ? repostCount ? formatCompactCommunityCount(repostCount) : ''
+                : `${repostedByMe ? 'Reposted' : 'Repost'}${repostCount ? ` · ${formatCompactCommunityCount(repostCount)}` : ''}`}
+            </Text>
+          </TouchableOpacity>
+        ) : null}
+        {onSave ? (
+          <TouchableOpacity
+            onPress={onSave}
+            disabled={saveBusy}
+            style={[styles.action, compact && styles.compactAction, feedStyle && styles.feedAction]}
+            accessibilityRole="button"
+            accessibilityLabel={post.savedByMe ? 'Remove from saved posts' : 'Save post'}
+            accessibilityState={{ selected: post.savedByMe, disabled: saveBusy }}
+          >
+            <Feather name="bookmark" size={compact || feedStyle ? 15 : 17} color={post.savedByMe ? colors.buy : colors.textSecondary} />
+          </TouchableOpacity>
+        ) : null}
         <TouchableOpacity
           onPress={() => onShare(shareableViewRef.current)}
           style={[styles.action, compact && styles.compactAction, feedStyle && styles.feedAction]}
@@ -351,7 +454,9 @@ export default function CommunityPostCard({
         >
           <Feather name="share-2" size={compact || feedStyle ? 15 : 17} color={colors.textSecondary} />
           <Text style={[styles.actionLabel, (compact || feedStyle) && styles.compactActionLabel, { color: colors.textSecondary }]}>
-            {compact || feedStyle ? formatCompactCommunityCount(post.shareCount) : `Share${post.shareCount ? ` · ${formatCompactCommunityCount(post.shareCount)}` : ''}`}
+            {compact || feedStyle
+              ? post.shareCount > 0 ? formatCompactCommunityCount(post.shareCount) : ''
+              : `Share${post.shareCount ? ` · ${formatCompactCommunityCount(post.shareCount)}` : ''}`}
           </Text>
         </TouchableOpacity>
       </View>
@@ -426,10 +531,182 @@ function SignalValue({
   );
 }
 
+function PreviewDiscussionCard({
+  instrument,
+  heading,
+  label,
+  summary,
+  onPress,
+  colors,
+}: {
+  instrument: 'EURUSD' | 'XAUUSD';
+  heading: string;
+  label: string;
+  summary: string;
+  onPress: () => void;
+  colors: ReturnType<typeof useColors>;
+}) {
+  const candles = [
+    { x: 8, high: 83, open: 88, close: 77, low: 94, up: true },
+    { x: 27, high: 70, open: 78, close: 84, low: 90, up: false },
+    { x: 46, high: 75, open: 83, close: 66, low: 88, up: true },
+    { x: 65, high: 58, open: 66, close: 72, low: 78, up: false },
+    { x: 84, high: 62, open: 72, close: 52, low: 77, up: true },
+    { x: 103, high: 41, open: 53, close: 46, low: 60, up: true },
+    { x: 122, high: 34, open: 46, close: 58, low: 63, up: false },
+    { x: 141, high: 48, open: 58, close: 40, low: 64, up: true },
+    { x: 160, high: 31, open: 40, close: 35, low: 48, up: true },
+    { x: 179, high: 25, open: 35, close: 30, low: 44, up: true },
+    { x: 198, high: 21, open: 30, close: 39, low: 46, up: false },
+  ];
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      style={[styles.previewDiscussionCard, { backgroundColor: colors.surface, borderColor: colors.cardBorder }]}
+      accessibilityRole="button"
+      accessibilityLabel={`Open ${heading} discussion`}
+    >
+      <View style={styles.previewChartFrame}>
+        <Svg width="100%" height="100%" viewBox="0 0 220 120" preserveAspectRatio="none">
+          <Rect width="220" height="120" fill="#102A3C" />
+          {[30, 60, 90].map((y) => <Line key={y} x1="0" y1={y} x2="220" y2={y} stroke="#294657" strokeWidth="1" />)}
+          {candles.map((candle) => {
+            const color = candle.up ? '#12C78A' : '#F05F68';
+            const top = Math.min(candle.open, candle.close);
+            const height = Math.max(3, Math.abs(candle.open - candle.close));
+            return (
+              <React.Fragment key={candle.x}>
+                <Line x1={candle.x + 4} y1={candle.high} x2={candle.x + 4} y2={candle.low} stroke={color} strokeWidth="2" />
+                <Rect x={candle.x} y={top} width="8" height={height} fill={color} />
+              </React.Fragment>
+            );
+          })}
+        </Svg>
+        <View style={styles.previewInstrumentBadge}>
+          <Text style={styles.previewInstrumentText}>{instrument}</Text>
+        </View>
+      </View>
+      <View style={styles.previewDiscussionCopy}>
+        <Text style={[styles.previewDiscussionLabel, { color: colors.buy }]} numberOfLines={1}>{label}</Text>
+        <Text style={[styles.previewDiscussionHeading, { color: colors.text }]} numberOfLines={1}>{heading}</Text>
+        <Text style={[styles.previewDiscussionSummary, { color: colors.textSecondary }]} numberOfLines={2}>{summary}</Text>
+      </View>
+      <Feather name="chevron-right" size={18} color={colors.textSecondary} />
+    </TouchableOpacity>
+  );
+}
+
+function PreviewPollCard({ poll, colors }: { poll: PreviewPollData; colors: ReturnType<typeof useColors> }) {
+  return (
+    <View style={[styles.previewPollCard, { backgroundColor: colors.surface, borderColor: colors.cardBorder }]}>
+      <View style={[styles.previewPollIcon, { backgroundColor: colors.buy }]}>
+        <Feather name="bar-chart-2" size={17} color={colors.primaryForeground} />
+      </View>
+      <View style={styles.previewPollContent}>
+        <View style={styles.previewPollTitleRow}>
+          <Text style={[styles.previewPollLabel, { color: colors.buy }]}>Poll</Text>
+          <Text style={[styles.previewPollQuestion, { color: colors.text }]} numberOfLines={2}>{poll.question}</Text>
+        </View>
+        <Text style={[styles.previewPollMeta, { color: colors.textMuted }]}>Multiple choice · {poll.totalVotes} votes</Text>
+        <View style={styles.previewPollOptions}>
+          {poll.options.map((option) => (
+            <View key={option.label} style={styles.previewPollOption}>
+              <View style={styles.previewPollOptionTop}>
+                <Text style={[styles.previewPollOptionLabel, { color: colors.textSecondary }]} numberOfLines={1}>{option.label}</Text>
+                <Text style={[styles.previewPollPercent, { color: colors.textSecondary }]}>{option.percentage}%</Text>
+              </View>
+              <View style={[styles.previewPollTrack, { backgroundColor: colors.cardBorder }]}>
+                <View style={[styles.previewPollFill, { backgroundColor: colors.buy, width: `${option.percentage}%` }]} />
+              </View>
+            </View>
+          ))}
+        </View>
+      </View>
+    </View>
+  );
+}
+
+function parseCommunityPoll(value: unknown): CommunityPoll | null {
+  if (!value || typeof value !== 'object') return null;
+  const poll = value as Partial<CommunityPoll>;
+  if (typeof poll.question !== 'string' || !Array.isArray(poll.options)) return null;
+  return poll as CommunityPoll;
+}
+
+function CommunityPollCard({
+  poll,
+  colors,
+  onVote,
+  busy,
+}: {
+  poll: CommunityPoll;
+  colors: ReturnType<typeof useColors>;
+  onVote?: (optionId: string) => void;
+  busy: boolean;
+}) {
+  const [selected, setSelected] = useState(poll.selectedOptionId);
+  useEffect(() => setSelected(poll.selectedOptionId), [poll.selectedOptionId]);
+  const voted = Boolean(poll.selectedOptionId);
+  const expired = Boolean(poll.endsAt && Date.parse(poll.endsAt) <= Date.now());
+  return (
+    <View style={[styles.previewPollCard, { backgroundColor: colors.surface, borderColor: colors.cardBorder }]}>
+      <View style={[styles.previewPollIcon, { backgroundColor: colors.buy }]}>
+        <Feather name="bar-chart-2" size={17} color={colors.primaryForeground} />
+      </View>
+      <View style={styles.previewPollContent}>
+        <View style={styles.previewPollTitleRow}>
+          <Text style={[styles.previewPollLabel, { color: colors.buy }]}>POLL</Text>
+          <Text style={[styles.realPollQuestion, { color: colors.text }]}>{poll.question}</Text>
+        </View>
+        <Text style={[styles.previewPollMeta, { color: colors.textMuted }]}>
+          {poll.totalVotes} {poll.totalVotes === 1 ? 'vote' : 'votes'}
+          {poll.endsAt ? ` · Ends ${new Date(poll.endsAt).toLocaleDateString()}` : ''}
+        </Text>
+        <View style={styles.previewPollOptions}>
+          {poll.options.map((option) => {
+            const result = poll.results.find((item) => item.optionId === option.id);
+            const isSelected = selected === option.id;
+            return (
+              <TouchableOpacity
+                key={option.id}
+                onPress={() => !voted && !expired && setSelected(option.id)}
+                disabled={voted || expired || busy}
+                style={[styles.realPollOption, { borderColor: isSelected ? colors.buy : colors.cardBorder }]}
+                accessibilityRole="radio"
+                accessibilityState={{ checked: isSelected, disabled: voted || expired || busy }}
+              >
+                {voted ? (
+                  <View style={[styles.realPollFill, { backgroundColor: `${colors.buy}20`, width: `${result?.percentage || 0}%` }]} />
+                ) : null}
+                <Text style={[styles.realPollOptionText, { color: colors.text }]}>{option.text}</Text>
+                {voted ? <Text style={[styles.previewPollPercent, { color: colors.textSecondary }]}>{result?.percentage || 0}%</Text> : null}
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+        {onVote && !voted && !expired ? (
+          <TouchableOpacity
+            onPress={() => selected && onVote(selected)}
+            disabled={!selected || busy}
+            style={[styles.pollVoteButton, { backgroundColor: selected ? colors.buy : colors.cardBorder }]}
+            accessibilityRole="button"
+            accessibilityLabel="Submit poll vote"
+          >
+            <Text style={[styles.pollVoteLabel, { color: selected ? colors.primaryForeground : colors.textMuted }]}>
+              {busy ? 'Voting…' : 'Vote'}
+            </Text>
+          </TouchableOpacity>
+        ) : null}
+        {expired ? <Text style={[styles.previewPollMeta, { color: colors.textMuted }]}>Poll closed</Text> : null}
+      </View>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   card: { borderWidth: 1, borderRadius: 18, padding: 15, marginBottom: 12, gap: 12 },
   compactCard: { borderRadius: 17, padding: 10, marginBottom: 0, gap: 9 },
-  feedCard: { borderRadius: 17, padding: 13, marginBottom: 0, gap: 11, overflow: 'hidden' },
+  feedCard: { borderRadius: 19, padding: 14, marginBottom: 0, gap: 12, overflow: 'hidden', elevation: 1, shadowColor: '#17352A', shadowOpacity: 0.05, shadowRadius: 9, shadowOffset: { width: 0, height: 3 } },
   pinned: { alignSelf: 'flex-start', borderRadius: 10, paddingHorizontal: 9, paddingVertical: 5, flexDirection: 'row', alignItems: 'center', gap: 6 },
   pinnedText: { fontSize: 9, fontFamily: 'Inter_700Bold', letterSpacing: 0.5 },
   authorRow: { flexDirection: 'row', alignItems: 'center', gap: 9 },
@@ -451,8 +728,37 @@ const styles = StyleSheet.create({
   followButton: { minHeight: 30, justifyContent: 'center', borderWidth: 1, borderRadius: 15, paddingHorizontal: 10 },
   followText: { fontSize: 10, fontFamily: 'Inter_600SemiBold' },
   moreButton: { width: 28, height: 34, alignItems: 'center', justifyContent: 'center' },
-  body: { fontSize: 13, lineHeight: 20, fontFamily: 'Inter_400Regular' },
+  body: { fontSize: 14, lineHeight: 21, fontFamily: 'Inter_400Regular' },
   compactBody: { fontSize: 11, lineHeight: 16 },
+  readMore: { alignSelf: 'flex-start', fontSize: 11, fontFamily: 'Inter_600SemiBold' },
+  previewDiscussionCard: { minHeight: 88, flexDirection: 'row', alignItems: 'center', gap: 9, borderWidth: 1, borderRadius: 11, padding: 5 },
+  previewChartFrame: { width: '40%', height: 77, overflow: 'hidden', borderRadius: 8, position: 'relative' },
+  previewInstrumentBadge: { position: 'absolute', left: 6, top: 6, paddingHorizontal: 5, paddingVertical: 3, borderRadius: 4, backgroundColor: '#17374C' },
+  previewInstrumentText: { color: '#FFFFFF', fontSize: 8, fontFamily: 'Inter_600SemiBold' },
+  previewDiscussionCopy: { flex: 1, minWidth: 0, gap: 4 },
+  previewDiscussionLabel: { alignSelf: 'flex-start', fontSize: 8, fontFamily: 'Inter_600SemiBold' },
+  previewDiscussionHeading: { fontSize: 10, fontFamily: 'Inter_700Bold' },
+  previewDiscussionSummary: { fontSize: 9, lineHeight: 13, fontFamily: 'Inter_400Regular' },
+  previewPollCard: { flexDirection: 'row', gap: 8, borderWidth: 1, borderRadius: 12, padding: 9 },
+  previewPollIcon: { width: 31, height: 31, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+  previewPollContent: { flex: 1, gap: 6 },
+  previewPollTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  previewPollLabel: { fontSize: 8, fontFamily: 'Inter_700Bold' },
+  previewPollQuestion: { flex: 1, fontSize: 9, fontFamily: 'Inter_600SemiBold' },
+  previewPollMeta: { fontSize: 8, fontFamily: 'Inter_400Regular' },
+  previewPollOptions: { gap: 5 },
+  previewPollOption: { gap: 2 },
+  previewPollOptionTop: { flexDirection: 'row', justifyContent: 'space-between', gap: 8 },
+  previewPollOptionLabel: { flex: 1, fontSize: 8, fontFamily: 'Inter_400Regular' },
+  previewPollPercent: { fontSize: 8, fontFamily: 'Inter_600SemiBold' },
+  previewPollTrack: { height: 4, overflow: 'hidden', borderRadius: 3 },
+  previewPollFill: { height: '100%', borderRadius: 3 },
+  realPollQuestion: { flex: 1, fontSize: 12, lineHeight: 17, fontFamily: 'Inter_600SemiBold' },
+  realPollOption: { minHeight: 38, flexDirection: 'row', alignItems: 'center', gap: 8, position: 'relative', overflow: 'hidden', borderWidth: 1, borderRadius: 11, paddingHorizontal: 11 },
+  realPollFill: { position: 'absolute', left: 0, top: 0, bottom: 0 },
+  realPollOptionText: { flex: 1, fontSize: 11, fontFamily: 'Inter_500Medium' },
+  pollVoteButton: { minHeight: 37, alignItems: 'center', justifyContent: 'center', borderRadius: 20, marginTop: 3 },
+  pollVoteLabel: { fontSize: 11, fontFamily: 'Inter_700Bold' },
   signalCard: { borderWidth: 1, borderRadius: 14, padding: 12, gap: 11 },
   signalHeading: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   signalInstrument: { fontSize: 15, fontFamily: 'Inter_700Bold' },
@@ -479,7 +785,6 @@ const styles = StyleSheet.create({
   moreReactionButton: { width: 28, minHeight: 36, alignItems: 'center', justifyContent: 'center' },
   compactMoreReactionButton: { width: 18, minHeight: 32 },
   reactionEmoji: { fontSize: 18 },
-  engagementAction: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 36, paddingHorizontal: 6 },
   compactActionLabel: { fontSize: 8 },
   actionLabel: { fontSize: 11, fontFamily: 'Inter_600SemiBold' },
   reactionPicker: { position: 'absolute', flexDirection: 'row', justifyContent: 'space-evenly', alignItems: 'center', minHeight: 62, borderWidth: 1, borderRadius: 20, paddingHorizontal: 5, paddingVertical: 5, elevation: 12, shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 12, shadowOffset: { width: 0, height: 5 } },

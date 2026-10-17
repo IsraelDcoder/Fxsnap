@@ -10,6 +10,8 @@ export interface LearningProgress {
   bookmarkedLessonIds: string[];
   completedLessonIds: string[];
   lessonPositions: Record<string, number>;
+  lastCompletionDate: string | null;
+  streakCount: number;
 }
 
 const emptyProgress: LearningProgress = {
@@ -18,6 +20,8 @@ const emptyProgress: LearningProgress = {
   bookmarkedLessonIds: [],
   completedLessonIds: [],
   lessonPositions: {},
+  lastCompletionDate: null,
+  streakCount: 0,
 };
 
 let writeQueue: Promise<void> = Promise.resolve();
@@ -44,6 +48,12 @@ function normalizeProgress(value: unknown): LearningProgress {
     bookmarkedLessonIds: stringList(data.bookmarkedLessonIds),
     completedLessonIds: stringList(data.completedLessonIds),
     lessonPositions,
+    lastCompletionDate: typeof data.lastCompletionDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(data.lastCompletionDate)
+      ? data.lastCompletionDate
+      : null,
+    streakCount: typeof data.streakCount === 'number' && Number.isInteger(data.streakCount) && data.streakCount >= 0
+      ? data.streakCount
+      : 0,
   };
 }
 
@@ -58,6 +68,18 @@ export async function getLearningProgress(): Promise<LearningProgress> {
     }
     throw error;
   }
+}
+
+export function getCurrentLearningStreak(
+  progress: Pick<LearningProgress, 'lastCompletionDate' | 'streakCount'>,
+  now = new Date(),
+) {
+  if (!progress.lastCompletionDate || progress.streakCount < 1) return 0;
+  const today = localDateKey(now);
+  const yesterday = localDateKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1));
+  return progress.lastCompletionDate === today || progress.lastCompletionDate === yesterday
+    ? progress.streakCount
+    : 0;
 }
 
 function updateLearningProgress(
@@ -102,11 +124,28 @@ export function toggleLessonBookmark(lessonId: string) {
 }
 
 export function markLessonCompleted(lessonId: string) {
-  return updateLearningProgress((progress) => ({
-    ...progress,
-    completedLessonIds: progress.completedLessonIds.includes(lessonId)
-      ? progress.completedLessonIds
-      : [...progress.completedLessonIds, lessonId],
-    lessonPositions: { ...progress.lessonPositions, [lessonId]: 0 },
-  }));
+  return updateLearningProgress((progress) => {
+    if (progress.completedLessonIds.includes(lessonId)) return progress;
+    const today = localDateKey(new Date());
+    const yesterday = localDateKey(new Date(new Date().setDate(new Date().getDate() - 1)));
+    const streakCount = progress.lastCompletionDate === today
+      ? progress.streakCount
+      : progress.lastCompletionDate === yesterday
+        ? progress.streakCount + 1
+        : 1;
+    return {
+      ...progress,
+      completedLessonIds: [...progress.completedLessonIds, lessonId],
+      lessonPositions: { ...progress.lessonPositions, [lessonId]: 0 },
+      lastCompletionDate: today,
+      streakCount,
+    };
+  });
+}
+
+function localDateKey(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }

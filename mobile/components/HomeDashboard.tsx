@@ -21,6 +21,7 @@ import Animated, {
   cancelAnimation,
   Easing,
   FadeInDown,
+  FadeOutUp,
   useAnimatedStyle,
   useReducedMotion,
   useSharedValue,
@@ -35,7 +36,7 @@ import { getDailyBriefState, type DailyBriefItem, type DailyBriefState } from '@
 import { getDeviceId } from '@/services/apiAuth';
 import type { ProtectedFeature } from '@/services/featureAccess';
 
-export default function HomeDashboard() {
+export default function HomeDashboard({ previewMode = false }: { previewMode?: boolean }) {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const { width: viewportWidth } = useWindowDimensions();
@@ -43,6 +44,7 @@ export default function HomeDashboard() {
   const { settings, savedBriefs, saveBriefCard, deleteBriefCard, checkFeatureAccess } = useApp();
   const [sessionModalVisible, setSessionModalVisible] = useState(false);
   const [showCommunityBanner, setShowCommunityBanner] = useState(true);
+  const [toolsExpanded, setToolsExpanded] = useState(true);
   const [sessionState, setSessionState] = useState(getTradingSessionState());
   const [briefState, setBriefState] = useState<DailyBriefState | null>(null);
   const [briefSaveMessage, setBriefSaveMessage] = useState('');
@@ -156,7 +158,7 @@ export default function HomeDashboard() {
       <AmbientBackdrop variant="home" />
       <ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingTop: insets.top + 12, paddingBottom: 116 + insets.bottom }}
+        contentContainerStyle={{ paddingTop: previewMode ? 4 : insets.top + 12, paddingBottom: previewMode ? 76 : 116 + insets.bottom }}
       >
         <Animated.View entering={reduceMotion ? undefined : FadeInDown.duration(380)} style={styles.header}>
           <View style={styles.brand}>
@@ -168,28 +170,30 @@ export default function HomeDashboard() {
               <Text style={[styles.headerSubtitle, { color: colors.textSecondary }]}>Trade with more clarity today 📈</Text>
             </View>
           </View>
-          <View style={styles.headerActions}>
-            <TouchableOpacity onPress={support} style={styles.headerIconTouch} accessibilityLabel="Contact support">
-              <LiquidGlassSurface
-                style={styles.headerIcon}
-                fallbackStyle={{ borderColor: colors.cardBorder, backgroundColor: colors.card }}
-                tintColor={colors.card}
-                colorScheme={colors.text === '#FFFFFF' ? 'dark' : 'light'}
-              >
-                <Feather name="mail" size={18} color={colors.text} />
-              </LiquidGlassSurface>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => navigate('/daily-brief')} style={styles.headerIconTouch} accessibilityLabel="Open Daily Brief">
-              <LiquidGlassSurface
-                style={styles.headerIcon}
-                fallbackStyle={{ borderColor: colors.cardBorder, backgroundColor: colors.card }}
-                tintColor={colors.card}
-                colorScheme={colors.text === '#FFFFFF' ? 'dark' : 'light'}
-              >
-                <Feather name="bell" size={18} color={colors.text} />
-              </LiquidGlassSurface>
-            </TouchableOpacity>
-          </View>
+          {!previewMode ? (
+            <View style={styles.headerActions}>
+              <TouchableOpacity onPress={support} style={styles.headerIconTouch} accessibilityLabel="Contact support">
+                <LiquidGlassSurface
+                  style={styles.headerIcon}
+                  fallbackStyle={{ borderColor: colors.cardBorder, backgroundColor: colors.card }}
+                  tintColor={colors.card}
+                  colorScheme={colors.text === '#FFFFFF' ? 'dark' : 'light'}
+                >
+                  <Feather name="mail" size={18} color={colors.text} />
+                </LiquidGlassSurface>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => navigate('/daily-brief')} style={styles.headerIconTouch} accessibilityLabel="Open Daily Brief">
+                <LiquidGlassSurface
+                  style={styles.headerIcon}
+                  fallbackStyle={{ borderColor: colors.cardBorder, backgroundColor: colors.card }}
+                  tintColor={colors.card}
+                  colorScheme={colors.text === '#FFFFFF' ? 'dark' : 'light'}
+                >
+                  <Feather name="bell" size={18} color={colors.text} />
+                </LiquidGlassSurface>
+              </TouchableOpacity>
+            </View>
+          ) : null}
         </Animated.View>
 
         <Animated.View entering={reduceMotion ? undefined : FadeInDown.delay(90).duration(430)}>
@@ -229,7 +233,7 @@ export default function HomeDashboard() {
           </TouchableOpacity>
         </Animated.View>
 
-        {showCommunityBanner && (
+        {showCommunityBanner && !previewMode && (
           <Animated.View entering={reduceMotion ? undefined : FadeInDown.delay(150).duration(420)}>
             <View style={[styles.communityBanner, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
               <View style={styles.communityBannerHeader}>
@@ -284,7 +288,7 @@ export default function HomeDashboard() {
               </View>
               <View style={styles.toolsCount}>
                 <Feather name="grid" size={13} color="#D9FFF2" />
-                <Text style={styles.toolsCountText}>9 TOOLS</Text>
+                <Text style={styles.toolsCountText}>{toolsExpanded ? '9 TOOLS' : '6 OF 9'}</Text>
               </View>
             </View>
             <View style={styles.toolsGrid}>
@@ -294,13 +298,31 @@ export default function HomeDashboard() {
               <FeatureShortcut icon="grid" label="Lot Calculator" onPress={() => navigate('/lot-size-calculator')} />
               <FeatureShortcut icon="trending-up" label="Trade Setup" onPress={() => void openProtectedFeature('TRADE_SETUP', '/analysis')} />
               <FeatureShortcut icon="sliders" label="Strategies" onPress={() => void openStrategy()} />
-              <FeatureShortcut icon="shield" label="Risk Management" onPress={() => navigate('/risk-management')} />
-              <FeatureShortcut icon="book-open" label="Learning Hub" onPress={() => navigate('/learning-hub')} />
-              <FeatureShortcut icon="headphones" label="Help & Support" onPress={support} />
+              {toolsExpanded ? (
+                <Animated.View
+                  entering={reduceMotion ? undefined : FadeInDown.duration(220)}
+                  exiting={reduceMotion ? undefined : FadeOutUp.duration(160)}
+                  style={styles.toolsLastRow}
+                >
+                  <FeatureShortcut icon="shield" label="Risk Management" onPress={() => navigate('/risk-management')} />
+                  <FeatureShortcut icon="book-open" label="Learning Hub" onPress={() => navigate('/learning-hub')} />
+                  <FeatureShortcut icon="headphones" label="Help & Support" onPress={support} />
+                </Animated.View>
+              ) : null}
             </View>
-            <View style={styles.toolsPanelFooter}>
-              <Feather name="chevron-up" size={18} color="#C7F4E7" />
-            </View>
+            <TouchableOpacity
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                setToolsExpanded((expanded) => !expanded);
+              }}
+              style={styles.toolsPanelFooter}
+              accessibilityRole="button"
+              accessibilityLabel={toolsExpanded ? 'Show fewer trading tools' : 'Show all trading tools'}
+              accessibilityState={{ expanded: toolsExpanded }}
+            >
+              <Text style={styles.toolsFooterLabel}>{toolsExpanded ? 'Show less' : 'Show 3 more'}</Text>
+              <Feather name={toolsExpanded ? 'chevron-up' : 'chevron-down'} size={16} color="#C7F4E7" />
+            </TouchableOpacity>
           </LinearGradient>
         </Animated.View>
 
@@ -639,7 +661,9 @@ const styles = StyleSheet.create({
   featureIconOuter: { width: 60, height: 60, borderRadius: 21, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.12)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
   featureIcon: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F7F8F3', elevation: 3, shadowColor: '#042D29', shadowOpacity: 0.18, shadowRadius: 5, shadowOffset: { width: 0, height: 2 } },
   featureLabel: { minHeight: 28, color: '#FFFFFF', fontSize: 10, lineHeight: 13, textAlign: 'center', fontFamily: 'Inter_600SemiBold' },
-  toolsPanelFooter: { width: 40, height: 28, alignSelf: 'center', alignItems: 'center', justifyContent: 'center', borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.12)' },
+  toolsLastRow: { width: '100%', flexDirection: 'row', justifyContent: 'space-around' },
+  toolsPanelFooter: { minWidth: 112, height: 32, alignSelf: 'center', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, marginTop: 1, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.12)', paddingHorizontal: 12 },
+  toolsFooterLabel: { color: '#C7F4E7', fontSize: 9, fontFamily: 'Inter_600SemiBold' },
   dashboardCards: { flexDirection: 'row', gap: 10, marginTop: 13, marginHorizontal: 16 },
   dashboardCard: { flex: 1, minWidth: 0, minHeight: 180, borderWidth: 1, borderRadius: 20, padding: 13, elevation: 2, shadowColor: '#252D2A', shadowOpacity: 0.06, shadowRadius: 7, shadowOffset: { width: 0, height: 3 } },
   dashboardCardHeader: { minHeight: 22, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 9 },

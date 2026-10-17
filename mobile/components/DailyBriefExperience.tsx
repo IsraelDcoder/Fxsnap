@@ -96,7 +96,7 @@ function FXSnapDailyBriefCard({ brief, colors, compact, onSave, saved = false }:
   );
 }
 
-export default function DailyBriefExperience() {
+export default function DailyBriefExperience({ previewMode = false }: { previewMode?: boolean }) {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
@@ -133,7 +133,7 @@ export default function DailyBriefExperience() {
   const currentBrief = briefs[currentIndex];
   const compactLayout = screenHeight < 720;
   const artworkHeight = compactLayout ? 128 : Math.max(154, Math.min(188, Math.round(screenHeight * 0.23)));
-  const deckHeight = Math.max(360, Math.min(440, Math.round(screenHeight * 0.54)));
+  const deckHeight = previewMode ? 235 : Math.max(360, Math.min(440, Math.round(screenHeight * 0.54)));
   const dateKey = briefState?.dateKey || getBriefDateKey();
   const savedBriefId = `daily-brief-${dateKey}`;
   const currentSavedBrief = currentBrief ? savedBriefs.find((item) => item.brief_id === savedBriefId && item.card_id === currentBrief.id) : null;
@@ -220,7 +220,7 @@ export default function DailyBriefExperience() {
   const returnHome = () => router.replace('/(tabs)/home');
 
   return (
-    <View style={[styles.screen, { backgroundColor: colors.background, paddingTop: insets.top + 6 }]}>
+    <View style={[styles.screen, { backgroundColor: colors.background, paddingTop: previewMode ? 0 : insets.top + 6 }]}>
       <AmbientBackdrop />
       <View style={styles.topBar}>
         <TouchableOpacity onPress={returnHome} style={[styles.topIcon, { backgroundColor: colors.card, borderColor: colors.cardBorder }]} accessibilityLabel="Back to home">

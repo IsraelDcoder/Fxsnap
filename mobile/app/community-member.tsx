@@ -12,8 +12,10 @@ import {
   followCommunityMember,
   getCommunityMember,
   shareCommunityPost,
+  toggleCommunitySave,
   toggleCommunityReaction,
   unfollowCommunityMember,
+  voteCommunityPoll,
   type CommunityMember,
   type CommunityMessage,
   type CommunityReaction,
@@ -35,8 +37,12 @@ export default function CommunityMemberScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
   const [reactionBusyIds, setReactionBusyIds] = useState<Set<string>>(() => new Set());
+  const [saveBusyIds, setSaveBusyIds] = useState<Set<string>>(() => new Set());
+  const [pollBusyIds, setPollBusyIds] = useState<Set<string>>(() => new Set());
   const [followBusy, setFollowBusy] = useState(false);
   const pendingReactionIds = useRef(new Set<string>());
+  const pendingSaveIds = useRef(new Set<string>());
+  const pendingPollIds = useRef(new Set<string>());
   const pendingFollow = useRef(false);
 
   const loadMember = useCallback(async () => {
@@ -128,6 +134,52 @@ export default function CommunityMemberScreen() {
       }
     } catch (failure) {
       Alert.alert('Could not share post', messageFor(failure));
+    }
+  };
+
+  const toggleSave = async (post: CommunityMessage) => {
+    if (pendingSaveIds.current.has(post.id)) return;
+    pendingSaveIds.current.add(post.id);
+    setSaveBusyIds((current) => new Set(current).add(post.id));
+    try {
+      const result = await toggleCommunitySave(post.id);
+      setMember((current) => current ? {
+        ...current,
+        posts: current.posts.map((item) => item.id === post.id ? { ...item, savedByMe: result.saved } : item),
+      } : current);
+    } catch (failure) {
+      Alert.alert('Could not update saved posts', messageFor(failure));
+    } finally {
+      pendingSaveIds.current.delete(post.id);
+      setSaveBusyIds((current) => {
+        const updated = new Set(current);
+        updated.delete(post.id);
+        return updated;
+      });
+    }
+  };
+
+  const votePoll = async (post: CommunityMessage, optionId: string) => {
+    if (pendingPollIds.current.has(post.id)) return;
+    pendingPollIds.current.add(post.id);
+    setPollBusyIds((current) => new Set(current).add(post.id));
+    try {
+      const result = await voteCommunityPoll(post.id, optionId);
+      setMember((current) => current ? {
+        ...current,
+        posts: current.posts.map((item) => item.id === post.id
+          ? { ...item, payload: { ...item.payload, poll: result.poll } }
+          : item),
+      } : current);
+    } catch (failure) {
+      Alert.alert('Could not submit poll vote', messageFor(failure));
+    } finally {
+      pendingPollIds.current.delete(post.id);
+      setPollBusyIds((current) => {
+        const updated = new Set(current);
+        updated.delete(post.id);
+        return updated;
+      });
     }
   };
 
@@ -265,6 +317,10 @@ export default function CommunityMemberScreen() {
               post={item}
               ownAccount={member.isCurrentUser}
               reactionBusy={reactionBusyIds.has(item.id)}
+              onSave={() => void toggleSave(item)}
+              saveBusy={saveBusyIds.has(item.id)}
+              onPollVote={(optionId) => void votePoll(item, optionId)}
+              pollBusy={pollBusyIds.has(item.id)}
               onReact={(reaction) => void toggleReaction(item, reaction)}
               onComment={() => router.push({ pathname: '/community', params: { postId: item.id } })}
               onShare={(cardView) => { void sharePost(item, cardView); }}

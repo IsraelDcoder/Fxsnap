@@ -1,5 +1,6 @@
 import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
 import { getApiHeaders, resolveApiBaseUrl } from '@/services/apiAuth';
@@ -7,6 +8,7 @@ import { getSupabaseClient, hasSupabaseConfiguration } from '@/services/supabase
 import { createCommunityPreviewAccount } from '@/services/communityPreview';
 
 const ACCOUNT_TOKEN_KEY = 'fxsnapaccountSessionv1';
+const ACCOUNT_PROFILE_CACHE_KEY = 'fxsnap:accountProfile:v1';
 const API_URL = resolveApiBaseUrl();
 let pendingGoogleCallback: { code: string; promise: Promise<FxsnapAccount> } | null = null;
 
@@ -22,7 +24,44 @@ export interface FxsnapAccount {
   lastSignInAt: string;
 }
 
+export type CachedFxsnapProfile = Pick<FxsnapAccount, 'displayName' | 'pictureUrl' | 'communityUsername'>;
 export type FxsnapAccountData = Record<string, unknown>;
+
+function isCachedFxsnapProfile(value: unknown): value is CachedFxsnapProfile {
+  if (!value || typeof value !== 'object') return false;
+  const profile = value as Partial<CachedFxsnapProfile>;
+  return typeof profile.displayName === 'string'
+    && (typeof profile.pictureUrl === 'string' || profile.pictureUrl === null)
+    && typeof profile.communityUsername === 'string';
+}
+
+export async function getCachedFxsnapProfile(): Promise<CachedFxsnapProfile | null> {
+  const stored = await AsyncStorage.getItem(ACCOUNT_PROFILE_CACHE_KEY);
+  if (!stored) return null;
+  try {
+    const parsed: unknown = JSON.parse(stored);
+    if (isCachedFxsnapProfile(parsed)) return parsed;
+    throw new Error('Cached account profile has an invalid shape.');
+  } catch (error) {
+    console.error('[Account] Cached profile could not be loaded.', error);
+    await AsyncStorage.removeItem(ACCOUNT_PROFILE_CACHE_KEY);
+    return null;
+  }
+}
+
+export async function cacheFxsnapAccount(account: FxsnapAccount): Promise<void> {
+  const profile: CachedFxsnapProfile = {
+    displayName: account.displayName,
+    pictureUrl: account.pictureUrl,
+    communityUsername: account.communityUsername,
+  };
+  if (!isCachedFxsnapProfile(profile)) throw new Error('Cannot cache an invalid FXSnap account profile.');
+  await AsyncStorage.setItem(ACCOUNT_PROFILE_CACHE_KEY, JSON.stringify(profile));
+}
+
+async function clearCachedFxsnapAccount() {
+  await AsyncStorage.removeItem(ACCOUNT_PROFILE_CACHE_KEY);
+}
 
 function ensureNativeSecureStorage() {
   if (Platform.OS === 'web') {
@@ -77,6 +116,7 @@ export async function getAuthenticatedAccount(): Promise<FxsnapAccount | null> {
   });
   if (response.status === 401) {
     await SecureStore.deleteItemAsync(ACCOUNT_TOKEN_KEY);
+    await clearCachedFxsnapAccount();
     if (!hasSupabaseConfiguration()) return null;
     const accessToken = await getCurrentSupabaseAccessToken();
     return accessToken ? provisionFxsnapAccount(accessToken) : null;
@@ -87,6 +127,7 @@ export async function getAuthenticatedAccount(): Promise<FxsnapAccount | null> {
   if (!payload.account || payload.account.provider !== 'google' || !payload.account.email) {
     throw new Error('The server returned an invalid account profile.');
   }
+  await cacheFxsnapAccount(payload.account);
   return payload.account;
 }
 
@@ -113,6 +154,7 @@ async function provisionFxsnapAccount(supabaseAccessToken: string): Promise<Fxsn
     await SecureStore.deleteItemAsync(ACCOUNT_TOKEN_KEY).catch(() => undefined);
     throw new Error('Sign-in succeeded, but this device could not securely save the account session. Please try again.');
   }
+  await cacheFxsnapAccount(payload.account);
   return payload.account;
 }
 
@@ -215,6 +257,7 @@ export async function signOutOfFxsnapAccount(): Promise<void> {
     const { error } = await getSupabaseClient().auth.signOut({ scope: 'local' });
     if (error) throw error;
   }
+  await clearCachedFxsnapAccount();
 }
 
 export async function deleteFxsnapAccount(): Promise<void> {
@@ -228,6 +271,7 @@ export async function deleteFxsnapAccount(): Promise<void> {
   });
   if (!response.ok) throw new Error(await readError(response));
   await SecureStore.deleteItemAsync(ACCOUNT_TOKEN_KEY);
+  await clearCachedFxsnapAccount();
   if (hasSupabaseConfiguration()) {
     const { error } = await getSupabaseClient().auth.signOut({ scope: 'local' });
     if (error) throw error;

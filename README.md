@@ -50,8 +50,8 @@ Market-data coverage depends on configured provider access and supported instrum
 
 ### Community and account
 
-- Community includes a feed, posts, comments/replies, reactions, reporting, member profiles, and post/member/topic search.
-- Members can share chart-analysis posts and engage with public Community content. Community is gated by a backend feature flag and requires its Supabase schema and storage configuration before production use.
+- Community includes For You, Following, engagement-ranked Trending, Latest, and Saved feeds; posts, image attachments, polls and voting, comments/replies, reactions, persistent reposts, sharing, reporting, member profiles, notifications, and post/member/topic search. Community is gated by a backend feature flag and requires its Supabase schema and storage configuration before production use.
+- The redesigned market strip only displays provider-backed quotes; configure the server-only `TWELVEDATA_API_KEY` for supported instruments, otherwise it shows an unavailable-data notice rather than simulated prices.
 - Optional Google account sign-in can link an account and synchronize supported app backup data, such as settings, saved analyses, strategies, briefs, and current risk activity. Device identity, free-analysis allowances, billing identity/entitlements, and push tokens are not synced as account backup.
 - In-app notifications are available. Opt-in push campaigns require Expo credentials, server configuration, durable storage, and a scheduled dispatch request.
 - No member-to-member private messaging is provided.

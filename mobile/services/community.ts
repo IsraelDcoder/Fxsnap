@@ -21,7 +21,7 @@ export const COMMUNITY_CATEGORIES = [
 ] as const;
 
 export type CommunityCategory = typeof COMMUNITY_CATEGORIES[number]['id'];
-export type CommunityFeed = 'global' | 'following';
+export type CommunityFeed = 'global' | 'following' | 'trending' | 'latest' | 'saved';
 export type CommunityReaction = 'love' | 'fire' | 'funny' | 'clap' | 'wow';
 export const COMMUNITY_REACTIONS: Array<{ id: CommunityReaction; emoji: string; label: string }> = [
   { id: 'love', emoji: '❤️', label: 'Love' },
@@ -67,6 +67,9 @@ export interface CommunityMessage {
   commentCount: number;
   viewCount: number;
   shareCount: number;
+  repostCount: number;
+  repostedByMe: boolean;
+  savedByMe: boolean;
   removed: boolean;
   reactions: Array<{ reaction: CommunityReaction | 'like'; count: number; reacted: boolean }>;
 }
@@ -76,6 +79,15 @@ export interface CommunityPage {
   nextCursor: string | null;
   hasMore: boolean;
   followingEmpty?: boolean;
+}
+
+export interface CommunityPoll {
+  question: string;
+  options: Array<{ id: string; text: string }>;
+  endsAt: string | null;
+  totalVotes: number;
+  results: Array<{ optionId: string; votes: number; percentage: number }>;
+  selectedOptionId: string | null;
 }
 
 export interface CommunityCommentPage {
@@ -153,19 +165,19 @@ function newId() {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  if (Platform.OS === 'web') {
-    if (__DEV__) {
-      const previewResponse = await handleCommunityPreviewRequest(path, init);
-      const previewPayload: unknown = await previewResponse.json();
-      if (!previewResponse.ok) {
-        const message = previewPayload && typeof previewPayload === 'object' && 'error' in previewPayload
-          && typeof previewPayload.error === 'string'
-          ? previewPayload.error
-          : `Community preview request failed (${previewResponse.status}).`;
-        throw new Error(message);
-      }
-      return previewPayload as T;
+  if (__DEV__) {
+    const previewResponse = await handleCommunityPreviewRequest(path, init);
+    const previewPayload: unknown = await previewResponse.json();
+    if (!previewResponse.ok) {
+      const message = previewPayload && typeof previewPayload === 'object' && 'error' in previewPayload
+        && typeof previewPayload.error === 'string'
+        ? previewPayload.error
+        : `Community preview request failed (${previewResponse.status}).`;
+      throw new Error(message);
     }
+    return previewPayload as T;
+  }
+  if (Platform.OS === 'web') {
     throw new Error('FXSnap Community is currently available in the mobile app.');
   }
   const headers = await getFxsnapAccountApiHeaders();
@@ -338,6 +350,27 @@ export async function recordCommunityShare(messageId: string) {
   return request<{ shareCount: number }>(
     `/api/community/messages/${encodeURIComponent(messageId)}/shares`,
     json({}),
+  );
+}
+
+export async function toggleCommunityRepost(messageId: string) {
+  return request<{ reposted: boolean; repostCount: number }>(
+    `/api/community/messages/${encodeURIComponent(messageId)}/reposts`,
+    json({}),
+  );
+}
+
+export async function toggleCommunitySave(messageId: string) {
+  return request<{ saved: boolean }>(
+    `/api/community/messages/${encodeURIComponent(messageId)}/saved`,
+    json({}),
+  );
+}
+
+export async function voteCommunityPoll(messageId: string, optionId: string) {
+  return request<{ poll: CommunityPoll }>(
+    `/api/community/messages/${encodeURIComponent(messageId)}/poll-votes`,
+    json({ optionId }),
   );
 }
 
