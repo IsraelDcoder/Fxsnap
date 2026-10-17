@@ -1,3 +1,5 @@
+import { GENERATED_LEARNING_STEPS } from './learningSteps.generated';
+
 export type CategoryId =
   | "fundamentals"
   | "technical-analysis"
@@ -35,6 +37,12 @@ export interface LessonSection {
   formula?: string;
 }
 
+export type LearningStep =
+  | { type: 'learn' | 'example'; title?: string; body: string; visual?: string; keyPoint?: string }
+  | { type: 'check'; question: string; options: [string, string] | [string, string, string] | [string, string, string, string]; correctIndex: number; feedback: string }
+  | { type: 'practice'; body: string }
+  | { type: 'recap'; points: string[] };
+
 export interface LearningLesson {
   id: string;
   title: string;
@@ -46,6 +54,7 @@ export interface LearningLesson {
   aliases: string[];
   intro: string;
   sections: LessonSection[];
+  steps?: LearningStep[];
   keyTakeaways: string[];
   commonMistakes: string[];
   relatedLessonIds: string[];
@@ -129,7 +138,7 @@ const categoryDefinitions: {
   },
 ];
 
-export const LEARNING_LESSONS: LearningLesson[] = [
+const ARTICLE_LESSONS: LearningLesson[] = [
   {
     id: "fundamentals-market-basics",
     title: "What is a financial market?",
@@ -1715,6 +1724,11 @@ export const LEARNING_LESSONS: LearningLesson[] = [
     relatedLessonIds: ["strategies-rules-and-hypotheses", "risk-trade-planning", "strategies-backtesting-basics"],
   },
 ];
+
+export const LEARNING_LESSONS: LearningLesson[] = ARTICLE_LESSONS.map((lesson) => ({
+  ...lesson,
+  ...(GENERATED_LEARNING_STEPS[lesson.id] ? { steps: GENERATED_LEARNING_STEPS[lesson.id] } : {}),
+}));
 
 export const LEARNING_CATEGORIES: LearningCategory[] = categoryDefinitions.map((category) => ({
   ...category,

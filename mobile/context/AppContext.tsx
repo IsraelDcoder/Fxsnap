@@ -169,6 +169,10 @@ export interface AppSettings {
   displayName: string;
   themeMode: 'light' | 'dark' | 'system';
   preferredMarket: 'crypto' | 'stocks' | 'forex' | 'futures';
+  onboardingMarkets: string[];
+  onboardingExperience: 'beginner' | 'advanced' | 'expert';
+  onboardingChallenges: string[];
+  onboardingGoals: string[];
   onboardingRiskTolerance: 'low' | 'medium' | 'high';
   preferredTradingStyle: 'scalping' | 'day_trading' | 'swing';
   analysisDetail: 'basic' | 'standard' | 'advanced';
@@ -224,6 +228,10 @@ const defaultSettings: AppSettings = {
   displayName: '',
   themeMode: 'light',
   preferredMarket: 'forex',
+  onboardingMarkets: ['forex'],
+  onboardingExperience: 'beginner',
+  onboardingChallenges: [],
+  onboardingGoals: [],
   onboardingRiskTolerance: 'low',
   preferredTradingStyle: 'day_trading',
   analysisDetail: 'basic',
@@ -277,6 +285,16 @@ function isAnalysisDetail(value: unknown): value is AppSettings['analysisDetail'
   return value === 'basic' || value === 'standard' || value === 'advanced';
 }
 
+function isOnboardingExperience(value: unknown): value is AppSettings['onboardingExperience'] {
+  return value === 'beginner' || value === 'advanced' || value === 'expert';
+}
+
+function stringArray(value: unknown, allowedValues: readonly string[]): string[] {
+  return Array.isArray(value)
+    ? Array.from(new Set(value.filter((item): item is string => typeof item === 'string' && allowedValues.includes(item))))
+    : [];
+}
+
 function migrateSettings(value: unknown): AppSettings {
   const stored = value && typeof value === 'object' ? value as Partial<AppSettings> : {};
   const themeMode = stored.themeMode === 'light' || stored.themeMode === 'dark' || stored.themeMode === 'system'
@@ -293,6 +311,12 @@ function migrateSettings(value: unknown): AppSettings {
     preferredMarket: isPreferredMarket(stored.preferredMarket)
       ? stored.preferredMarket
       : defaultSettings.preferredMarket,
+    onboardingMarkets: stringArray(stored.onboardingMarkets, ['forex', 'crypto', 'stocks', 'commodities', 'indices']),
+    onboardingExperience: isOnboardingExperience(stored.onboardingExperience)
+      ? stored.onboardingExperience
+      : defaultSettings.onboardingExperience,
+    onboardingChallenges: stringArray(stored.onboardingChallenges, ['complexity', 'time', 'confidence', 'learning']),
+    onboardingGoals: stringArray(stored.onboardingGoals, ['income', 'wealth', 'freedom', 'mastery']),
     onboardingRiskTolerance: isRiskTolerance(stored.onboardingRiskTolerance)
       ? stored.onboardingRiskTolerance
       : defaultSettings.onboardingRiskTolerance,

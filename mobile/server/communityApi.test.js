@@ -26,6 +26,9 @@ function makeHarness({
   initialProfiles = [],
   initialMessages = [],
   initialReactions = [],
+  initialReposts = [],
+  initialSavedPosts = [],
+  initialPollVotes = [],
   initialConversations = [],
   initialSupportMessages = [],
   databaseFailure = null,
@@ -33,6 +36,9 @@ function makeHarness({
   const profiles = [...initialProfiles];
   const messages = [...initialMessages];
   const reactions = [...initialReactions];
+  const reposts = [...initialReposts];
+  const savedPosts = [...initialSavedPosts];
+  const pollVotes = [...initialPollVotes];
   const viewDedup = new Map();
   const shareDedup = new Map();
   const conversations = [...initialConversations];
@@ -102,6 +108,52 @@ function makeHarness({
       }
       return makeResponse(200, [{ selected_reaction: selectedReaction }]);
     }
+    if (table === 'fxsnap_community_toggle_repost' && method === 'POST') {
+      const body = JSON.parse(options.body);
+      const message = messages.find((item) => item.id === body.p_message_id
+        && !item.reply_to_id && !item.removed_at && item.account_id !== body.p_account_id);
+      if (!message) return makeResponse(200, []);
+      const index = reposts.findIndex((item) => item.message_id === body.p_message_id
+        && item.account_id === body.p_account_id);
+      if (index >= 0) reposts.splice(index, 1);
+      else reposts.push({ message_id: body.p_message_id, account_id: body.p_account_id });
+      return makeResponse(200, [{
+        reposted: index < 0,
+        repost_count: reposts.filter((item) => item.message_id === body.p_message_id).length,
+      }]);
+    }
+    if (table === 'fxsnap_community_toggle_saved_post' && method === 'POST') {
+      const body = JSON.parse(options.body);
+      const index = savedPosts.findIndex((item) => item.message_id === body.p_message_id
+        && item.account_id === body.p_account_id);
+      if (index >= 0) savedPosts.splice(index, 1);
+      else savedPosts.push({
+        message_id: body.p_message_id,
+        account_id: body.p_account_id,
+        created_at: new Date().toISOString(),
+      });
+      return makeResponse(200, [{ saved: index < 0 }]);
+    }
+    if (table === 'fxsnap_community_vote_poll' && method === 'POST') {
+      const body = JSON.parse(options.body);
+      const message = messages.find((item) => item.id === body.p_message_id);
+      const existing = pollVotes.find((item) => item.message_id === body.p_message_id
+        && item.account_id === body.p_account_id);
+      if (existing) existing.option_id = body.p_option_id;
+      else pollVotes.push({
+        message_id: body.p_message_id,
+        account_id: body.p_account_id,
+        option_id: body.p_option_id,
+      });
+      const pollOptions = message?.payload.poll.options || [];
+      const totalVotes = pollVotes.filter((item) => item.message_id === body.p_message_id).length;
+      return makeResponse(200, pollOptions.map((option) => ({
+        option_id: option.id,
+        votes: pollVotes.filter((item) => item.message_id === body.p_message_id && item.option_id === option.id).length,
+        total_votes: totalVotes,
+        selected_option_id: body.p_option_id,
+      })));
+    }
 
     if (table === 'fxsnap_community_profiles' && method === 'GET') {
       const accountIdsFilter = parsed.searchParams.get('account_id') || '';
@@ -166,6 +218,9 @@ function makeHarness({
     if (table === 'fxsnap_community_messages' && method === 'GET') {
       const idFilter = parsed.searchParams.get('id') || '';
       const id = idFilter.startsWith('eq.') ? idFilter.slice(3) : null;
+      const ids = idFilter.startsWith('in.')
+        ? [...idFilter.matchAll(/"([^"]+)"/g)].map((match) => match[1])
+        : null;
       const replyToFilter = parsed.searchParams.get('reply_to_id') || '';
       const replyToId = replyToFilter.startsWith('eq.') ? replyToFilter.slice(3) : null;
       const rootOnly = replyToFilter === 'is.null';
@@ -173,13 +228,36 @@ function makeHarness({
       const accountId = parsed.searchParams.get('account_id')?.replace(/^eq\./, '');
       const visible = messages.filter((message) => (
         (!id || message.id === id)
+        && (!ids || ids.includes(message.id))
         && (!replyToId || message.reply_to_id === replyToId)
         && (!rootOnly || !message.reply_to_id)
         && (!clientMessageId || message.client_message_id === clientMessageId)
         && (!accountId || message.account_id === accountId)
         && (!parsed.searchParams.has('removed_at') || !message.removed_at)
       ));
-      return makeResponse(200, visible);
+      const order = parsed.searchParams.get('order');
+      if (order?.startsWith('created_at.desc')) {
+        visible.sort((left, right) => right.created_at.localeCompare(left.created_at)
+          || right.id.localeCompare(left.id));
+      }
+      const limitValue = parsed.searchParams.get('limit');
+      const limit = limitValue === null ? null : Number(limitValue);
+      return makeResponse(200, limit !== null && Number.isFinite(limit) ? visible.slice(0, limit) : visible);
+    }
+    if (table === 'fxsnap_community_poll_votes' && method === 'GET') {
+      const filter = parsed.searchParams.get('message_id') || '';
+      const ids = [...filter.matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+      return makeResponse(200, pollVotes.filter((vote) => ids.includes(vote.message_id)));
+    }
+    if (table === 'fxsnap_community_saved_posts' && method === 'GET') {
+      const accountId = parsed.searchParams.get('account_id')?.replace(/^eq\./, '');
+      const before = parsed.searchParams.get('created_at')?.replace(/^lt\./, '');
+      const visible = savedPosts.filter((saved) => (!accountId || saved.account_id === accountId)
+        && (!before || saved.created_at < before))
+        .sort((left, right) => right.created_at.localeCompare(left.created_at)
+          || right.message_id.localeCompare(left.message_id));
+      const limit = Number(parsed.searchParams.get('limit'));
+      return makeResponse(200, Number.isFinite(limit) ? visible.slice(0, limit) : visible);
     }
     if (table === 'fxsnap_community_messages' && method === 'POST') {
       const message = {
@@ -225,6 +303,9 @@ function makeHarness({
       return makeResponse(200, (body.p_message_ids || []).map((messageId) => ({
         message_id: messageId,
         comment_count: messages.filter((message) => message.reply_to_id === messageId && !message.removed_at).length,
+        repost_count: reposts.filter((item) => item.message_id === messageId).length,
+        reposted_by_me: reposts.some((item) => item.message_id === messageId && item.account_id === body.p_account_id),
+        saved_by_me: savedPosts.some((item) => item.message_id === messageId && item.account_id === body.p_account_id),
       })));
     }
     return makeResponse(200, []);
@@ -254,6 +335,9 @@ function makeHarness({
     profiles,
     messages,
     reactions,
+    reposts,
+    savedPosts,
+    pollVotes,
     conversations,
     supportMessages,
     requests,
@@ -447,13 +531,22 @@ test('Community bootstrap returns the member profile and first feed page togethe
     view_count: 0,
     share_count: 0,
   };
-  const harness = makeHarness({ initialProfiles: [profile], initialMessages: [post] });
+  const harness = makeHarness({
+    initialProfiles: [profile],
+    initialMessages: [post],
+    initialReposts: [
+      { message_id: post.id, account_id: ACCOUNT_ID },
+      { message_id: post.id, account_id: 'usr_another-member' },
+    ],
+  });
   const response = await harness.call('/api/community/bootstrap?feed=global&limit=30');
 
   assert.equal(response.statusCode, 200, JSON.stringify(response.body));
   assert.equal(response.body.profile.username, 'chartpro');
   assert.equal(response.body.messages.length, 1);
   assert.equal(response.body.messages[0].body, 'First feed post');
+  assert.equal(response.body.messages[0].repostCount, 2);
+  assert.equal(response.body.messages[0].repostedByMe, true);
   assert.equal(response.body.nextCursor, null);
 });
 
@@ -703,6 +796,248 @@ test('share events persist separately and return the updated share count', async
   assert.equal(first.body.shareCount, 1);
   assert.equal(second.body.shareCount, 1);
   assert.equal(message.view_count, 7);
+});
+
+test('members can repost and undo another member post', async () => {
+  const postId = '00000000-0000-4000-8000-000000000083';
+  const message = {
+    id: postId,
+    account_id: 'usr_another-member',
+    author_username: 'another',
+    is_official: false,
+    kind: 'text',
+    category: 'market_discussion',
+    body: 'A post worth sharing',
+    payload: {},
+    reply_to_id: null,
+    pinned_at: null,
+    removed_at: null,
+    created_at: new Date().toISOString(),
+    client_message_id: '00000000-0000-4000-8000-000000000084',
+    view_count: 0,
+    share_count: 0,
+  };
+  const profile = {
+    account_id: ACCOUNT_ID,
+    supabase_user_id: MEMBER_ID,
+    username: 'chartpro',
+    picture_url: null,
+    accepted_rules_version: RULES_VERSION,
+    status: 'active',
+    muted_until: null,
+    joined_at: new Date().toISOString(),
+  };
+  const harness = makeHarness({ initialProfiles: [profile], initialMessages: [message] });
+  const path = `/api/community/messages/${postId}/reposts`;
+  const first = await harness.call(path, { method: 'POST' });
+  const second = await harness.call(path, { method: 'POST' });
+  assert.equal(first.statusCode, 200, JSON.stringify(first.body));
+  assert.deepEqual(first.body, { reposted: true, repostCount: 1 });
+  assert.deepEqual(second.body, { reposted: false, repostCount: 0 });
+  assert.equal(harness.reposts.length, 0);
+});
+
+test('members cannot repost their own post', async () => {
+  const postId = '00000000-0000-4000-8000-000000000085';
+  const message = {
+    id: postId,
+    account_id: ACCOUNT_ID,
+    author_username: 'chartpro',
+    is_official: false,
+    kind: 'text',
+    category: 'market_discussion',
+    body: 'My post',
+    payload: {},
+    reply_to_id: null,
+    pinned_at: null,
+    removed_at: null,
+    created_at: new Date().toISOString(),
+    client_message_id: '00000000-0000-4000-8000-000000000086',
+    view_count: 0,
+    share_count: 0,
+  };
+  const profile = {
+    account_id: ACCOUNT_ID,
+    supabase_user_id: MEMBER_ID,
+    username: 'chartpro',
+    picture_url: null,
+    accepted_rules_version: RULES_VERSION,
+    status: 'active',
+    muted_until: null,
+    joined_at: new Date().toISOString(),
+  };
+  const harness = makeHarness({ initialProfiles: [profile], initialMessages: [message] });
+  const response = await harness.call(`/api/community/messages/${postId}/reposts`, { method: 'POST' });
+  assert.equal(response.statusCode, 400, JSON.stringify(response.body));
+  assert.equal(harness.reposts.length, 0);
+});
+
+test('members can save a post and load it in the Saved feed', async () => {
+  const postId = '00000000-0000-4000-8000-000000000087';
+  const profile = {
+    account_id: ACCOUNT_ID,
+    supabase_user_id: MEMBER_ID,
+    username: 'chartpro',
+    picture_url: null,
+    accepted_rules_version: RULES_VERSION,
+    status: 'active',
+    muted_until: null,
+    joined_at: new Date().toISOString(),
+  };
+  const message = {
+    id: postId,
+    account_id: 'usr_another-member',
+    author_username: 'another',
+    is_official: false,
+    kind: 'text',
+    category: 'market_discussion',
+    body: 'A useful market note',
+    payload: {},
+    reply_to_id: null,
+    pinned_at: null,
+    removed_at: null,
+    created_at: new Date().toISOString(),
+    client_message_id: '00000000-0000-4000-8000-000000000088',
+  };
+  const harness = makeHarness({ initialProfiles: [profile], initialMessages: [message] });
+  const saved = await harness.call(`/api/community/messages/${postId}/saved`, { method: 'POST' });
+  assert.deepEqual(saved.body, { saved: true });
+  const feed = await harness.call('/api/community/messages?feed=saved&limit=30');
+  assert.equal(feed.statusCode, 200, JSON.stringify(feed.body));
+  assert.equal(feed.body.messages.length, 1);
+  assert.equal(feed.body.messages[0].id, postId);
+  assert.equal(feed.body.messages[0].savedByMe, true);
+  const removed = await harness.call(`/api/community/messages/${postId}/saved`, { method: 'POST' });
+  assert.deepEqual(removed.body, { saved: false });
+});
+
+test('poll votes update results and allow a member to change their choice', async () => {
+  const profile = {
+    account_id: ACCOUNT_ID,
+    supabase_user_id: MEMBER_ID,
+    username: 'chartpro',
+    picture_url: null,
+    accepted_rules_version: RULES_VERSION,
+    status: 'active',
+    muted_until: null,
+    joined_at: new Date().toISOString(),
+  };
+  const poll = {
+    question: 'Which timeframe do you review most?',
+    options: [{ id: 'option-1', text: 'H1' }, { id: 'option-2', text: 'H4' }],
+    endsAt: new Date(Date.now() + 86_400_000).toISOString(),
+  };
+  const message = {
+    id: '00000000-0000-4000-8000-000000000089',
+    account_id: 'usr_another-member',
+    author_username: 'another',
+    is_official: false,
+    kind: 'text',
+    category: 'questions',
+    body: '',
+    payload: { poll },
+    reply_to_id: null,
+    pinned_at: null,
+    removed_at: null,
+    created_at: new Date().toISOString(),
+    client_message_id: '00000000-0000-4000-8000-000000000090',
+  };
+  const harness = makeHarness({ initialProfiles: [profile], initialMessages: [message] });
+  const path = `/api/community/messages/${message.id}/poll-votes`;
+  const first = await harness.call(path, { method: 'POST', body: { optionId: 'option-1' } });
+  assert.equal(first.statusCode, 200, JSON.stringify(first.body));
+  assert.equal(first.body.poll.selectedOptionId, 'option-1');
+  assert.equal(first.body.poll.totalVotes, 1);
+  assert.equal(first.body.poll.results.find((option) => option.optionId === 'option-1').percentage, 100);
+  const changed = await harness.call(path, { method: 'POST', body: { optionId: 'option-2' } });
+  assert.equal(changed.statusCode, 200, JSON.stringify(changed.body));
+  assert.equal(changed.body.poll.selectedOptionId, 'option-2');
+  assert.equal(changed.body.poll.totalVotes, 1);
+  assert.equal(changed.body.poll.results.find((option) => option.optionId === 'option-2').votes, 1);
+  const invalid = await harness.call(path, { method: 'POST', body: { optionId: 'unknown' } });
+  assert.equal(invalid.statusCode, 400);
+});
+
+test('polls publish through the normal Community post endpoint', async () => {
+  const profile = {
+    account_id: ACCOUNT_ID,
+    supabase_user_id: MEMBER_ID,
+    username: 'chartpro',
+    accepted_rules_version: RULES_VERSION,
+    status: 'active',
+    muted_until: null,
+    joined_at: new Date().toISOString(),
+  };
+  const harness = makeHarness({ initialProfiles: [profile] });
+  const response = await harness.call('/api/community/messages', {
+    method: 'POST',
+    body: {
+      clientMessageId: '00000000-0000-4000-8000-000000000096',
+      kind: 'text',
+      category: 'questions',
+      body: '',
+      payload: {
+        poll: {
+          question: 'Which timeframe do you use?',
+          options: [{ id: 'option-1', text: 'H1' }, { id: 'option-2', text: 'H4' }],
+          endsAt: new Date(Date.now() + 86_400_000).toISOString(),
+        },
+      },
+    },
+  });
+  assert.equal(response.statusCode, 201, JSON.stringify(response.body));
+  assert.equal(response.body.message.kind, 'text');
+  assert.equal(response.body.message.payload.poll.question, 'Which timeframe do you use?');
+  assert.equal(response.body.message.payload.poll.totalVotes, 0);
+});
+
+test('latest and trending feeds return ordered Community posts', async () => {
+  const profile = {
+    account_id: ACCOUNT_ID,
+    supabase_user_id: MEMBER_ID,
+    username: 'chartpro',
+    picture_url: null,
+    accepted_rules_version: RULES_VERSION,
+    status: 'active',
+    muted_until: null,
+    joined_at: new Date().toISOString(),
+  };
+  const newest = {
+    id: '00000000-0000-4000-8000-000000000091',
+    account_id: 'usr_another-member',
+    author_username: 'another',
+    is_official: false,
+    kind: 'text',
+    category: 'market_discussion',
+    body: 'Newest post',
+    payload: {},
+    reply_to_id: null,
+    pinned_at: null,
+    removed_at: null,
+    created_at: new Date().toISOString(),
+    client_message_id: '00000000-0000-4000-8000-000000000092',
+  };
+  const older = {
+    ...newest,
+    id: '00000000-0000-4000-8000-000000000093',
+    body: 'Older post',
+    created_at: new Date(Date.now() - 4 * 3_600_000).toISOString(),
+    client_message_id: '00000000-0000-4000-8000-000000000094',
+  };
+  const harness = makeHarness({
+    initialProfiles: [profile],
+    initialMessages: [older, newest],
+    initialReactions: [
+      { message_id: older.id, account_id: 'usr_reactor', reaction: 'fire' },
+      { message_id: older.id, account_id: 'usr_reactor-2', reaction: 'love' },
+    ],
+  });
+  const latest = await harness.call('/api/community/messages?feed=latest&limit=30');
+  assert.equal(latest.statusCode, 200, JSON.stringify(latest.body));
+  assert.deepEqual(latest.body.messages.map((item) => item.id), [newest.id, older.id]);
+  const trending = await harness.call('/api/community/messages?feed=trending&limit=30');
+  assert.equal(trending.statusCode, 200, JSON.stringify(trending.body));
+  assert.equal(trending.body.messages[0].id, older.id);
 });
 
 test('Community rollout gate rejects requests before identity lookup', async () => {
@@ -1186,4 +1521,30 @@ test('invalid structured signal is rejected before persistence', async () => {
   });
   assert.equal(response.statusCode, 400);
   assert.equal(harness.requests.some((request) => request.table === 'fxsnap_community_messages' && request.method === 'POST'), false);
+});
+
+test('trade ideas can publish with optional price levels omitted', async () => {
+  const profile = {
+    account_id: ACCOUNT_ID,
+    supabase_user_id: MEMBER_ID,
+    username: 'chartpro',
+    accepted_rules_version: RULES_VERSION,
+    status: 'active',
+    muted_until: null,
+    joined_at: new Date().toISOString(),
+  };
+  const harness = makeHarness({ initialProfiles: [profile] });
+  const response = await harness.call('/api/community/messages', {
+    method: 'POST',
+    body: {
+      clientMessageId: '00000000-0000-4000-8000-000000000095',
+      kind: 'signal',
+      category: 'trading',
+      body: 'Watching this pair for a setup.',
+      payload: { instrument: 'EURUSD', direction: 'BUY', timeframe: 'H1' },
+    },
+  });
+  assert.equal(response.statusCode, 201, JSON.stringify(response.body));
+  assert.equal(response.body.message.kind, 'signal');
+  assert.deepEqual(response.body.message.payload.takeProfits, []);
 });

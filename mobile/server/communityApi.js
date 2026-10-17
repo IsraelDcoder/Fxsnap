@@ -324,7 +324,8 @@ function createCommunityApi({
       const ids = rows.map((row) => row.id);
       const accountIds = [...new Set(rows.map((row) => row.account_id))];
       const accountExpression = encodeURIComponent(accountIds.map((id) => `"${id}"`).join(','));
-      const [reactionRows, followedRows, profileRows, commentCountRows] = await Promise.all([
+      const pollMessageIds = rows.filter((row) => !row.removed_at && row.payload?.poll).map((row) => row.id);
+      const [reactionRows, followedRows, profileRows, commentCountRows, pollVoteRows] = await Promise.all([
         queryReactions(ids),
         getRows(
           'fxsnap_community_follows',
@@ -336,16 +337,32 @@ function createCommunityApi({
         ),
         database('rpc/fxsnap_community_comment_counts', {
           method: 'POST',
-          body: JSON.stringify({ p_message_ids: ids }),
+          body: JSON.stringify({ p_message_ids: ids, p_account_id: actor.accountId }),
         }),
+        pollMessageIds.length
+          ? getRows(
+            'fxsnap_community_poll_votes',
+            `message_id=in.(${encodeURIComponent(pollMessageIds.map((id) => `"${id}"`).join(','))})&select=message_id,account_id,option_id`,
+          )
+          : Promise.resolve([]),
       ]);
       const reactions = parseRows(reactionRows);
       const followed = parseRows(followedRows);
       const profiles = parseRows(profileRows);
       const commentCounts = parseRows(commentCountRows);
+      const pollVotes = parseRows(pollVoteRows);
       const followedIds = new Set(followed.map((row) => row.followed_account_id));
       const picturesByAccount = new Map(profiles.map((row) => [row.account_id, row.picture_url]));
       const commentCountByMessage = new Map(commentCounts.map((row) => [row.message_id, Number(row.comment_count)]));
+      const repostCountByMessage = new Map(commentCounts.map((row) => [row.message_id, Number(row.repost_count)]));
+      const repostedByActor = new Set(commentCounts.filter((row) => row.reposted_by_me === true).map((row) => row.message_id));
+      const savedByActor = new Set(commentCounts.filter((row) => row.saved_by_me === true).map((row) => row.message_id));
+      const votesByMessage = new Map();
+      for (const vote of pollVotes) {
+        const existing = votesByMessage.get(vote.message_id) || [];
+        existing.push(vote);
+        votesByMessage.set(vote.message_id, existing);
+      }
       const replies = rows.map((row) => row.reply_to_id).filter(Boolean);
     const replyRows = replies.length
       ? parseRows(await getRows(
@@ -354,7 +371,27 @@ function createCommunityApi({
       ))
       : [];
     const replyMap = new Map(replyRows.map((row) => [row.id, row]));
-    return rows.map((row) => ({
+    return rows.map((row) => {
+      const payload = row.removed_at ? {} : row.payload || {};
+      const poll = payload.poll;
+      const votes = votesByMessage.get(row.id) || [];
+      if (poll && Array.isArray(poll.options)) {
+        const totalVotes = votes.length;
+        payload.poll = {
+          ...poll,
+          totalVotes,
+          results: poll.options.map((option) => {
+            const count = votes.filter((vote) => vote.option_id === option.id).length;
+            return {
+              optionId: option.id,
+              votes: count,
+              percentage: totalVotes ? Math.round((count / totalVotes) * 100) : 0,
+            };
+          }),
+          selectedOptionId: votes.find((vote) => vote.account_id === actor.accountId)?.option_id || null,
+        };
+      }
+      return ({
       id: row.id,
       clientMessageId: row.client_message_id,
       authorAccountId: row.account_id,
@@ -365,16 +402,20 @@ function createCommunityApi({
       kind: row.kind,
       category: row.category,
       body: row.removed_at ? '[Message removed by moderation]' : row.body,
-      payload: row.removed_at ? {} : row.payload,
+      payload,
       replyTo: row.reply_to_id ? (replyMap.get(row.reply_to_id) || null) : null,
       pinnedAt: row.pinned_at,
       createdAt: row.created_at,
       commentCount: commentCountByMessage.get(row.id) || 0,
       viewCount: Number(row.view_count) || 0,
       shareCount: Number(row.share_count) || 0,
+      repostCount: repostCountByMessage.get(row.id) || 0,
+      repostedByMe: repostedByActor.has(row.id),
+      savedByMe: savedByActor.has(row.id),
       removed: Boolean(row.removed_at),
       reactions: groupMessageReactions(reactions, actor.accountId, row.id),
-    }));
+      });
+    });
   }
 
   async function resolveMessage(req, res, id) {
@@ -462,7 +503,8 @@ function createCommunityApi({
       try {
         const decoded = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
         if (typeof decoded.createdAt !== 'string' || Number.isNaN(Date.parse(decoded.createdAt))
-          || typeof decoded.id !== 'string' || !/^[0-9a-f-]{36}$/i.test(decoded.id)) throw new Error('Invalid cursor');
+          || typeof decoded.id !== 'string' || !/^[0-9a-f-]{36}$/i.test(decoded.id)
+          || (decoded.score !== undefined && !Number.isFinite(decoded.score))) throw new Error('Invalid cursor');
         before = decoded;
       } catch {
         if (Number.isNaN(Date.parse(cursor))) {
@@ -476,7 +518,7 @@ function createCommunityApi({
       throw new CommunityError('Choose a valid Community category.', 400);
     }
     const feed = url.searchParams.get('feed') || 'global';
-    if (!['global', 'following'].includes(feed)) {
+    if (!['global', 'following', 'trending', 'latest', 'saved'].includes(feed)) {
       throw new CommunityError('Choose a valid Community feed.', 400);
     }
     const following = feed === 'following'
@@ -497,31 +539,94 @@ function createCommunityApi({
       `blocked_account_id=eq.${encodeURIComponent(actor.accountId)}&select=blocker_account_id`,
     ));
     const blockedByIds = blockedBy.map((row) => `"${String(row.blocker_account_id).replace(/"/g, '')}"`);
+    const exclusions = [...new Set([...blockedIds, ...blockedByIds])];
+    if (feed === 'saved') {
+      const savedRows = parseRows(await getRows(
+        'fxsnap_community_saved_posts',
+        `account_id=eq.${encodeURIComponent(actor.accountId)}&select=message_id,created_at&order=created_at.desc,message_id.desc&limit=500`,
+      )).filter((saved) => !before || saved.created_at < before.createdAt
+        || (saved.created_at === before.createdAt && saved.message_id < before.id));
+      const pageSaved = savedRows.slice(0, rawLimit + 1);
+      if (!pageSaved.length) {
+        const emptyPage = { messages: [], nextCursor: null, hasMore: false };
+        return res ? sendJson(res, 200, emptyPage) : emptyPage;
+      }
+      const ids = pageSaved.map((saved) => `"${saved.message_id}"`).join(',');
+      const savedMessages = parseRows(await getRows(
+        'fxsnap_community_messages',
+        `id=in.(${encodeURIComponent(ids)})&removed_at=is.null&reply_to_id=is.null&select=id,account_id,author_username,is_official,kind,category,body,payload,reply_to_id,pinned_at,removed_at,created_at,client_message_id,view_count,share_count`,
+      ));
+      const messagesById = new Map(savedMessages.map((message) => [message.id, message]));
+      const orderedRows = pageSaved.flatMap((saved) => {
+        const message = messagesById.get(saved.message_id);
+        if (!message || (category && message.category !== category)) return [];
+        if (exclusions.some((accountId) => accountId.replaceAll('"', '') === message.account_id)) return [];
+        return [{ ...message, saved_at: saved.created_at }];
+      });
+      const hasMore = orderedRows.length > rawLimit || savedRows.length > pageSaved.length;
+      const page = orderedRows.slice(0, rawLimit);
+      const serialized = await serializeMessages(page, actor);
+      const last = page.at(-1);
+      const result = {
+        messages: serialized,
+        nextCursor: hasMore && last
+          ? Buffer.from(JSON.stringify({ createdAt: last.saved_at, id: last.id })).toString('base64url')
+          : null,
+        hasMore,
+      };
+      return res ? sendJson(res, 200, result) : result;
+    }
     const params = new URLSearchParams({
       select: 'id,account_id,author_username,is_official,kind,category,body,payload,reply_to_id,pinned_at,removed_at,created_at,client_message_id,view_count,share_count',
       removed_at: 'is.null',
       reply_to_id: 'is.null',
       order: 'created_at.desc,id.desc',
-      limit: String(rawLimit + 1),
+      limit: String(feed === 'trending' ? 100 : rawLimit + 1),
     });
-    if (before) {
+    if (before && feed !== 'trending') {
       params.set('or', `(created_at.lt.${before.createdAt},and(created_at.eq.${before.createdAt},id.lt.${before.id}))`);
     }
+    if (feed === 'trending') params.set('created_at', `gte.${new Date(Date.now() - 7 * 86_400_000).toISOString()}`);
     if (category) params.set('category', `eq.${category}`);
     const accountFilters = [];
     if (following) accountFilters.push(`account_id.in.(${following.map((row) => `"${row.followed_account_id}"`).join(',')})`);
-    const exclusions = [...new Set([...blockedIds, ...blockedByIds])];
     if (exclusions.length) accountFilters.push(`account_id.not.in.(${exclusions.join(',')})`);
     if (accountFilters.length) params.set('and', `(${accountFilters.join(',')})`);
     const rows = parseRows(await getRows('fxsnap_community_messages', params.toString()));
+    const serializedRows = await serializeMessages(rows, actor);
+    if (feed === 'trending') {
+      const score = (message) => {
+        const reactions = message.reactions.filter((reaction) => reaction.reaction !== 'like')
+          .reduce((total, reaction) => total + reaction.count, 0);
+        const ageHours = Math.max(0, (Date.now() - Date.parse(message.createdAt)) / 3_600_000);
+        return (reactions + message.commentCount * 2 + message.repostCount * 3 + message.shareCount * 0.5)
+          / Math.pow(ageHours + 2, 0.65);
+      };
+      serializedRows.sort((a, b) => score(b) - score(a)
+        || b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
+      const ranked = serializedRows.map((message) => ({ ...message, _trendScore: score(message) }))
+        .filter((message) => !before || message._trendScore < before.score
+          || (message._trendScore === before.score && (message.createdAt < before.createdAt
+            || (message.createdAt === before.createdAt && message.id < before.id))));
+      const page = ranked.slice(0, rawLimit);
+      const hasMore = ranked.length > rawLimit;
+      const last = page.at(-1);
+      const result = {
+        messages: page.map(({ _trendScore, ...message }) => message),
+        nextCursor: hasMore && last
+          ? Buffer.from(JSON.stringify({ score: last._trendScore, createdAt: last.createdAt, id: last.id })).toString('base64url')
+          : null,
+        hasMore,
+      };
+      return res ? sendJson(res, 200, result) : result;
+    }
     const hasMore = rows.length > rawLimit;
-    const page = rows.slice(0, rawLimit);
-    const serialized = await serializeMessages(page, actor);
+    const page = serializedRows.slice(0, rawLimit);
     const next = hasMore && page.length
-      ? Buffer.from(JSON.stringify({ createdAt: page[page.length - 1].created_at, id: page[page.length - 1].id })).toString('base64url')
+      ? Buffer.from(JSON.stringify({ createdAt: page[page.length - 1].createdAt, id: page[page.length - 1].id })).toString('base64url')
       : null;
     const result = {
-      messages: serialized,
+      messages: page,
       nextCursor: next,
       hasMore,
       followingEmpty: Boolean(following && following.length > 0 && page.length === 0),
@@ -540,10 +645,11 @@ function createCommunityApi({
     }).safeParse(body);
     if (!base.success) return sendJson(res, 400, { error: 'Invalid community message.' });
     const { kind, payload } = base.data;
+    if (payload.poll && kind !== 'text') return sendJson(res, 400, { error: 'Polls must be published as Community posts.' });
     if (kind === 'announcement' && !actor.isAdmin) return sendJson(res, 403, { error: 'Only authorized administrators can publish announcements.' });
     if (kind === 'announcement' && base.data.category && base.data.category !== 'events') return sendJson(res, 400, { error: 'Announcements must use the Events & Announcements category.' });
     if (base.data.category === 'events' && !actor.isAdmin) return sendJson(res, 403, { error: 'Only FXSnap and approved hosts can publish Events & Announcements.' });
-    if (kind === 'text' && !base.data.body) return sendJson(res, 400, { error: 'Message text cannot be empty.' });
+    if (kind === 'text' && !base.data.body && !payload.poll) return sendJson(res, 400, { error: 'Message text cannot be empty.' });
     if (kind !== 'text' && base.data.body.length > 1200) return sendJson(res, 400, { error: 'The optional caption is too long.' });
 
     let safePayload = {};
@@ -551,15 +657,15 @@ function createCommunityApi({
       const signal = z.object({
         instrument: z.string().trim().min(3).max(20),
         direction: z.enum(['BUY', 'SELL']),
-        entry: z.string().trim().min(1).max(100),
-        stopLoss: z.string().trim().min(1).max(100),
-        takeProfits: z.array(z.string().trim().min(1).max(100)).min(1).max(5),
+        entry: z.string().trim().regex(/^\d+(?:\.\d+)?$/).optional(),
+        stopLoss: z.string().trim().regex(/^\d+(?:\.\d+)?$/).optional(),
+        takeProfits: z.array(z.string().trim().regex(/^\d+(?:\.\d+)?$/)).max(5).default([]),
         timeframe: z.string().trim().min(1).max(20),
         reasoning: z.string().trim().max(1200).default(''),
         imageUrl: z.string().url().max(2048).nullable().optional(),
         ...IMAGE_DIMENSIONS,
       }).safeParse(payload);
-      if (!signal.success) return sendJson(res, 400, { error: 'Complete the signal instrument, direction, entry, stop, target, and timeframe.' });
+      if (!signal.success) return sendJson(res, 400, { error: 'Complete the trade idea instrument, direction, and timeframe. Price levels are optional.' });
       safePayload = signal.data;
     } else if (kind === 'analysis') {
       const snapshot = z.object({
@@ -584,9 +690,27 @@ function createCommunityApi({
     } else if (kind === 'text' || kind === 'announcement') {
       const textPayload = z.object({
         imageUrl: z.string().url().max(2048).nullable().optional(),
+        poll: z.object({
+          question: z.string().trim().min(3).max(200),
+          options: z.array(z.object({
+            id: z.string().regex(/^[a-z0-9_-]{1,24}$/),
+            text: z.string().trim().min(1).max(60),
+          }).strict()).min(2).max(6),
+          endsAt: z.string().datetime().nullable(),
+        }).strict().optional(),
         ...IMAGE_DIMENSIONS,
       }).safeParse(payload);
       if (!textPayload.success) return sendJson(res, 400, { error: 'Invalid chart image attachment.' });
+      if (textPayload.data.poll) {
+        const optionIds = textPayload.data.poll.options.map((option) => option.id);
+        const optionNames = textPayload.data.poll.options.map((option) => option.text.toLowerCase());
+        if (new Set(optionIds).size !== optionIds.length || new Set(optionNames).size !== optionNames.length) {
+          return sendJson(res, 400, { error: 'Poll options must be unique.' });
+        }
+        if (textPayload.data.poll.endsAt && Date.parse(textPayload.data.poll.endsAt) <= Date.now()) {
+          return sendJson(res, 400, { error: 'Choose a future poll end time.' });
+        }
+      }
       if (textPayload.data.imageUrl) {
         const config = getServerConfig();
         const prefix = `${config.supabaseUrl}/storage/v1/object/public/fxsnap-community-media/${actor.accountId}/`;
@@ -618,7 +742,7 @@ function createCommunityApi({
       return sendJson(res, 403, { error: 'Your Community account is muted until the displayed time.' });
     }
     await rateLimit(actor.accountId, 'messages', 12, 60);
-    if (kind === 'text' && !base.data.replyToId && base.data.body.length >= 16) {
+    if (kind === 'text' && !payload.poll && !base.data.replyToId && base.data.body.length >= 16) {
       const duplicate = parseRows(await getRows(
         'fxsnap_community_messages',
         `account_id=eq.${encodeURIComponent(actor.accountId)}&body=eq.${encodeURIComponent(base.data.body)}&created_at=gte.${encodeURIComponent(new Date(Date.now() - 10 * 60_000).toISOString())}&select=id&limit=1`,
@@ -1121,6 +1245,91 @@ function createCommunityApi({
         return sendJson(res, 200, {
           views: counts.map((row) => ({ messageId: row.message_id, viewCount: Number(row.view_count) || 0 })),
         });
+      }
+
+      const repostMatch = pathname.match(/^\/api\/community\/messages\/([0-9a-f-]+)\/reposts$/i);
+      if (repostMatch && req.method === 'POST') {
+        await rateLimit(actor.accountId, 'reposts', 30, 60);
+        const message = await resolveMessage(req, res, repostMatch[1]);
+        if (!message) return true;
+        if (message.reply_to_id) return sendJson(res, 400, { error: 'Only original posts can be reposted.' });
+        if (message.account_id === actor.accountId) return sendJson(res, 400, { error: 'You cannot repost your own post.' });
+        const blocked = parseRows(await getRows(
+          'fxsnap_community_blocks',
+          `or=(and(blocker_account_id.eq.${encodeURIComponent(actor.accountId)},blocked_account_id.eq.${encodeURIComponent(message.account_id)}),and(blocker_account_id.eq.${encodeURIComponent(message.account_id)},blocked_account_id.eq.${encodeURIComponent(actor.accountId)}))&select=blocker_account_id&limit=1`,
+        ));
+        if (blocked.length) return sendJson(res, 403, { error: 'Reposting is unavailable for members who have blocked one another.' });
+        const result = parseRows(await database('rpc/fxsnap_community_toggle_repost', {
+          method: 'POST',
+          body: JSON.stringify({ p_message_id: message.id, p_account_id: actor.accountId }),
+        }))[0];
+        if (!result) throw new CommunityError('The repost could not be updated. Please try again.', 502);
+        return sendJson(res, 200, {
+          reposted: result.reposted === true,
+          repostCount: Number(result.repost_count) || 0,
+        });
+      }
+
+      const savedMatch = pathname.match(/^\/api\/community\/messages\/([0-9a-f-]+)\/saved$/i);
+      if (savedMatch && req.method === 'POST') {
+        await rateLimit(actor.accountId, 'saved_posts', 60, 60);
+        const message = await resolveMessage(req, res, savedMatch[1]);
+        if (!message) return true;
+        if (message.reply_to_id) return sendJson(res, 400, { error: 'Only original posts can be saved.' });
+        const blocked = parseRows(await getRows(
+          'fxsnap_community_blocks',
+          `or=(and(blocker_account_id.eq.${encodeURIComponent(actor.accountId)},blocked_account_id.eq.${encodeURIComponent(message.account_id)}),and(blocker_account_id.eq.${encodeURIComponent(message.account_id)},blocked_account_id.eq.${encodeURIComponent(actor.accountId)}))&select=blocker_account_id&limit=1`,
+        ));
+        if (blocked.length) return sendJson(res, 404, { error: 'Community post not found.' });
+        const result = parseRows(await database('rpc/fxsnap_community_toggle_saved_post', {
+          method: 'POST',
+          body: JSON.stringify({ p_message_id: message.id, p_account_id: actor.accountId }),
+        }))[0];
+        if (!result) throw new CommunityError('The saved post could not be updated. Please try again.', 502);
+        return sendJson(res, 200, { saved: result.saved === true });
+      }
+
+      const pollVoteMatch = pathname.match(/^\/api\/community\/messages\/([0-9a-f-]+)\/poll-votes$/i);
+      if (pollVoteMatch && req.method === 'POST') {
+        const input = z.object({ optionId: z.string().regex(/^[a-z0-9_-]{1,24}$/) }).strict()
+          .safeParse(await readJsonBody(req));
+        if (!input.success) return sendJson(res, 400, { error: 'Choose a valid poll option.' });
+        await rateLimit(actor.accountId, 'poll_votes', 30, 60);
+        const message = await resolveMessage(req, res, pollVoteMatch[1]);
+        if (!message) return true;
+        if (message.reply_to_id || !message.payload?.poll) return sendJson(res, 400, { error: 'This post does not contain a poll.' });
+        const pollData = message.payload.poll;
+        if (!Array.isArray(pollData.options) || !pollData.options.some((option) => option.id === input.data.optionId)) {
+          return sendJson(res, 400, { error: 'Choose a valid poll option.' });
+        }
+        if (pollData.endsAt && Date.parse(pollData.endsAt) <= Date.now()) {
+          return sendJson(res, 400, { error: 'This poll has ended.' });
+        }
+        const blocked = parseRows(await getRows(
+          'fxsnap_community_blocks',
+          `or=(and(blocker_account_id.eq.${encodeURIComponent(actor.accountId)},blocked_account_id.eq.${encodeURIComponent(message.account_id)}),and(blocker_account_id.eq.${encodeURIComponent(message.account_id)},blocked_account_id.eq.${encodeURIComponent(actor.accountId)}))&select=blocker_account_id&limit=1`,
+        ));
+        if (blocked.length) return sendJson(res, 404, { error: 'Community post not found.' });
+        const votes = parseRows(await database('rpc/fxsnap_community_vote_poll', {
+          method: 'POST',
+          body: JSON.stringify({
+            p_message_id: message.id,
+            p_account_id: actor.accountId,
+            p_option_id: input.data.optionId,
+          }),
+        }));
+        const totalVotes = Number(votes[0]?.total_votes) || 0;
+        const poll = {
+          ...message.payload.poll,
+          totalVotes,
+          selectedOptionId: input.data.optionId,
+          results: votes.map((vote) => ({
+            optionId: vote.option_id,
+            votes: Number(vote.votes) || 0,
+            percentage: totalVotes ? Math.round((Number(vote.votes) / totalVotes) * 100) : 0,
+          })),
+        };
+        return sendJson(res, 200, { poll });
       }
 
       const shareMatch = pathname.match(/^\/api\/community\/messages\/([0-9a-f-]+)\/shares$/i);

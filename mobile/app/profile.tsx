@@ -23,8 +23,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useApp } from '@/context/AppContext';
 import { useColors } from '@/hooks/useColors';
 import {
+  getCachedFxsnapProfile,
   getAuthenticatedAccount,
   type FxsnapAccount,
+  type CachedFxsnapProfile,
 } from '@/services/account';
 import { notifyAccountDataChanged } from '@/services/accountDataEvents';
 import {
@@ -76,6 +78,7 @@ export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
   const { settings, updateSettings } = useApp();
   const [account, setAccount] = useState<FxsnapAccount | null>(null);
+  const [cachedProfile, setCachedProfile] = useState<CachedFxsnapProfile | null>(null);
   const [accountLoading, setAccountLoading] = useState(Platform.OS !== 'web');
   const [profileError, setProfileError] = useState('');
   const [photo, setPhoto] = useState<string | null>(null);
@@ -98,14 +101,20 @@ export default function ProfileScreen() {
   const refreshProfile = useCallback(async () => {
     setProfileError('');
     try {
-      const [storedProfile, storedPhoto] = await Promise.all([
+      const [storedProfile, storedPhoto, cachedAccountProfile] = await Promise.all([
         getTraderProfile(),
         AsyncStorage.getItem(PROFILE_PHOTO_KEY),
+        Platform.OS !== 'web' ? getCachedFxsnapProfile() : Promise.resolve(null),
       ]);
       setTraderProfile(storedProfile);
       setPhoto(storedPhoto);
+      setCachedProfile(cachedAccountProfile);
       if (Platform.OS !== 'web') {
-        setAccountLoading(true);
+        if (cachedAccountProfile) {
+          setAccountLoading(false);
+        } else {
+          setAccountLoading(true);
+        }
         const currentAccount = await getAuthenticatedAccount();
         setAccount(currentAccount);
       }
@@ -124,9 +133,9 @@ export default function ProfileScreen() {
     return () => { active = false; };
   }, [refreshProfile]));
 
-  const displayName = settings.displayName.trim() || account?.displayName.trim() || '';
-  const username = account?.communityUsername || '';
-  const resolvedPhoto = photo || account?.pictureUrl || null;
+  const displayName = settings.displayName.trim() || account?.displayName.trim() || cachedProfile?.displayName.trim() || '';
+  const username = account?.communityUsername || cachedProfile?.communityUsername || '';
+  const resolvedPhoto = photo || account?.pictureUrl || cachedProfile?.pictureUrl || null;
   const profileCompletion = getProfileCompletion({
     displayName,
     hasPhoto: Boolean(resolvedPhoto),
@@ -179,7 +188,7 @@ export default function ProfileScreen() {
 
   const openEditor = (field: CompletionField = 'complete') => {
     setActiveField(field);
-    setDraftName(settings.displayName || account?.displayName || '');
+    setDraftName(settings.displayName || account?.displayName || cachedProfile?.displayName || '');
     setDraftUsername(username);
     setDraftBio(traderProfile.bio);
     setDraftExperience(traderProfile.experience);
@@ -384,7 +393,7 @@ export default function ProfileScreen() {
               <ActivityIndicator size="small" color={colors.buy} />
               <Text style={[styles.helperText, { color: colors.textSecondary }]}>Loading account profile…</Text>
             </View>
-          ) : !account && Platform.OS !== 'web' ? (
+          ) : !account && !cachedProfile && Platform.OS !== 'web' ? (
             <TouchableOpacity
               onPress={() => router.push('/settings')}
               style={styles.signInPrompt}

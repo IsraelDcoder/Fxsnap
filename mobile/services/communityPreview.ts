@@ -2,6 +2,7 @@ import type {
   CommunityCategory,
   CommunityMessage,
   CommunityNotification,
+  CommunityPoll,
   CommunityProfile,
   CommunitySearchKind,
   CommunitySearchResults,
@@ -12,6 +13,7 @@ const PREVIEW_USERNAME = 'demo_trader';
 const PREVIEW_POST_ID = '00000000-0000-4000-8000-000000000101';
 const PREVIEW_COMMENT_ID = '00000000-0000-4000-8000-000000000102';
 const PREVIEW_OTHER_ID = '00000000-0000-4000-8000-000000000103';
+const PREVIEW_GOLD_POST_ID = '00000000-0000-4000-8000-000000000105';
 
 function id() {
   return globalThis.crypto?.randomUUID?.()
@@ -38,6 +40,9 @@ function makeMessage(input: Partial<CommunityMessage> & Pick<CommunityMessage, '
     commentCount: 0,
     viewCount: 0,
     shareCount: 0,
+    repostCount: 0,
+    repostedByMe: false,
+    savedByMe: false,
     removed: false,
     reactions: [],
     ...input,
@@ -60,18 +65,43 @@ const messages: CommunityMessage[] = [
     authorUsername: 'market_maya',
     authorPictureUrl: null,
     body: 'I’m practicing waiting for a clear H1 close before drawing conclusions. What helps you avoid reacting to every small move?',
-    category: 'learning',
-    createdAt: new Date(Date.now() - 42 * 60_000).toISOString(),
-    commentCount: 1,
-    reactions: [{ reaction: 'love', count: 3, reacted: false }],
+    category: 'trading',
+    payload: { previewDiscussion: true, previewRepostCount: 6 },
+    createdAt: new Date(Date.now() - 65 * 60_000).toISOString(),
+    commentCount: 18,
+    shareCount: 0,
+    reactions: [{ reaction: 'love', count: 32, reacted: false }],
   }),
   makeMessage({
     id: PREVIEW_OTHER_ID,
     authorUsername: 'fx_learner',
     body: 'New here. Which risk-management concepts helped you most when you were learning?',
-    category: 'questions',
+    category: 'learning',
+    payload: {
+      previewRepostCount: 4,
+      previewPoll: {
+        question: "What's your go-to risk-management rule?",
+        totalVotes: 124,
+        options: [
+          { label: '1% per trade', percentage: 34 },
+          { label: 'Use stop loss always', percentage: 28 },
+          { label: 'Risk/reward 1:3 or higher', percentage: 24 },
+          { label: 'Other (comment below)', percentage: 14 },
+        ],
+      },
+    },
     createdAt: new Date(Date.now() - 3 * 3_600_000).toISOString(),
-    reactions: [{ reaction: 'clap', count: 1, reacted: false }],
+    commentCount: 27,
+    reactions: [{ reaction: 'love', count: 21, reacted: false }],
+  }),
+  makeMessage({
+    id: PREVIEW_GOLD_POST_ID,
+    authorUsername: 'golden_trader',
+    body: 'Gold just bit my TP1. Patience really pays.',
+    category: 'trading',
+    payload: { previewTrade: true, previewRepostCount: 6 },
+    createdAt: new Date(Date.now() - 5 * 3_600_000).toISOString(),
+    reactions: [{ reaction: 'love', count: 16, reacted: false }],
   }),
   makeMessage({
     id: PREVIEW_COMMENT_ID,
@@ -92,6 +122,9 @@ const messages: CommunityMessage[] = [
 const following = new Set<string>();
 const viewDedup = new Map<string, number>();
 const blocked = new Set<string>();
+const repostedMessageIds = new Set<string>();
+const savedMessageIds = new Set<string>();
+const pollVotes = new Map<string, { accountId: string; optionId: string }>();
 const reports: Array<{ id: string; messageId: string; reason: string }> = [];
 const notifications: CommunityNotification[] = [{
   id: '00000000-0000-4000-8000-000000000104',
@@ -120,11 +153,31 @@ function commentCount(postId: string) {
 }
 
 function withCounts(message: CommunityMessage): CommunityMessage {
+  const isReposted = repostedMessageIds.has(message.id);
+  const poll = message.payload.poll as CommunityPoll | undefined;
+  const votes = [...pollVotes.entries()]
+    .filter(([key]) => key.startsWith(`${message.id}:`))
+    .map(([, vote]) => vote);
   return {
     ...message,
     commentCount: commentCount(message.id),
     viewCount: message.viewCount || 0,
     shareCount: message.shareCount || 0,
+    repostCount: Math.max(0, Number(message.payload.previewRepostCount) || 0) + (isReposted ? 1 : 0),
+    repostedByMe: isReposted,
+    savedByMe: savedMessageIds.has(message.id),
+    payload: poll ? {
+      ...message.payload,
+      poll: {
+        ...poll,
+        totalVotes: votes.length,
+        selectedOptionId: votes.find((vote) => vote.accountId === PREVIEW_ACCOUNT_ID)?.optionId || null,
+        results: poll.options.map((option) => {
+          const count = votes.filter((vote) => vote.optionId === option.id).length;
+          return { optionId: option.id, votes: count, percentage: votes.length ? Math.round(count / votes.length * 100) : 0 };
+        }),
+      },
+    } : message.payload,
   };
 }
 
@@ -166,7 +219,10 @@ export async function handleCommunityPreviewRequest(path: string, init?: Request
       .filter((item) => !item.replyTo && !item.removed && !blocked.has(item.authorUsername))
       .filter((item) => !category || item.category === category)
       .filter((item) => feed !== 'following' || following.has(item.authorUsername))
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      .filter((item) => feed !== 'saved' || savedMessageIds.has(item.id))
+      .sort((a, b) => feed === 'trending'
+        ? (b.repostCount + b.commentCount * 2 + b.shareCount) - (a.repostCount + a.commentCount * 2 + a.shareCount)
+        : b.createdAt.localeCompare(a.createdAt));
     return response(200, {
       profile: previewProfile,
       messages: visible.map(withCounts),
@@ -185,7 +241,10 @@ export async function handleCommunityPreviewRequest(path: string, init?: Request
       .filter((item) => !item.replyTo && !item.removed && !blocked.has(item.authorUsername))
       .filter((item) => !category || item.category === category)
       .filter((item) => feed !== 'following' || following.has(item.authorUsername))
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      .filter((item) => feed !== 'saved' || savedMessageIds.has(item.id))
+      .sort((a, b) => feed === 'trending'
+        ? (b.repostCount + b.commentCount * 2 + b.shareCount) - (a.repostCount + a.commentCount * 2 + a.shareCount)
+        : b.createdAt.localeCompare(a.createdAt));
     return response(200, {
       messages: visible.map(withCounts),
       nextCursor: null,
@@ -206,6 +265,41 @@ export async function handleCommunityPreviewRequest(path: string, init?: Request
     });
     messages.unshift(post);
     return response(201, { message: withCounts(post), duplicate: false });
+  }
+  const repostMatch = pathname.match(/^\/api\/community\/messages\/([^/]+)\/reposts$/);
+  if (repostMatch && method === 'POST') {
+    const post = messages.find((item) => item.id === repostMatch[1] && !item.replyTo && !item.removed);
+    if (!post) return response(404, { error: 'Community message not found.' });
+    if (post.authorAccountId === PREVIEW_ACCOUNT_ID) {
+      return response(400, { error: 'You cannot repost your own post.' });
+    }
+    const reposted = !repostedMessageIds.has(post.id);
+    if (reposted) repostedMessageIds.add(post.id);
+    else repostedMessageIds.delete(post.id);
+    return response(200, {
+      reposted,
+      repostCount: Math.max(0, (post.payload.previewRepostCount as number || 0) + (reposted ? 1 : 0)),
+    });
+  }
+  const savedMatch = pathname.match(/^\/api\/community\/messages\/([^/]+)\/saved$/);
+  if (savedMatch && method === 'POST') {
+    const post = messages.find((item) => item.id === savedMatch[1] && !item.replyTo && !item.removed);
+    if (!post) return response(404, { error: 'Community message not found.' });
+    const saved = !savedMessageIds.has(post.id);
+    if (saved) savedMessageIds.add(post.id);
+    else savedMessageIds.delete(post.id);
+    return response(200, { saved });
+  }
+  const pollVoteMatch = pathname.match(/^\/api\/community\/messages\/([^/]+)\/poll-votes$/);
+  if (pollVoteMatch && method === 'POST') {
+    const post = messages.find((item) => item.id === pollVoteMatch[1] && !item.replyTo && !item.removed);
+    const poll = post?.payload.poll as CommunityPoll | undefined;
+    if (!post || !poll) return response(400, { error: 'This post does not contain a poll.' });
+    if (!poll.options.some((option) => option.id === body.optionId)) {
+      return response(400, { error: 'Choose a valid poll option.' });
+    }
+    pollVotes.set(`${post.id}:${PREVIEW_ACCOUNT_ID}`, { accountId: PREVIEW_ACCOUNT_ID, optionId: String(body.optionId) });
+    return response(200, { poll: withCounts(post).payload.poll });
   }
   if (pathname === '/api/community/views' && method === 'POST') {
     const messageIds = Array.isArray(body.messageIds) ? body.messageIds.filter((value): value is string => typeof value === 'string') : [];

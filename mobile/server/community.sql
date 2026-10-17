@@ -56,22 +56,145 @@ create index if not exists fxsnap_community_messages_created_idx
 create index if not exists fxsnap_community_messages_author_idx
   on public.fxsnap_community_messages (account_id, created_at desc);
 
-create or replace function public.fxsnap_community_comment_counts(p_message_ids uuid[])
-returns table(message_id uuid, comment_count bigint)
+create table if not exists public.fxsnap_community_reposts (
+  message_id uuid not null references public.fxsnap_community_messages(id) on delete cascade,
+  account_id text not null,
+  created_at timestamptz not null default now(),
+  primary key (message_id, account_id)
+);
+create index if not exists fxsnap_community_reposts_account_idx
+  on public.fxsnap_community_reposts (account_id, created_at desc);
+create table if not exists public.fxsnap_community_saved_posts (
+  message_id uuid not null references public.fxsnap_community_messages(id) on delete cascade,
+  account_id text not null,
+  created_at timestamptz not null default now(),
+  primary key (message_id, account_id)
+);
+create index if not exists fxsnap_community_saved_posts_account_idx
+  on public.fxsnap_community_saved_posts (account_id, created_at desc);
+create table if not exists public.fxsnap_community_poll_votes (
+  message_id uuid not null references public.fxsnap_community_messages(id) on delete cascade,
+  account_id text not null,
+  option_id text not null,
+  created_at timestamptz not null default now(),
+  primary key (message_id, account_id)
+);
+create index if not exists fxsnap_community_poll_votes_message_idx
+  on public.fxsnap_community_poll_votes (message_id, option_id);
+
+drop function if exists public.fxsnap_community_comment_counts(uuid[], text);
+drop function if exists public.fxsnap_community_comment_counts(uuid[]);
+create function public.fxsnap_community_comment_counts(
+  p_message_ids uuid[],
+  p_account_id text default null
+)
+returns table(
+  message_id uuid,
+  comment_count bigint,
+  repost_count bigint,
+  reposted_by_me boolean,
+  saved_by_me boolean
+)
 language sql
 security definer
 set search_path = public
 as $$
-  select requested.id, count(distinct comment.id) + count(distinct reply.id)
+  select requested.id,
+    count(distinct comment.id) + count(distinct reply.id),
+    (select count(*) from public.fxsnap_community_reposts repost where repost.message_id = requested.id),
+    exists (
+      select 1 from public.fxsnap_community_reposts repost
+      where repost.message_id = requested.id and repost.account_id = p_account_id
+    ),
+    exists (
+      select 1 from public.fxsnap_community_saved_posts saved
+      where saved.message_id = requested.id and saved.account_id = p_account_id
+    )
   from unnest(p_message_ids) as requested(id)
   left join public.fxsnap_community_messages comment
     on comment.reply_to_id = requested.id and comment.removed_at is null
   left join public.fxsnap_community_messages reply
     on reply.reply_to_id = comment.id and reply.removed_at is null
+  left join public.fxsnap_community_reposts repost
+    on repost.message_id = requested.id
   group by requested.id;
 $$;
-revoke all on function public.fxsnap_community_comment_counts(uuid[]) from public, anon, authenticated;
-grant execute on function public.fxsnap_community_comment_counts(uuid[]) to service_role;
+revoke all on function public.fxsnap_community_comment_counts(uuid[], text) from public, anon, authenticated;
+grant execute on function public.fxsnap_community_comment_counts(uuid[], text) to service_role;
+
+create or replace function public.fxsnap_community_toggle_saved_post(p_message_id uuid, p_account_id text)
+returns table(saved boolean)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  current_saved boolean;
+begin
+  perform 1 from public.fxsnap_community_messages
+  where id = p_message_id and reply_to_id is null and removed_at is null
+  for update;
+  if not found then raise exception 'Post not found'; end if;
+
+  select exists (
+    select 1 from public.fxsnap_community_saved_posts
+    where message_id = p_message_id and account_id = p_account_id
+  ) into current_saved;
+  if current_saved then
+    delete from public.fxsnap_community_saved_posts
+    where message_id = p_message_id and account_id = p_account_id;
+  else
+    insert into public.fxsnap_community_saved_posts (message_id, account_id)
+    values (p_message_id, p_account_id);
+  end if;
+  return query select not current_saved;
+end;
+$$;
+revoke all on function public.fxsnap_community_toggle_saved_post(uuid, text) from public, anon, authenticated;
+grant execute on function public.fxsnap_community_toggle_saved_post(uuid, text) to service_role;
+
+create or replace function public.fxsnap_community_vote_poll(
+  p_message_id uuid,
+  p_account_id text,
+  p_option_id text
+)
+returns table(option_id text, votes bigint, total_votes bigint, selected_option_id text)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  poll_payload jsonb;
+  poll_ends_at timestamptz;
+begin
+  select message.payload -> 'poll' into poll_payload
+  from public.fxsnap_community_messages message
+  where message.id = p_message_id and message.reply_to_id is null and message.removed_at is null
+  for update;
+  if poll_payload is null then raise exception 'Poll not found'; end if;
+  poll_ends_at := nullif(poll_payload ->> 'endsAt', '')::timestamptz;
+  if poll_ends_at is not null and poll_ends_at <= now() then raise exception 'Poll has ended'; end if;
+  if not exists (
+    select 1 from jsonb_array_elements(poll_payload -> 'options') item
+    where item ->> 'id' = p_option_id
+  ) then raise exception 'Invalid poll option'; end if;
+  insert into public.fxsnap_community_poll_votes (message_id, account_id, option_id)
+  values (p_message_id, p_account_id, p_option_id)
+  on conflict (message_id, account_id) do update
+    set option_id = excluded.option_id, created_at = now();
+  return query
+    select options.item ->> 'id',
+      count(vote.account_id),
+      (select count(*) from public.fxsnap_community_poll_votes all_votes where all_votes.message_id = p_message_id),
+      p_option_id
+    from jsonb_array_elements(poll_payload -> 'options') options(item)
+    left join public.fxsnap_community_poll_votes vote
+      on vote.message_id = p_message_id and vote.option_id = options.item ->> 'id'
+    group by options.item;
+end;
+$$;
+revoke all on function public.fxsnap_community_vote_poll(uuid, text, text) from public, anon, authenticated;
+grant execute on function public.fxsnap_community_vote_poll(uuid, text, text) to service_role;
 
 create table if not exists public.fxsnap_community_reactions (
   message_id uuid not null references public.fxsnap_community_messages(id) on delete cascade,
@@ -224,6 +347,49 @@ end;
 $$;
 revoke all on function public.fxsnap_community_set_reaction(uuid, text, text) from public, anon, authenticated;
 grant execute on function public.fxsnap_community_set_reaction(uuid, text, text) to service_role;
+
+create or replace function public.fxsnap_community_toggle_repost(p_message_id uuid, p_account_id text)
+returns table(reposted boolean, repost_count bigint)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  current_repost boolean;
+  current_count bigint;
+begin
+  perform 1
+  from public.fxsnap_community_messages message
+  where message.id = p_message_id
+    and message.reply_to_id is null
+    and message.removed_at is null
+    and message.account_id <> p_account_id
+  for update;
+  if not found then
+    raise exception 'Post not found or cannot be reposted';
+  end if;
+
+  select exists (
+    select 1 from public.fxsnap_community_reposts repost
+    where repost.message_id = p_message_id and repost.account_id = p_account_id
+  ) into current_repost;
+
+  if current_repost then
+    delete from public.fxsnap_community_reposts
+      where message_id = p_message_id and account_id = p_account_id;
+  else
+    insert into public.fxsnap_community_reposts (message_id, account_id)
+      values (p_message_id, p_account_id);
+  end if;
+
+  select count(*) into current_count
+  from public.fxsnap_community_reposts repost
+  where repost.message_id = p_message_id;
+  return query select not current_repost, current_count;
+end;
+$$;
+revoke all on function public.fxsnap_community_toggle_repost(uuid, text) from public, anon, authenticated;
+grant execute on function public.fxsnap_community_toggle_repost(uuid, text) to service_role;
 
 create or replace function public.fxsnap_community_record_share(p_message_id uuid, p_account_id text)
 returns table(share_count bigint)
@@ -573,6 +739,9 @@ create trigger fxsnap_community_notification_event
 alter table public.fxsnap_community_profiles enable row level security;
 alter table public.fxsnap_community_messages enable row level security;
 alter table public.fxsnap_community_reactions enable row level security;
+alter table public.fxsnap_community_reposts enable row level security;
+alter table public.fxsnap_community_saved_posts enable row level security;
+alter table public.fxsnap_community_poll_votes enable row level security;
 alter table public.fxsnap_community_view_dedup enable row level security;
 alter table public.fxsnap_community_share_dedup enable row level security;
 alter table public.fxsnap_community_follows enable row level security;
@@ -587,6 +756,9 @@ alter table public.fxsnap_community_moderation_actions enable row level security
 revoke all on public.fxsnap_community_profiles,
   public.fxsnap_community_messages,
   public.fxsnap_community_reactions,
+  public.fxsnap_community_reposts,
+  public.fxsnap_community_saved_posts,
+  public.fxsnap_community_poll_votes,
   public.fxsnap_community_view_dedup,
   public.fxsnap_community_share_dedup,
   public.fxsnap_community_follows,
@@ -600,6 +772,9 @@ revoke all on public.fxsnap_community_profiles,
 grant all on public.fxsnap_community_profiles,
   public.fxsnap_community_messages,
   public.fxsnap_community_reactions,
+  public.fxsnap_community_reposts,
+  public.fxsnap_community_saved_posts,
+  public.fxsnap_community_poll_votes,
   public.fxsnap_community_view_dedup,
   public.fxsnap_community_share_dedup,
   public.fxsnap_community_follows,

@@ -1,11 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AppState,
+  BackHandler,
   ActivityIndicator,
   Alert,
   Image,
   KeyboardAvoidingView as NativeKeyboardAvoidingView,
   Modal,
   Platform,
+  Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -17,18 +20,34 @@ import {
 import { KeyboardAvoidingView as KeyboardControllerAvoidingView } from 'react-native-keyboard-controller';
 import { Image as CachedImage } from 'expo-image';
 import { AnimatedTouchableOpacity as TouchableOpacity } from '@/components/AnimatedTouchableOpacity';
-import Animated, { FadeIn, FadeInDown, useReducedMotion } from 'react-native-reanimated';
+import Animated, {
+  FadeIn,
+  FadeInDown,
+  FadeOutUp,
+  ZoomIn,
+  interpolate,
+  useAnimatedStyle,
+  useReducedMotion,
+  useSharedValue,
+  withSequence,
+  withSpring,
+  withTiming,
+} from 'react-native-reanimated';
 import { Feather } from '@expo/vector-icons';
 import { FlashList, type FlashListRef } from '@shopify/flash-list';
-import { router, useLocalSearchParams } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import * as Clipboard from 'expo-clipboard';
+import Svg, { Polyline } from 'react-native-svg';
 import { useApp, type AnalysisResult } from '@/context/AppContext';
 import { useColors } from '@/hooks/useColors';
 import { signInWithGoogle, getAuthenticatedAccount, type FxsnapAccount } from '@/services/account';
+import { createCommunityPreviewAccount } from '@/services/communityPreview';
+import { fetchMarketCandles, fetchMarketQuotes } from '@/services/market';
 import {
   COMMUNITY_CATEGORIES,
+  COMMUNITY_REACTIONS,
   COMMUNITY_RULES_VERSION,
   blockCommunityMember,
   checkCommunityUsername,
@@ -51,15 +70,19 @@ import {
   shareCommunityPost,
   subscribeToCommunityChanges,
   subscribeToCommunityPresence,
+  toggleCommunityRepost,
+  toggleCommunitySave,
   toggleCommunityReaction,
   updateCommunityMessage,
   unblockCommunityMember,
   unfollowCommunityMember,
   uploadCommunityImage,
+  voteCommunityPoll,
   type CommunityAnalysisSnapshot,
   type CommunityCategory,
   type CommunityFeed,
   type CommunityMessage,
+  type CommunityPoll,
   type CommunityProfile,
   type CommunityReaction,
 } from '@/services/community';
@@ -73,7 +96,60 @@ import {
 import CommunityPostCard from '@/components/CommunityPostCard';
 import CommunityPreviewNotice from '@/components/CommunityPreviewNotice';
 
-type ComposerKind = 'text' | 'signal' | 'analysis';
+type ComposerKind = 'text' | 'signal' | 'analysis' | 'poll';
+type ComposerIntent = 'post' | 'question' | 'trade' | 'poll' | 'image';
+type CommunityFeedTab = 'For You' | 'Following' | 'Trending' | 'Latest' | 'Saved';
+const COMMUNITY_CREATE_ACTIONS: Array<{
+  label: string;
+  icon: React.ComponentProps<typeof Feather>['name'];
+  intent: ComposerIntent;
+}> = [
+  { label: 'Create a post', icon: 'edit-3', intent: 'post' },
+  { label: 'Share a trade idea', icon: 'activity', intent: 'trade' },
+  { label: 'Create a poll', icon: 'bar-chart-2', intent: 'poll' },
+  { label: 'Share a chart or image', icon: 'image', intent: 'image' },
+  { label: 'Ask the community', icon: 'help-circle', intent: 'question' },
+];
+type CommunityMarket = {
+  symbol: string;
+  providerSymbol: string;
+  decimals: number;
+};
+type CommunityMarketQuote = {
+  symbol: string;
+  price: number | null;
+  timestamp: number | null;
+  changePercent: number | null;
+  sparkline: number[];
+};
+type CommunityMarketState = {
+  status: 'loading' | 'live' | 'unavailable';
+  quotes: CommunityMarketQuote[];
+};
+const COMMUNITY_MARKETS: CommunityMarket[] = [
+  { symbol: 'XAUUSD', providerSymbol: 'XAU/USD', decimals: 2 },
+  { symbol: 'EURUSD', providerSymbol: 'EUR/USD', decimals: 4 },
+  { symbol: 'GBPUSD', providerSymbol: 'GBP/USD', decimals: 4 },
+  { symbol: 'BTCUSD', providerSymbol: 'BTC/USD', decimals: 2 },
+];
+const EMPTY_MARKET_QUOTES: CommunityMarketQuote[] = COMMUNITY_MARKETS.map((market) => ({
+  symbol: market.symbol,
+  price: null,
+  timestamp: null,
+  changePercent: null,
+  sparkline: [],
+}));
+const COMMUNITY_CATEGORY_ICONS: Record<string, React.ComponentProps<typeof Feather>['name']> = {
+  trading: 'activity',
+  investing: 'trending-up',
+  finance: 'briefcase',
+  market_discussion: 'message-circle',
+  learning: 'book-open',
+  chart_analysis: 'bar-chart-2',
+  questions: 'help-circle',
+  events: 'calendar',
+};
+const LOCAL_COMMUNITY_PREVIEW = __DEV__;
 type CommunityNotification = {
   id: string;
   kind: string;
@@ -144,8 +220,50 @@ function upsertCommunityMessage(messages: CommunityMessage[], message: Community
   return messages.map((item, index) => index === existingIndex ? message : item);
 }
 
+function normalizeMarketSymbol(symbol: string) {
+  return symbol.replace(/[^a-z0-9]/gi, '').toUpperCase();
+}
+
+function marketTimestamp(value: unknown): number | null {
+  const timestamp = typeof value === 'number'
+    ? value
+    : typeof value === 'string'
+      ? Date.parse(value)
+      : NaN;
+  if (!Number.isFinite(timestamp)) return null;
+  return timestamp < 10_000_000_000 ? timestamp * 1000 : timestamp;
+}
+
+function marketCandleCloses(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((candle) => {
+      if (!candle || typeof candle !== 'object') return null;
+      const record = candle as Record<string, unknown>;
+      const close = Number(record.close);
+      const timestamp = marketTimestamp(record.time);
+      return Number.isFinite(close) && close > 0 && timestamp !== null
+        ? { close, timestamp }
+        : null;
+    })
+    .filter((candle): candle is { close: number; timestamp: number } => candle !== null)
+    .sort((a, b) => a.timestamp - b.timestamp);
+}
+
 export default function CommunityScreen() {
-  const colors = useColors();
+  const appColors = useColors();
+  const colors: ReturnType<typeof useColors> = appColors.background === '#000000'
+    ? appColors
+    : {
+      ...appColors,
+      background: '#F5F8F7',
+      surface: '#EEF3F1',
+      card: '#FFFFFF',
+      cardBorder: '#E3EBE8',
+      text: '#142A3B',
+      textSecondary: '#596B70',
+      textMuted: '#7B898C',
+    };
   const reduceMotion = useReducedMotion();
   const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{ postId?: string; shareAnalysisId?: string; category?: string }>();
@@ -158,9 +276,13 @@ export default function CommunityScreen() {
   const [stage, setStage] = useState<'loading' | 'signed_out' | 'onboarding' | 'feed' | 'error'>('loading');
   const [screenError, setScreenError] = useState('');
   const [feed, setFeed] = useState<CommunityFeed>('global');
+  const [feedTab, setFeedTab] = useState<CommunityFeedTab>('For You');
   const [category, setCategory] = useState<CommunityCategory | null>(null);
   const [posts, setPosts] = useState<CommunityMessage[]>([]);
   const [reactionBusyIds, setReactionBusyIds] = useState<Set<string>>(() => new Set());
+  const [repostBusyIds, setRepostBusyIds] = useState<Set<string>>(() => new Set());
+  const [saveBusyIds, setSaveBusyIds] = useState<Set<string>>(() => new Set());
+  const [pollBusyIds, setPollBusyIds] = useState<Set<string>>(() => new Set());
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [followingEmpty, setFollowingEmpty] = useState(false);
@@ -175,6 +297,9 @@ export default function CommunityScreen() {
   const [joining, setJoining] = useState(false);
   const [signingIn, setSigningIn] = useState(false);
   const [composerVisible, setComposerVisible] = useState(false);
+  const [composerIntent, setComposerIntent] = useState<ComposerIntent>('post');
+  const [createMenuOpen, setCreateMenuOpen] = useState(false);
+  const [createMenuMounted, setCreateMenuMounted] = useState(false);
   const [editingPost, setEditingPost] = useState<CommunityMessage | null>(null);
   const [composerKind, setComposerKind] = useState<ComposerKind>('text');
   const [composerCategory, setComposerCategory] = useState<CommunityCategory>('market_discussion');
@@ -190,6 +315,9 @@ export default function CommunityScreen() {
   const [signalStop, setSignalStop] = useState('');
   const [signalTargets, setSignalTargets] = useState('');
   const [signalTimeframe, setSignalTimeframe] = useState('');
+  const [pollQuestion, setPollQuestion] = useState('');
+  const [pollOptions, setPollOptions] = useState(['', '']);
+  const [pollDurationDays, setPollDurationDays] = useState<1 | 3 | 7>(3);
   const [pendingAnalysis, setPendingAnalysis] = useState<CommunityAnalysisSnapshot | null>(null);
   const [commentPost, setCommentPost] = useState<CommunityMessage | null>(null);
   const [comments, setComments] = useState<CommunityMessage[]>([]);
@@ -206,10 +334,20 @@ export default function CommunityScreen() {
   const [postActionsPost, setPostActionsPost] = useState<CommunityMessage | null>(null);
   const postActionsViewRef = useRef<View | null>(null);
   const [followedNames, setFollowedNames] = useState<string[]>([]);
+  const [marketTicker, setMarketTicker] = useState<CommunityMarketState>({ status: 'loading', quotes: EMPTY_MARKET_QUOTES });
   const flatListRef = useRef<FlashListRef<CommunityMessage>>(null);
+  const createMenuProgress = useSharedValue(0);
+  const fabPressScale = useSharedValue(1);
+  const createMenuOpenRef = useRef(false);
+  const createMenuCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const marketFetchedAt = useRef(0);
   const recordedViewIds = useRef(new Map<string, number>());
   const pendingReactionIds = useRef(new Set<string>());
+  const pendingRepostIds = useRef(new Set<string>());
+  const pendingSaveIds = useRef(new Set<string>());
+  const pendingPollIds = useRef(new Set<string>());
   const pendingFollowUsernames = useRef(new Set<string>());
+  const publishSubmissionPending = useRef(false);
   const commentSubmissionPending = useRef(false);
   const currentAccountIdRef = useRef<string | null>(null);
   const currentPostIdsRef = useRef(new Set<string>());
@@ -221,6 +359,45 @@ export default function CommunityScreen() {
   const commentId = useRef<string | null>(null);
   const currentDiscussionIdRef = useRef<string | null>(null);
   const currentReplyTargetIdRef = useRef<string | null>(null);
+  const fabAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [
+      { scale: fabPressScale.value },
+      { rotate: `${interpolate(createMenuProgress.value, [0, 1], [0, 45])}deg` },
+    ],
+  }));
+  const createMenuAnimatedStyle = useAnimatedStyle(() => ({
+    opacity: createMenuProgress.value,
+    transform: [{ translateY: interpolate(createMenuProgress.value, [0, 1], [18, 0]) }],
+  }));
+  const createMenuScrimAnimatedStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(createMenuProgress.value, [0, 1], [0, 1]),
+  }));
+  const setCreateMenu = useCallback((open: boolean) => {
+    if (createMenuOpenRef.current === open) return;
+    createMenuOpenRef.current = open;
+    setCreateMenuOpen(open);
+    if (createMenuCloseTimer.current) {
+      clearTimeout(createMenuCloseTimer.current);
+      createMenuCloseTimer.current = null;
+    }
+    if (open) {
+      setCreateMenuMounted(true);
+    } else {
+      createMenuCloseTimer.current = setTimeout(() => {
+        setCreateMenuMounted(false);
+        createMenuCloseTimer.current = null;
+      }, reduceMotion ? 0 : 240);
+    }
+    fabPressScale.value = reduceMotion
+      ? 1
+      : withSequence(
+        withTiming(0.9, { duration: 70 }),
+        withSpring(1, { damping: 12, stiffness: 360 }),
+      );
+    createMenuProgress.value = reduceMotion
+      ? withTiming(open ? 1 : 0, { duration: 0 })
+      : withSpring(open ? 1 : 0, { damping: 19, stiffness: 240, mass: 0.72 });
+  }, [createMenuProgress, fabPressScale, reduceMotion]);
   currentAccountIdRef.current = profile?.accountId || null;
   currentDiscussionIdRef.current = commentPost?.id || null;
   currentReplyTargetIdRef.current = replyTarget?.id || null;
@@ -230,6 +407,49 @@ export default function CommunityScreen() {
     ...comments.map((comment) => comment.id),
     ...threadReplies.map((reply) => reply.id),
   ]);
+
+  const loadMarketTicker = useCallback(async () => {
+    if (Date.now() - marketFetchedAt.current < 60_000) return;
+    marketFetchedAt.current = Date.now();
+    try {
+      const quoteResult = await fetchMarketQuotes(COMMUNITY_MARKETS.map((market) => market.providerSymbol));
+      if (!quoteResult.live) {
+        setMarketTicker({ status: 'unavailable', quotes: EMPTY_MARKET_QUOTES });
+        return;
+      }
+      const candleResults = await Promise.all(COMMUNITY_MARKETS.map((market) =>
+        fetchMarketCandles(market.providerSymbol, '1h', 24)));
+      const quotes = COMMUNITY_MARKETS.map((market, index) => {
+        const quote = quoteResult.quotes.find((item) =>
+          normalizeMarketSymbol(item.symbol) === normalizeMarketSymbol(market.providerSymbol));
+        const validPrice = quote && Number.isFinite(quote.price) && quote.price !== null
+          ? quote.price
+          : null;
+        const candleResult = candleResults[index];
+        const closes = candleResult.live ? marketCandleCloses(candleResult.candles) : [];
+        const firstClose = closes[0]?.close;
+        const lastClose = closes.at(-1)?.close;
+        return {
+          symbol: market.symbol,
+          price: validPrice,
+          timestamp: marketTimestamp(quote?.timestamp),
+          changePercent: firstClose && lastClose
+            ? ((lastClose - firstClose) / firstClose) * 100
+            : null,
+          sparkline: closes.map((candle) => candle.close),
+        };
+      });
+      setMarketTicker({ status: 'live', quotes });
+    } catch (error) {
+      console.warn('[Community] Could not load market ticker data.', error);
+      setMarketTicker({ status: 'unavailable', quotes: EMPTY_MARKET_QUOTES });
+    }
+  }, []);
+
+  useFocusEffect(useCallback(() => {
+    if (stage !== 'feed') return;
+    void loadMarketTicker();
+  }, [loadMarketTicker, stage]));
 
   const loadFeed = useCallback(async (reset = true) => {
     if (stage !== 'feed' && !profile) return;
@@ -275,7 +495,9 @@ export default function CommunityScreen() {
     setStage('loading');
     setScreenError('');
     try {
-      const linkedAccount = await getAuthenticatedAccount();
+      const linkedAccount = LOCAL_COMMUNITY_PREVIEW
+        ? createCommunityPreviewAccount()
+        : await getAuthenticatedAccount();
       if (!linkedAccount) {
         setAccount(null);
         setStage('signed_out');
@@ -291,6 +513,7 @@ export default function CommunityScreen() {
       if (cachedFeed) {
         setCategory(initialCategory);
         setFeed('global');
+        setFeedTab('For You');
         setPosts(cachedFeed.page.messages);
         setNextCursor(cachedFeed.page.nextCursor);
         setHasMore(cachedFeed.page.hasMore);
@@ -335,6 +558,26 @@ export default function CommunityScreen() {
 
   useEffect(() => { void bootstrap(); }, [bootstrap]);
 
+  useEffect(() => () => {
+    if (createMenuCloseTimer.current) clearTimeout(createMenuCloseTimer.current);
+  }, []);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state !== 'active') setCreateMenu(false);
+    });
+    return () => subscription.remove();
+  }, [setCreateMenu]);
+
+  useEffect(() => {
+    if (!createMenuOpen) return;
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      setCreateMenu(false);
+      return true;
+    });
+    return () => subscription.remove();
+  }, [createMenuOpen, setCreateMenu]);
+
   useEffect(() => {
     const matchedCategory = COMMUNITY_CATEGORIES.find((item) => item.id === categoryParam);
     if (matchedCategory && category !== matchedCategory.id) setCategory(matchedCategory.id);
@@ -350,7 +593,7 @@ export default function CommunityScreen() {
   }, [category, feed, profile, stage]);
 
   useEffect(() => {
-    if (stage !== 'feed' || !profile) return;
+    if (stage !== 'feed' || !profile || LOCAL_COMMUNITY_PREVIEW) return;
     const unsubscribe = subscribeToCommunityChanges((eventType, objectId) => {
       if (eventType === 'notification') {
         void refreshNotifications().catch((error) => {
@@ -397,7 +640,7 @@ export default function CommunityScreen() {
   }, [category, feed, profile, refreshNotifications, stage]);
 
   useEffect(() => {
-    if (stage !== 'feed' || !profile) {
+    if (stage !== 'feed' || !profile || LOCAL_COMMUNITY_PREVIEW) {
       setOnlineMemberCount(null);
       return;
     }
@@ -461,9 +704,14 @@ export default function CommunityScreen() {
     return buildAnalysisSnapshot(selected);
   }, [currentAnalysis, isSubscribed, savedAnalyses, shareAnalysisId]);
 
-  const openComposer = useCallback((kind: ComposerKind = 'text', initialCategory?: CommunityCategory) => {
+  const openComposer = useCallback((
+    kind: ComposerKind = 'text',
+    initialCategory?: CommunityCategory,
+    intent: ComposerIntent = 'post',
+  ) => {
     setEditingPost(null);
     setComposerKind(kind);
+    setComposerIntent(intent);
     setComposerCategory(initialCategory || (kind === 'analysis' ? 'chart_analysis' : 'market_discussion'));
     setComposerBody('');
     setComposerImage(null);
@@ -476,12 +724,16 @@ export default function CommunityScreen() {
     setSignalStop('');
     setSignalTargets('');
     setSignalTimeframe('');
+    setPollQuestion('');
+    setPollOptions(['', '']);
+    setPollDurationDays(3);
     setComposerVisible(true);
   }, []);
 
   const editPost = (post: CommunityMessage) => {
     setEditingPost(post);
     setComposerKind('text');
+    setComposerIntent('post');
     setComposerCategory(post.category || 'market_discussion');
     setComposerBody(post.body);
     setComposerImage(null);
@@ -591,23 +843,59 @@ export default function CommunityScreen() {
     }
   };
 
+  const openImagePost = () => {
+    openComposer('text', 'chart_analysis', 'image');
+    void chooseImage();
+  };
+
   const submitPost = async () => {
-    if (publishing || uploadingImage) return;
+    if (publishSubmissionPending.current || publishing || uploadingImage) return;
     const body = composerBody.trim();
     if (composerKind === 'text' && !body && !composerImage && !composerImageUrl) {
       setComposerError('Add some trading discussion or attach a chart.');
       return;
     }
+    if (composerIntent === 'question' && !body) {
+      setComposerError('Write the question you want the community to answer.');
+      return;
+    }
     if (composerKind === 'signal'
-      && (!signalInstrument.trim() || !signalEntry.trim() || !signalStop.trim()
-        || !signalTargets.trim() || !signalTimeframe.trim())) {
-      setComposerError('Complete the instrument, entry, stop loss, take profit, and timeframe.');
+      && (!signalInstrument.trim() || signalInstrument.trim().length < 3 || !signalTimeframe.trim())) {
+      setComposerError('Choose an instrument and timeframe for this trade idea.');
+      return;
+    }
+    const optionalSignalPrices = [signalEntry.trim(), signalStop.trim(), ...signalTargets.split(',').map((target) => target.trim()).filter(Boolean)];
+    if (composerKind === 'signal'
+      && optionalSignalPrices.some((price) => !Number.isFinite(Number(price)) || Number(price) <= 0)) {
+      setComposerError('Optional entry, stop-loss, and take-profit values must be positive prices.');
+      return;
+    }
+    if (composerKind === 'signal' && signalEntry.trim()) {
+      const entry = Number(signalEntry);
+      const stop = Number(signalStop);
+      const targets = signalTargets.split(',').map((target) => target.trim()).filter(Boolean).map(Number);
+      if (signalStop.trim() && (signalDirection === 'BUY' ? stop >= entry : stop <= entry)) {
+        setComposerError(`The ${signalDirection === 'BUY' ? 'stop loss must be below' : 'stop loss must be above'} the entry.`);
+        return;
+      }
+      if (targets.some((target) => signalDirection === 'BUY' ? target <= entry : target >= entry)) {
+        setComposerError(`Take-profit levels must be ${signalDirection === 'BUY' ? 'above' : 'below'} the entry.`);
+        return;
+      }
+    }
+    const normalizedPollOptions = pollOptions.map((option) => option.trim()).filter(Boolean);
+    if (composerKind === 'poll'
+      && (pollQuestion.trim().length < 3 || pollQuestion.trim().length > 200
+        || normalizedPollOptions.length < 2 || normalizedPollOptions.length > 6
+        || new Set(normalizedPollOptions.map((option) => option.toLowerCase())).size !== normalizedPollOptions.length)) {
+      setComposerError('Add a question and 2–6 unique answer options.');
       return;
     }
     if (composerKind === 'analysis' && !pendingAnalysis) {
       setComposerError('The source analysis is no longer available. Reopen the result to share it.');
       return;
     }
+    publishSubmissionPending.current = true;
     setPublishing(true);
     setComposerError('');
     try {
@@ -628,14 +916,24 @@ export default function CommunityScreen() {
         ? {
           instrument: signalInstrument.trim().toUpperCase(),
           direction: signalDirection,
-          entry: signalEntry.trim(),
-          stopLoss: signalStop.trim(),
+          entry: signalEntry.trim() || undefined,
+          stopLoss: signalStop.trim() || undefined,
           takeProfits: signalTargets.split(',').map((target) => target.trim()).filter(Boolean),
           timeframe: signalTimeframe.trim(),
           reasoning: body,
           imageUrl,
           ...imageDimensions,
         }
+        : composerKind === 'poll'
+          ? {
+            poll: {
+              question: pollQuestion.trim(),
+              options: normalizedPollOptions.map((text, index) => ({ id: `option-${index + 1}`, text })),
+              endsAt: new Date(Date.now() + pollDurationDays * 86_400_000).toISOString(),
+            },
+            imageUrl,
+            ...imageDimensions,
+          }
         : composerKind === 'analysis'
           ? { ...pendingAnalysis, imageUrl, ...imageDimensions }
           : { imageUrl, ...imageDimensions };
@@ -647,7 +945,7 @@ export default function CommunityScreen() {
           ...imageDimensions,
         })).message
         : (await publishCommunityMessage({
-          kind: composerKind,
+          kind: composerKind === 'poll' ? 'text' : composerKind,
           category: composerCategory,
           body,
           payload,
@@ -662,12 +960,15 @@ export default function CommunityScreen() {
       setPendingAnalysis(null);
       setComposerBody('');
       setComposerImage(null);
+      setPollQuestion('');
+      setPollOptions(['', '']);
       publishId.current = null;
       flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
     } catch (error) {
       setUploadingImage(false);
       setComposerError(apiErrorMessage(error));
     } finally {
+      publishSubmissionPending.current = false;
       setPublishing(false);
     }
   };
@@ -738,6 +1039,9 @@ export default function CommunityScreen() {
       commentCount: 0,
       viewCount: 0,
       shareCount: 0,
+      repostCount: 0,
+      repostedByMe: false,
+      savedByMe: false,
       removed: false,
       reactions: [],
     };
@@ -792,15 +1096,26 @@ export default function CommunityScreen() {
     setReactionBusyIds((current) => new Set(current).add(post.id));
     const previousReactions = post.reactions;
     const optimisticReactions = applyCommunityReaction(previousReactions, reaction);
+    const updateMessage = (message: CommunityMessage) => message.id === post.id
+      ? { ...message, reactions: optimisticReactions }
+      : message;
     setPosts((previous) => previous.map((item) => item.id === post.id
       ? { ...item, reactions: optimisticReactions }
       : item));
+    setComments((previous) => previous.map(updateMessage));
+    setThreadReplies((previous) => previous.map(updateMessage));
     setCommentPost((current) => current?.id === post.id
       ? { ...current, reactions: optimisticReactions }
       : current);
     try {
       const result = await toggleCommunityReaction(post.id, reaction);
       setPosts((previous) => previous.map((item) => item.id === post.id
+        ? { ...item, reactions: result.reactions }
+        : item));
+      setComments((previous) => previous.map((item) => item.id === post.id
+        ? { ...item, reactions: result.reactions }
+        : item));
+      setThreadReplies((previous) => previous.map((item) => item.id === post.id
         ? { ...item, reactions: result.reactions }
         : item));
       setCommentPost((current) => current?.id === post.id
@@ -810,6 +1125,12 @@ export default function CommunityScreen() {
       setPosts((previous) => previous.map((item) => item.id === post.id
         ? { ...item, reactions: previousReactions }
         : item));
+      setComments((previous) => previous.map((item) => item.id === post.id
+        ? { ...item, reactions: previousReactions }
+        : item));
+      setThreadReplies((previous) => previous.map((item) => item.id === post.id
+        ? { ...item, reactions: previousReactions }
+        : item));
       setCommentPost((current) => current?.id === post.id
         ? { ...current, reactions: previousReactions }
         : current);
@@ -817,6 +1138,95 @@ export default function CommunityScreen() {
     } finally {
       pendingReactionIds.current.delete(post.id);
       setReactionBusyIds((current) => {
+        const updated = new Set(current);
+        updated.delete(post.id);
+        return updated;
+      });
+    }
+  };
+
+  const handleRepost = async (post: CommunityMessage) => {
+    if (pendingRepostIds.current.has(post.id)) return;
+    pendingRepostIds.current.add(post.id);
+    setRepostBusyIds((current) => new Set(current).add(post.id));
+    const wasReposted = post.repostedByMe;
+    const previousCount = Number.isFinite(post.repostCount) ? post.repostCount : 0;
+    const nextReposted = !wasReposted;
+    const nextCount = Math.max(0, previousCount + (nextReposted ? 1 : -1));
+    const updateRepostState = (repostCount: number, repostedByMe: boolean) => {
+      setPosts((previous) => previous.map((item) => item.id === post.id
+        ? { ...item, repostCount, repostedByMe }
+        : item));
+      setCommentPost((current) => current?.id === post.id
+        ? { ...current, repostCount, repostedByMe }
+        : current);
+      setPostActionsPost((current) => current?.id === post.id
+        ? { ...current, repostCount, repostedByMe }
+        : current);
+    };
+    updateRepostState(nextCount, nextReposted);
+    try {
+      const result = await toggleCommunityRepost(post.id);
+      updateRepostState(result.repostCount, result.reposted);
+    } catch (error) {
+      updateRepostState(previousCount, wasReposted);
+      Alert.alert('Could not update repost', apiErrorMessage(error));
+    } finally {
+      pendingRepostIds.current.delete(post.id);
+      setRepostBusyIds((current) => {
+        const updated = new Set(current);
+        updated.delete(post.id);
+        return updated;
+      });
+    }
+  };
+
+  const handleSave = async (post: CommunityMessage) => {
+    if (pendingSaveIds.current.has(post.id)) return;
+    pendingSaveIds.current.add(post.id);
+    setSaveBusyIds((current) => new Set(current).add(post.id));
+    const wasSaved = post.savedByMe;
+    const setSaved = (savedByMe: boolean) => {
+      setPosts((previous) => savedByMe || feed !== 'saved'
+        ? previous.map((item) => item.id === post.id ? { ...item, savedByMe } : item)
+        : previous.filter((item) => item.id !== post.id));
+      setCommentPost((current) => current?.id === post.id ? { ...current, savedByMe } : current);
+      setPostActionsPost((current) => current?.id === post.id ? { ...current, savedByMe } : current);
+    };
+    setSaved(!wasSaved);
+    try {
+      const result = await toggleCommunitySave(post.id);
+      setSaved(result.saved);
+    } catch (error) {
+      setSaved(wasSaved);
+      Alert.alert('Could not update saved posts', apiErrorMessage(error));
+    } finally {
+      pendingSaveIds.current.delete(post.id);
+      setSaveBusyIds((current) => {
+        const updated = new Set(current);
+        updated.delete(post.id);
+        return updated;
+      });
+    }
+  };
+
+  const handlePollVote = async (post: CommunityMessage, optionId: string) => {
+    if (pendingPollIds.current.has(post.id)) return;
+    pendingPollIds.current.add(post.id);
+    setPollBusyIds((current) => new Set(current).add(post.id));
+    try {
+      const result = await voteCommunityPoll(post.id, optionId);
+      const updatePoll = (message: CommunityMessage) => ({
+        ...message,
+        payload: { ...message.payload, poll: result.poll },
+      });
+      setPosts((previous) => previous.map((item) => item.id === post.id ? updatePoll(item) : item));
+      setCommentPost((current) => current?.id === post.id ? updatePoll(current) : current);
+    } catch (error) {
+      Alert.alert('Could not submit poll vote', apiErrorMessage(error));
+    } finally {
+      pendingPollIds.current.delete(post.id);
+      setPollBusyIds((current) => {
         const updated = new Set(current);
         updated.delete(post.id);
         return updated;
@@ -1048,11 +1458,18 @@ export default function CommunityScreen() {
     <View style={styles.feedPostCell}>
       <CommunityPostCard
         post={item}
+        palette={colors}
         feedStyle
         reactionBusy={reactionBusyIds.has(item.id)}
         ownAccount={item.authorUsername === profile?.username}
         onReact={(reaction) => void handleReaction(item, reaction)}
         onComment={() => void openComments(item)}
+        onRepost={item.authorAccountId === profile?.accountId ? undefined : () => void handleRepost(item)}
+        repostBusy={repostBusyIds.has(item.id)}
+        onSave={() => void handleSave(item)}
+        saveBusy={saveBusyIds.has(item.id)}
+        onPollVote={(optionId) => void handlePollVote(item, optionId)}
+        pollBusy={pollBusyIds.has(item.id)}
         onShare={(cardView) => void sharePost(item, cardView)}
         onMore={(cardView) => showPostActions(item, cardView)}
         onFollow={() => void handleFollow(item)}
@@ -1063,6 +1480,24 @@ export default function CommunityScreen() {
 
   const unreadCount = notifications.filter((notification) => !notification.read_at).length;
   const visibleCategories = COMMUNITY_CATEGORIES.filter((item) => profile?.isAdmin || item.id !== 'events');
+  const selectFeedTab = (tab: CommunityFeedTab) => {
+    setFeedTab(tab);
+    setFeed(({
+      'For You': 'global',
+      Following: 'following',
+      Trending: 'trending',
+      Latest: 'latest',
+      Saved: 'saved',
+    } as const)[tab]);
+  };
+  const chooseCreateAction = (intent: ComposerIntent) => {
+    setCreateMenu(false);
+    if (intent === 'trade') openComposer('signal', 'trading', intent);
+    else if (intent === 'poll') openComposer('poll', 'questions', intent);
+    else if (intent === 'image') openImagePost();
+    else if (intent === 'question') openComposer('text', 'questions', intent);
+    else openComposer('text', 'market_discussion', intent);
+  };
   const postActionItems = useMemo<CommunityPostAction[]>(() => {
     if (!postActionsPost) return [];
     const ownPost = postActionsPost.authorUsername === profile?.username;
@@ -1131,7 +1566,7 @@ export default function CommunityScreen() {
   }, [postActionsPost, profile?.isAdmin, profile?.username]);
 
   if (stage === 'loading') {
-    return <CenteredMessage colors={colors} insets={insets} title="Opening FXSnap Community" body="Connecting to the global trading floor." loading />;
+    return <CenteredMessage colors={colors} insets={insets} title="Opening FXSnap Community" body="Connecting to the trading floor." />;
   }
 
   if (stage === 'signed_out') {
@@ -1237,23 +1672,44 @@ export default function CommunityScreen() {
     <View style={[styles.screen, { backgroundColor: colors.background }]}>
       <Animated.View
         entering={reduceMotion ? undefined : FadeIn.duration(260)}
-        style={[styles.header, { paddingTop: insets.top + 4, borderBottomColor: colors.cardBorder }]}
+        style={[styles.header, { paddingTop: insets.top + 5, backgroundColor: colors.background, borderBottomColor: colors.cardBorder }]}
       >
-        <TouchableOpacity onPress={() => router.back()} style={styles.headerIcon} accessibilityLabel="Go back">
-          <Feather name="arrow-left" size={20} color={colors.text} />
-        </TouchableOpacity>
+        <View style={styles.brandLockup}>
+          <View style={[styles.brandMark, { backgroundColor: colors.buy }]}>
+            <Feather name="aperture" size={19} color={colors.primaryForeground} />
+          </View>
+        </View>
         <View style={styles.headerTitleWrap}>
           <Text style={[styles.headerTitle, { color: colors.text }]}>Community</Text>
+          <Text style={[styles.communitySubtitle, { color: colors.textMuted }]} numberOfLines={1}>
+            {onlineMemberCount === null ? 'Ideas · Charts · Conversations' : `${onlineMemberCount} online · Ideas · Charts`}
+          </Text>
         </View>
         <TouchableOpacity onPress={() => router.push('/community-search')} style={styles.headerIcon} accessibilityLabel="Search Community">
           <Feather name="search" size={19} color={colors.text} />
         </TouchableOpacity>
         <TouchableOpacity onPress={() => void openNotifications()} style={styles.headerIcon} accessibilityLabel="Community notifications">
           <Feather name="bell" size={19} color={colors.text} />
-          {unreadCount > 0 ? <View style={[styles.notificationDot, { backgroundColor: colors.sell }]} /> : null}
+          {unreadCount > 0 ? (
+            <View style={[styles.notificationBadge, { backgroundColor: colors.sell }]}>
+              <Text style={styles.notificationBadgeText}>{unreadCount > 9 ? '9+' : unreadCount}</Text>
+            </View>
+          ) : null}
         </TouchableOpacity>
-        <TouchableOpacity onPress={openHeaderMenu} style={styles.headerIcon} accessibilityLabel="More Community options">
-          <Feather name="more-horizontal" size={20} color={colors.text} />
+        <TouchableOpacity
+          onPress={() => router.push('/profile')}
+          onLongPress={openHeaderMenu}
+          style={styles.headerProfile}
+          accessibilityLabel="Open profile"
+          accessibilityHint="Long press for Community options"
+        >
+          {profile?.pictureUrl ? (
+            <CachedImage source={{ uri: profile.pictureUrl }} style={styles.headerAvatar} contentFit="cover" cachePolicy="memory-disk" accessibilityLabel="Your profile picture" />
+          ) : (
+            <View style={[styles.headerAvatar, styles.headerAvatarFallback, { backgroundColor: colors.surface }]}>
+              <Text style={[styles.headerAvatarText, { color: colors.text }]}>{(profile?.username || 'T').slice(0, 1).toUpperCase()}</Text>
+            </View>
+          )}
         </TouchableOpacity>
       </Animated.View>
       <FlashList
@@ -1282,46 +1738,50 @@ export default function CommunityScreen() {
         ListHeaderComponent={
           <>
             <CommunityPreviewNotice />
+            <MarketTicker market={marketTicker} colors={colors} />
             <Animated.View
               entering={reduceMotion ? undefined : FadeInDown.delay(50).duration(300)}
               style={styles.feedTabRow}
             >
-              <View style={styles.feedTabs}>
-                {(['global', 'following'] as const).map((item) => (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.feedTabs}>
+                {(['For You', 'Following', 'Trending', 'Latest', 'Saved'] as const).map((item) => {
+                  const active = feedTab === item;
+                  return (
                   <TouchableOpacity
                     key={item}
-                    onPress={() => setFeed(item)}
-                    style={[styles.feedTab, {
-                      borderColor: feed === item ? colors.buy : colors.cardBorder,
-                      backgroundColor: feed === item ? colors.buy : colors.card,
-                    }]}
+                    onPress={() => selectFeedTab(item)}
+                    style={styles.feedTab}
+                    accessibilityRole="tab"
+                    accessibilityState={{ selected: active }}
+                    accessibilityLabel={`${item} feed`}
                   >
-                    <Text style={[styles.feedTabText, { color: feed === item ? colors.primaryForeground : colors.textSecondary }]}>{item === 'global' ? 'For you' : 'Following'}</Text>
+                    <Text style={[styles.feedTabText, { color: active ? colors.buy : colors.textSecondary }]}>{item}</Text>
+                    <View style={[styles.feedTabUnderline, { backgroundColor: active ? colors.buy : 'transparent' }]} />
                   </TouchableOpacity>
-                ))}
-              </View>
-              <View style={styles.onlineBanner} accessibilityRole="summary">
-                <View style={[styles.onlineDot, { backgroundColor: onlineMemberCount == null ? colors.textMuted : colors.buy }]} />
-                <Text style={[styles.onlineLabel, { color: colors.textSecondary }]}>
-                  {onlineMemberCount == null ? 'Live' : `${onlineMemberCount} online`}
-                </Text>
-              </View>
+                );})}
+              </ScrollView>
             </Animated.View>
             <Animated.View entering={reduceMotion ? undefined : FadeInDown.delay(100).duration(300)}>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categories}>
                 <TouchableOpacity
                   onPress={() => setCategory(null)}
                   style={[styles.categoryChip, { backgroundColor: category === null ? colors.buy : colors.card, borderColor: category === null ? colors.buy : colors.cardBorder }]}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: category === null }}
                 >
-                  <Text style={[styles.categoryText, { color: category === null ? colors.primaryForeground : colors.textSecondary }]}>All topics</Text>
+                  <Feather name="repeat" size={13} color={category === null ? colors.primaryForeground : colors.textSecondary} />
+                  <Text style={[styles.categoryText, { color: category === null ? colors.primaryForeground : colors.textSecondary }]}>All Topics</Text>
                 </TouchableOpacity>
                 {visibleCategories.map((item) => (
                   <TouchableOpacity
                     key={item.id}
                     onPress={() => setCategory(item.id)}
                     style={[styles.categoryChip, { backgroundColor: category === item.id ? colors.buy : colors.card, borderColor: category === item.id ? colors.buy : colors.cardBorder }]}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: category === item.id }}
                   >
-                    <Text style={[styles.categoryText, { color: category === item.id ? colors.primaryForeground : colors.textSecondary }]}>{item.label}</Text>
+                    <Feather name={COMMUNITY_CATEGORY_ICONS[item.id] || 'tag'} size={13} color={category === item.id ? colors.primaryForeground : colors.textSecondary} />
+                    <Text style={[styles.categoryText, { color: category === item.id ? colors.primaryForeground : colors.textSecondary }]}>{item.id === 'learning' ? 'Education' : item.label}</Text>
                   </TouchableOpacity>
                 ))}
               </ScrollView>
@@ -1340,9 +1800,6 @@ export default function CommunityScreen() {
                 {followedNames.length ? <Text style={[styles.metaText, { color: colors.textMuted }]}>Following {followedNames.map((name) => `@${name}`).join(', ')}</Text> : null}
               </View>
             ) : null}
-            {loadingFeed && posts.length === 0 ? (
-              <View style={styles.feedLoading}><ActivityIndicator color={colors.buy} /><Text style={[styles.metaText, { color: colors.textSecondary }]}>Loading trading discussions…</Text></View>
-            ) : null}
           </>
         }
         ListEmptyComponent={
@@ -1358,20 +1815,75 @@ export default function CommunityScreen() {
           ) : null
         }
         ListFooterComponent={
-          loadingMore ? <ActivityIndicator style={{ paddingVertical: 18 }} color={colors.buy} /> : hasMore ? (
+          hasMore && !loadingMore ? (
             <TouchableOpacity onPress={() => void loadFeed(false)} style={styles.loadMoreButton}>
               <Text style={[styles.loadMoreText, { color: colors.buy }]}>Load older discussions</Text>
             </TouchableOpacity>
           ) : null
         }
       />
-      <TouchableOpacity
-        onPress={() => openComposer('text')}
-        style={[styles.fab, { backgroundColor: colors.buy, bottom: Math.max(insets.bottom, 9) + 85 }]}
-        accessibilityLabel="Create a community post"
-      >
-        <Feather name="plus" size={24} color={colors.primaryForeground} />
-      </TouchableOpacity>
+      {createMenuMounted ? (
+        <>
+          <Animated.View
+            pointerEvents={createMenuOpen ? 'auto' : 'none'}
+            style={[
+              styles.createMenuScrim,
+              createMenuScrimAnimatedStyle,
+              { bottom: Math.max(insets.bottom, 6) + 70 },
+            ]}
+          >
+            <Pressable
+              style={StyleSheet.absoluteFill}
+              onPress={() => setCreateMenu(false)}
+              accessibilityLabel="Close create menu"
+            />
+          </Animated.View>
+          <Animated.View
+            pointerEvents={createMenuOpen ? 'auto' : 'none'}
+            style={[
+              styles.createMenu,
+              createMenuAnimatedStyle,
+              { bottom: Math.max(insets.bottom, 9) + 155 },
+            ]}
+          >
+            {COMMUNITY_CREATE_ACTIONS.map((action, index) => (
+              <Animated.View
+                key={action.intent}
+                entering={reduceMotion ? undefined : FadeInDown.delay(index * 28).duration(150)}
+                exiting={reduceMotion ? undefined : FadeOutUp.duration(100)}
+              >
+                <TouchableOpacity
+                  onPress={() => chooseCreateAction(action.intent)}
+                  style={[
+                    styles.createMenuItem,
+                    index === 0 && styles.createMenuPrimaryItem,
+                    { backgroundColor: index === 0 ? `${colors.buy}0D` : colors.card, borderColor: index === 0 ? `${colors.buy}55` : colors.cardBorder },
+                  ]}
+                  accessibilityRole="button"
+                  accessibilityLabel={action.label}
+                >
+                  <View style={[styles.createMenuIcon, index === 0 && styles.createMenuPrimaryIcon, { backgroundColor: index === 0 ? colors.buy : `${colors.buy}18` }]}>
+                    <Feather name={action.icon} size={16} color={index === 0 ? colors.primaryForeground : colors.buy} />
+                  </View>
+                  <Text style={[styles.createMenuLabel, index === 0 && styles.createMenuPrimaryLabel, { color: colors.text }]}>{action.label}</Text>
+                  {index === 0 ? <Feather name="arrow-up-right" size={15} color={colors.buy} /> : null}
+                </TouchableOpacity>
+              </Animated.View>
+            ))}
+          </Animated.View>
+        </>
+      ) : null}
+      <Animated.View style={[styles.fabContainer, { bottom: Math.max(insets.bottom, 9) + 85 }, fabAnimatedStyle]}>
+        <TouchableOpacity
+          onPress={() => setCreateMenu(!createMenuOpenRef.current)}
+          style={[styles.fab, { backgroundColor: colors.buy }]}
+          accessibilityRole="button"
+          accessibilityLabel={createMenuOpen ? 'Close Community creation menu' : 'Create Community content'}
+          accessibilityState={{ expanded: createMenuOpen }}
+        >
+          <Feather name="plus" size={24} color={colors.primaryForeground} />
+        </TouchableOpacity>
+      </Animated.View>
       <View style={[styles.bottomNav, { backgroundColor: colors.background, borderTopColor: colors.cardBorder, paddingBottom: Math.max(insets.bottom, Platform.OS === 'web' ? 10 : 6) }]}>
         <BottomItem icon="home" label="Home" colors={colors} onPress={() => router.replace('/(tabs)/home')} />
         <BottomItem icon="users" label="Community" active colors={colors} onPress={() => {}} />
@@ -1386,11 +1898,25 @@ export default function CommunityScreen() {
 
       <Modal visible={composerVisible} animationType="slide" onRequestClose={() => setComposerVisible(false)}>
         <NativeKeyboardAvoidingView style={[styles.modalScreen, { backgroundColor: colors.background, paddingTop: insets.top }]} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <View style={[styles.modalHeader, { borderBottomColor: colors.cardBorder }]}>
-            <TouchableOpacity onPress={() => setComposerVisible(false)} style={styles.headerIcon} accessibilityLabel="Close composer"><Feather name="x" size={21} color={colors.text} /></TouchableOpacity>
-            <Text style={[styles.modalTitle, { color: colors.text }]}>{editingPost ? 'Edit post' : composerKind === 'signal' ? 'Share a trading signal' : composerKind === 'analysis' ? 'Share FXSnap analysis' : 'Create a post'}</Text>
-            <TouchableOpacity onPress={() => void submitPost()} disabled={publishing} style={[styles.publishButton, { backgroundColor: colors.buy }]}>
-              {publishing ? <ActivityIndicator size="small" color={colors.primaryForeground} /> : <Text style={[styles.publishText, { color: colors.primaryForeground }]}>{editingPost ? 'Save' : 'Post'}</Text>}
+          <View style={[styles.composerHeader, { borderBottomColor: colors.cardBorder }]}>
+            <TouchableOpacity onPress={() => setComposerVisible(false)} style={[styles.composerCloseButton, { backgroundColor: colors.card, borderColor: colors.cardBorder }]} accessibilityLabel="Close composer">
+              <Feather name="x" size={19} color={colors.text} />
+            </TouchableOpacity>
+            <View style={styles.composerHeaderCopy}>
+              <Text style={[styles.composerHeaderTitle, { color: colors.text }]}>{editingPost
+                ? 'Edit post'
+                : composerKind === 'signal' ? 'Share a trade idea'
+                  : composerKind === 'analysis' ? 'Share FXSnap analysis'
+                    : composerKind === 'poll' ? 'Create a poll'
+                      : composerIntent === 'question' ? 'Ask the community'
+                        : composerIntent === 'image' ? 'Share a chart or image'
+                          : 'Create a post'}</Text>
+              <Text style={[styles.composerHeaderSubtitle, { color: colors.textMuted }]} numberOfLines={1}>
+                {editingPost ? 'Update your community post' : 'Share something useful with the community'}
+              </Text>
+            </View>
+            <TouchableOpacity onPress={() => void submitPost()} disabled={publishing} style={[styles.publishButton, { backgroundColor: colors.buy, opacity: publishing ? 0.75 : 1 }]}>
+              {publishing ? <ActivityIndicator size="small" color={colors.primaryForeground} /> : <><Text style={[styles.publishText, { color: colors.primaryForeground }]}>{editingPost ? 'Save' : 'Post'}</Text><Feather name="arrow-up" size={14} color={colors.primaryForeground} /></>}
             </TouchableOpacity>
           </View>
           <ScrollView contentContainerStyle={styles.composerContent} keyboardShouldPersistTaps="handled">
@@ -1406,10 +1932,16 @@ export default function CommunityScreen() {
                 </View>
               </View>
             ) : null}
-            <Text style={[styles.fieldLabel, { color: colors.text }]}>Topic</Text>
+            <View style={styles.composerSectionHeading}>
+              <View>
+                <Text style={[styles.composerSectionTitle, { color: colors.text }]}>Choose a topic</Text>
+                <Text style={[styles.composerSectionHint, { color: colors.textMuted }]}>Help the right traders find your post</Text>
+              </View>
+              <Feather name="hash" size={16} color={colors.buy} />
+            </View>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categories}>
               {visibleCategories.map((item) => (
-                <TouchableOpacity key={item.id} onPress={() => setComposerCategory(item.id)} style={[styles.categoryChip, { backgroundColor: composerCategory === item.id ? colors.buy : colors.card, borderColor: colors.cardBorder }]}>
+                <TouchableOpacity key={item.id} onPress={() => setComposerCategory(item.id)} style={[styles.categoryChip, { backgroundColor: composerCategory === item.id ? colors.buy : colors.card, borderColor: composerCategory === item.id ? colors.buy : colors.cardBorder }]}>
                   <Text style={[styles.categoryText, { color: composerCategory === item.id ? colors.primaryForeground : colors.textSecondary }]}>{item.label}</Text>
                 </TouchableOpacity>
               ))}
@@ -1417,6 +1949,13 @@ export default function CommunityScreen() {
             {composerKind === 'signal' ? (
               <View style={styles.signalForm}>
                 <TextInput value={signalInstrument} onChangeText={setSignalInstrument} placeholder="Instrument (e.g. EURUSD)" placeholderTextColor={colors.textMuted} autoCapitalize="characters" style={[styles.formInput, { color: colors.text, backgroundColor: colors.card, borderColor: colors.cardBorder }]} />
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.quickChoiceRow}>
+                  {['EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD', 'BTCUSD'].map((instrument) => (
+                    <TouchableOpacity key={instrument} onPress={() => setSignalInstrument(instrument)} style={[styles.quickChoice, { backgroundColor: signalInstrument === instrument ? `${colors.buy}20` : colors.card, borderColor: signalInstrument === instrument ? colors.buy : colors.cardBorder }]}>
+                      <Text style={[styles.quickChoiceText, { color: signalInstrument === instrument ? colors.buy : colors.textSecondary }]}>{instrument}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
                 <View style={styles.directionRow}>
                   {(['BUY', 'SELL'] as const).map((direction) => (
                     <TouchableOpacity key={direction} onPress={() => setSignalDirection(direction)} style={[styles.directionButton, { backgroundColor: signalDirection === direction ? (direction === 'BUY' ? colors.buy : colors.sell) : colors.card, borderColor: colors.cardBorder }]}>
@@ -1424,22 +1963,111 @@ export default function CommunityScreen() {
                     </TouchableOpacity>
                   ))}
                 </View>
-                <TextInput value={signalEntry} onChangeText={setSignalEntry} placeholder="Entry price or range" placeholderTextColor={colors.textMuted} keyboardType="decimal-pad" style={[styles.formInput, { color: colors.text, backgroundColor: colors.card, borderColor: colors.cardBorder }]} />
-                <TextInput value={signalStop} onChangeText={setSignalStop} placeholder="Stop loss" placeholderTextColor={colors.textMuted} keyboardType="decimal-pad" style={[styles.formInput, { color: colors.text, backgroundColor: colors.card, borderColor: colors.cardBorder }]} />
-                <TextInput value={signalTargets} onChangeText={setSignalTargets} placeholder="Take-profit levels (comma separated)" placeholderTextColor={colors.textMuted} style={[styles.formInput, { color: colors.text, backgroundColor: colors.card, borderColor: colors.cardBorder }]} />
                 <TextInput value={signalTimeframe} onChangeText={setSignalTimeframe} placeholder="Timeframe (e.g. H1)" placeholderTextColor={colors.textMuted} style={[styles.formInput, { color: colors.text, backgroundColor: colors.card, borderColor: colors.cardBorder }]} />
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.quickChoiceRow}>
+                  {['M15', 'H1', 'H4', 'D1'].map((timeframe) => (
+                    <TouchableOpacity key={timeframe} onPress={() => setSignalTimeframe(timeframe)} style={[styles.quickChoice, { backgroundColor: signalTimeframe === timeframe ? `${colors.buy}20` : colors.card, borderColor: signalTimeframe === timeframe ? colors.buy : colors.cardBorder }]}>
+                      <Text style={[styles.quickChoiceText, { color: signalTimeframe === timeframe ? colors.buy : colors.textSecondary }]}>{timeframe}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+                <Text style={[styles.metaText, { color: colors.textMuted }]}>Trade levels are optional. Add only the prices you want to discuss.</Text>
+                <TextInput value={signalEntry} onChangeText={setSignalEntry} placeholder="Optional entry price" placeholderTextColor={colors.textMuted} keyboardType="decimal-pad" style={[styles.formInput, { color: colors.text, backgroundColor: colors.card, borderColor: colors.cardBorder }]} />
+                <TextInput value={signalStop} onChangeText={setSignalStop} placeholder="Optional stop loss" placeholderTextColor={colors.textMuted} keyboardType="decimal-pad" style={[styles.formInput, { color: colors.text, backgroundColor: colors.card, borderColor: colors.cardBorder }]} />
+                <TextInput value={signalTargets} onChangeText={setSignalTargets} placeholder="Optional take-profit levels (comma separated)" placeholderTextColor={colors.textMuted} style={[styles.formInput, { color: colors.text, backgroundColor: colors.card, borderColor: colors.cardBorder }]} />
               </View>
             ) : null}
-            <TextInput
-              value={composerBody}
-              onChangeText={setComposerBody}
-              placeholder={composerKind === 'analysis' ? 'Add an optional comment about this analysis…' : composerKind === 'signal' ? 'Reasoning and context (optional)…' : 'Share your market view, question, or learning…'}
-              placeholderTextColor={colors.textMuted}
-              multiline
-              maxLength={composerKind === 'text' ? 2000 : 1200}
-              textAlignVertical="top"
-              style={[styles.composerInput, { color: colors.text, backgroundColor: colors.card, borderColor: colors.cardBorder }]}
-            />
+            {composerKind === 'poll' ? (
+              <View style={styles.pollForm}>
+                <Text style={[styles.fieldLabel, { color: colors.text }]}>Poll question</Text>
+                <TextInput
+                  value={pollQuestion}
+                  onChangeText={setPollQuestion}
+                  placeholder="What would you like the community to vote on?"
+                  placeholderTextColor={colors.textMuted}
+                  maxLength={200}
+                  style={[styles.formInput, { color: colors.text, backgroundColor: colors.card, borderColor: colors.cardBorder }]}
+                />
+                <Text style={[styles.fieldLabel, { color: colors.text }]}>Answer options</Text>
+                {pollOptions.map((option, index) => (
+                  <View key={`poll-option-${index}`} style={styles.pollOptionInputRow}>
+                    <TextInput
+                      value={option}
+                      onChangeText={(value) => setPollOptions((current) => current.map((item, itemIndex) => itemIndex === index ? value : item))}
+                      placeholder={`Option ${index + 1}`}
+                      placeholderTextColor={colors.textMuted}
+                      maxLength={60}
+                      style={[styles.formInput, styles.pollOptionInput, { color: colors.text, backgroundColor: colors.card, borderColor: colors.cardBorder }]}
+                    />
+                    {pollOptions.length > 2 ? (
+                      <TouchableOpacity onPress={() => setPollOptions((current) => current.filter((_, itemIndex) => itemIndex !== index))} accessibilityLabel={`Remove option ${index + 1}`} style={styles.removePollOption}>
+                        <Feather name="x" size={17} color={colors.textMuted} />
+                      </TouchableOpacity>
+                    ) : null}
+                  </View>
+                ))}
+                {pollOptions.length < 6 ? (
+                  <TouchableOpacity onPress={() => setPollOptions((current) => [...current, ''])} style={styles.addPollOption} accessibilityRole="button">
+                    <Feather name="plus" size={15} color={colors.buy} />
+                    <Text style={[styles.addPollOptionText, { color: colors.buy }]}>Add option</Text>
+                  </TouchableOpacity>
+                ) : null}
+                <Text style={[styles.fieldLabel, { color: colors.text }]}>Poll duration</Text>
+                <View style={styles.directionRow}>
+                  {([1, 3, 7] as const).map((days) => (
+                    <TouchableOpacity key={days} onPress={() => setPollDurationDays(days)} style={[styles.directionButton, { backgroundColor: pollDurationDays === days ? `${colors.buy}20` : colors.card, borderColor: pollDurationDays === days ? colors.buy : colors.cardBorder }]}>
+                      <Text style={[styles.directionText, { color: pollDurationDays === days ? colors.buy : colors.text }]}>{days} {days === 1 ? 'day' : 'days'}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+            ) : null}
+            {composerKind === 'text' ? (
+              <View style={[styles.postEditorCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+                <View style={styles.postEditorMeta}>
+                  {profile?.pictureUrl ? (
+                    <CachedImage source={{ uri: profile.pictureUrl }} style={styles.postEditorAvatar} contentFit="cover" cachePolicy="memory-disk" accessibilityLabel="Your profile picture" />
+                  ) : (
+                    <View style={[styles.postEditorAvatar, styles.postEditorAvatarFallback, { backgroundColor: `${colors.buy}18` }]}>
+                      <Text style={[styles.postEditorAvatarText, { color: colors.buy }]}>{(profile?.username || 'T').slice(0, 1).toUpperCase()}</Text>
+                    </View>
+                  )}
+                  <View style={styles.postEditorIdentity}>
+                    <Text style={[styles.postEditorName, { color: colors.text }]}>{profile ? `@${profile.username}` : 'Your post'}</Text>
+                    <Text style={[styles.postEditorAudience, { color: colors.textMuted }]}>Sharing with FXSnap Community</Text>
+                  </View>
+                  <Feather name="edit-3" size={15} color={colors.buy} />
+                </View>
+                <TextInput
+                  value={composerBody}
+                  onChangeText={setComposerBody}
+                  placeholder={composerIntent === 'question' ? 'Write your question for the community…' : composerIntent === 'image' ? 'Add a caption (optional)…' : 'Share your market view, question, or learning…'}
+                  placeholderTextColor={colors.textMuted}
+                  multiline
+                  maxLength={2000}
+                  textAlignVertical="top"
+                  style={[styles.composerInput, styles.postEditorInput, { color: colors.text }]}
+                />
+                <View style={[styles.postEditorFooter, { borderTopColor: colors.cardBorder }]}>
+                  <View style={styles.postEditorTip}>
+                    <Feather name="heart" size={12} color={colors.buy} />
+                    <Text style={[styles.postEditorTipText, { color: colors.textMuted }]}>Keep it helpful and respectful</Text>
+                  </View>
+                  <Text style={[styles.composerCharacterCount, { color: colors.textMuted }]}>{composerBody.length}/2000</Text>
+                </View>
+              </View>
+            ) : (
+              <TextInput
+                value={composerBody}
+                onChangeText={setComposerBody}
+                placeholder={composerKind === 'analysis' ? 'Add an optional comment about this analysis…' : composerKind === 'signal' ? 'Reasoning and context (optional)…' : 'Add context for your poll (optional)…'}
+                placeholderTextColor={colors.textMuted}
+                multiline
+                maxLength={composerKind === 'poll' ? 2000 : 1200}
+                textAlignVertical="top"
+                style={[styles.composerInput, { color: colors.text, backgroundColor: colors.card, borderColor: colors.cardBorder }]}
+              />
+            )}
             {composerImage || composerImageUrl ? (
               <View style={styles.attachmentPreview}>
                 <Image source={{ uri: composerImage?.uri || composerImageUrl || undefined }} style={styles.previewImage} />
@@ -1479,11 +2107,27 @@ export default function CommunityScreen() {
             <View style={styles.headerIcon} />
           </View>
           <ScrollView contentContainerStyle={styles.commentsContent} keyboardShouldPersistTaps="handled" keyboardDismissMode="interactive">
-            {commentPost ? <CommunityPostCard post={commentPost} ownAccount={commentPost.authorUsername === profile?.username} reactionBusy={reactionBusyIds.has(commentPost.id)} onReact={(reaction) => void handleReaction(commentPost, reaction)} onComment={() => {}} onShare={(cardView) => void sharePost(commentPost, cardView)} onMore={(cardView) => showPostActions(commentPost, cardView)} onFollow={() => void handleFollow(commentPost)} /> : null}
+            {commentPost ? <CommunityPostCard
+              post={commentPost}
+              palette={colors}
+              ownAccount={commentPost.authorAccountId === profile?.accountId}
+              reactionBusy={reactionBusyIds.has(commentPost.id)}
+              onReact={(reaction) => void handleReaction(commentPost, reaction)}
+              onComment={() => {}}
+              onRepost={commentPost.authorAccountId === profile?.accountId ? undefined : () => void handleRepost(commentPost)}
+              repostBusy={repostBusyIds.has(commentPost.id)}
+              onSave={() => void handleSave(commentPost)}
+              saveBusy={saveBusyIds.has(commentPost.id)}
+              onPollVote={(optionId) => void handlePollVote(commentPost, optionId)}
+              pollBusy={pollBusyIds.has(commentPost.id)}
+              onShare={(cardView) => void sharePost(commentPost, cardView)}
+              onMore={(cardView) => showPostActions(commentPost, cardView)}
+              onFollow={() => void handleFollow(commentPost)}
+            /> : null}
             <Text style={[styles.commentsHeading, { color: colors.text }]}>Trader discussion</Text>
             {commentsLoading ? <ActivityIndicator color={colors.buy} /> : comments.length ? comments.map((comment, index) => (
               <Animated.View key={comment.id} entering={reduceMotion ? undefined : FadeInDown.delay(Math.min(index * 35, 140)).duration(240)}>
-                <CommentCard comment={comment} colors={colors} onReply={() => void startReply(comment)} onMore={() => showPostActions(comment)} onAuthorPress={() => router.push({ pathname: '/community-member', params: { username: comment.authorUsername } })} />
+                <CommentCard comment={comment} colors={colors} reactionBusy={reactionBusyIds.has(comment.id)} onReact={(reaction) => void handleReaction(comment, reaction)} onReply={() => void startReply(comment)} onMore={() => showPostActions(comment)} onAuthorPress={() => router.push({ pathname: '/community-member', params: { username: comment.authorUsername } })} />
               </Animated.View>
             )) : (
               <View style={styles.noComments}>
@@ -1492,7 +2136,7 @@ export default function CommunityScreen() {
             )}
             {threadLoading ? <ActivityIndicator color={colors.buy} /> : threadReplies.map((reply, index) => (
               <Animated.View key={reply.id} entering={reduceMotion ? undefined : FadeInDown.delay(Math.min(index * 35, 140)).duration(240)}>
-                <CommentCard comment={reply} colors={colors} nested onReply={() => void startReply(reply)} onMore={() => showPostActions(reply)} onAuthorPress={() => router.push({ pathname: '/community-member', params: { username: reply.authorUsername } })} />
+                <CommentCard comment={reply} colors={colors} nested reactionBusy={reactionBusyIds.has(reply.id)} onReact={(reaction) => void handleReaction(reply, reaction)} onReply={() => void startReply(reply)} onMore={() => showPostActions(reply)} onAuthorPress={() => router.push({ pathname: '/community-member', params: { username: reply.authorUsername } })} />
               </Animated.View>
             ))}
           </ScrollView>
@@ -1640,6 +2284,8 @@ function CommentCard({
   comment,
   colors,
   nested = false,
+  reactionBusy = false,
+  onReact,
   onReply,
   onMore,
   onAuthorPress,
@@ -1647,12 +2293,29 @@ function CommentCard({
   comment: CommunityMessage;
   colors: ReturnType<typeof useColors>;
   nested?: boolean;
+  reactionBusy?: boolean;
+  onReact: (reaction: CommunityReaction) => void;
   onReply: () => void;
   onMore: () => void;
   onAuthorPress: () => void;
 }) {
+  const [reactionPickerVisible, setReactionPickerVisible] = useState(false);
+  const reduceMotion = useReducedMotion();
+  const selectedReaction = comment.reactions.find((item) => item.reacted && item.reaction !== 'like')?.reaction;
+  const reactionCount = comment.reactions
+    .filter((item) => item.reaction !== 'like')
+    .reduce((total, item) => total + item.count, 0);
+
   return (
-    <View style={[styles.commentCard, { marginLeft: nested ? 25 : 0, backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+    <Pressable
+      onLongPress={() => {
+        if (!reactionBusy) setReactionPickerVisible(true);
+      }}
+      delayLongPress={450}
+      accessibilityRole="button"
+      accessibilityLabel="Comment. Long press to react."
+      style={[styles.commentCard, { marginLeft: nested ? 25 : 0, backgroundColor: colors.card, borderColor: colors.cardBorder }]}
+    >
       <View style={styles.commentHeader}>
         {comment.authorPictureUrl ? (
           <CachedImage source={{ uri: comment.authorPictureUrl }} style={styles.commentAvatar} contentFit="cover" cachePolicy="memory-disk" transition={120} accessibilityLabel={`${comment.authorUsername}'s profile picture`} />
@@ -1669,8 +2332,52 @@ function CommentCard({
       </View>
       {comment.replyTo ? <Text style={[styles.metaText, { color: colors.buy }]}>Replying to @{comment.replyTo.author_username}</Text> : null}
       <Text style={[styles.commentBody, { color: colors.text }]}>{comment.body}</Text>
-      <TouchableOpacity onPress={onReply} style={styles.replyAction}><Feather name="corner-up-left" size={13} color={colors.textSecondary} /><Text style={[styles.replyActionText, { color: colors.textSecondary }]}>Reply</Text></TouchableOpacity>
-    </View>
+      <View style={styles.commentFooter}>
+        <TouchableOpacity onPress={onReply} style={styles.replyAction}><Feather name="corner-up-left" size={13} color={colors.textSecondary} /><Text style={[styles.replyActionText, { color: colors.textSecondary }]}>Reply</Text></TouchableOpacity>
+        {reactionCount > 0 ? (
+          <View style={styles.commentReactionSummary} accessibilityLabel={`${reactionCount} reactions`}>
+            {comment.reactions
+              .filter((item) => item.reaction !== 'like' && item.count > 0)
+              .slice(0, 3)
+              .map((item) => {
+                const reaction = COMMUNITY_REACTIONS.find((option) => option.id === item.reaction);
+                return reaction
+                  ? <Text key={item.reaction} style={styles.commentReactionEmoji}>{reaction.emoji}</Text>
+                  : null;
+              })}
+            <Text style={[styles.commentReactionCount, { color: colors.textSecondary }]}>{reactionCount}</Text>
+          </View>
+        ) : null}
+      </View>
+      <Modal transparent visible={reactionPickerVisible} animationType={reduceMotion ? 'none' : 'fade'} onRequestClose={() => setReactionPickerVisible(false)}>
+        <Pressable style={styles.commentReactionScrim} onPress={() => setReactionPickerVisible(false)}>
+          <Animated.View
+            entering={reduceMotion ? undefined : ZoomIn.springify().damping(14).stiffness(230)}
+            style={[styles.commentReactionPicker, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}
+          >
+            {COMMUNITY_REACTIONS.map((reaction, index) => (
+              <Animated.View
+                key={reaction.id}
+                entering={reduceMotion ? undefined : ZoomIn.delay(index * 38).duration(240)}
+              >
+                <TouchableOpacity
+                  onPress={() => {
+                    setReactionPickerVisible(false);
+                    onReact(reaction.id);
+                  }}
+                  disabled={reactionBusy}
+                  style={[styles.commentReactionOption, selectedReaction === reaction.id && { backgroundColor: `${colors.buy}18` }]}
+                  accessibilityRole="button"
+                  accessibilityLabel={`React ${reaction.label}`}
+                >
+                  <Text style={styles.commentReactionEmoji}>{reaction.emoji}</Text>
+                </TouchableOpacity>
+              </Animated.View>
+            ))}
+          </Animated.View>
+        </Pressable>
+      </Modal>
+    </Pressable>
   );
 }
 
@@ -1692,29 +2399,131 @@ function BottomItem({ icon, label, active, colors, onPress }: { icon: React.Comp
   );
 }
 
+function MarketTicker({ market, colors }: { market: CommunityMarketState; colors: ReturnType<typeof useColors> }) {
+  const timestamps = market.quotes.map((quote) => quote.timestamp).filter((timestamp): timestamp is number => timestamp !== null);
+  const oldestTimestamp = timestamps.length ? Math.min(...timestamps) : null;
+  const ageMinutes = oldestTimestamp === null ? null : Math.max(0, Math.floor((Date.now() - oldestTimestamp) / 60_000));
+  const hasDelayedQuotes = market.quotes.some((quote) =>
+    quote.timestamp === null || Date.now() - quote.timestamp > 5 * 60_000);
+  const updateLabel = market.status !== 'live'
+    ? market.status === 'loading' ? 'Checking markets' : 'Provider unavailable'
+    : `${hasDelayedQuotes ? 'Delayed' : 'Live'} · ${ageMinutes === null || ageMinutes < 1 ? 'just now' : `${ageMinutes}m ago`}`;
+
+  return (
+    <View style={[styles.marketTicker, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+      <View style={styles.marketTickerHeading}>
+        <View style={styles.marketTickerTitleRow}>
+          <Feather name="activity" size={13} color={colors.buy} />
+          <Text style={[styles.marketTickerTitle, { color: colors.text }]}>Market snapshot</Text>
+        </View>
+        <View style={styles.marketFreshness}>
+          <View style={[styles.marketFreshnessDot, { backgroundColor: market.status === 'live' && !hasDelayedQuotes ? colors.buy : colors.textMuted }]} />
+          <Text style={[styles.marketFreshnessText, { color: colors.textMuted }]}>{updateLabel}</Text>
+        </View>
+      </View>
+      {market.quotes.length ? (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.marketTickerItems}>
+          {market.quotes.map((quote, index) => {
+            const instrument = COMMUNITY_MARKETS.find((item) => item.symbol === quote.symbol);
+            const decimals = instrument?.decimals ?? 2;
+            const positive = quote.changePercent === null || quote.changePercent >= 0;
+            const movementColor = quote.changePercent === null ? colors.textMuted : positive ? colors.buy : colors.sell;
+            const points = quote.sparkline.length > 1
+              ? quote.sparkline.map((value, pointIndex) => {
+                const min = Math.min(...quote.sparkline);
+                const max = Math.max(...quote.sparkline);
+                const x = (pointIndex / (quote.sparkline.length - 1)) * 29;
+                const y = max === min ? 9 : 16 - ((value - min) / (max - min)) * 14;
+                return `${x},${y}`;
+              }).join(' ')
+              : '';
+            return (
+              <View key={quote.symbol} style={[styles.marketTickerItem, index > 0 && { borderLeftColor: colors.cardBorder }]}>
+                <Text style={[styles.marketSymbol, { color: colors.text }]}>{quote.symbol}</Text>
+                <Text style={[styles.marketPrice, { color: colors.text }]}>
+                  {quote.price === null
+                    ? '—'
+                    : quote.price.toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}
+                </Text>
+                <View style={styles.marketMovementRow}>
+                  {quote.changePercent !== null ? (
+                    <Text style={[styles.marketMovement, { color: movementColor }]}>
+                      {positive ? '+' : ''}{quote.changePercent.toFixed(2)}%
+                    </Text>
+                  ) : (
+                    <Text style={[styles.marketMovement, { color: movementColor }]}>—</Text>
+                  )}
+                  {points ? (
+                    <Svg width={29} height={18} accessibilityLabel={`${quote.symbol} recent price movement`}>
+                      <Polyline points={points} fill="none" stroke={movementColor} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" />
+                    </Svg>
+                  ) : null}
+                </View>
+              </View>
+            );
+          })}
+        </ScrollView>
+      ) : (
+        <View style={styles.marketUnavailable}>
+          <Text style={[styles.marketUnavailableText, { color: colors.textSecondary }]}>
+            {market.status === 'loading' ? 'Loading provider quotes...' : 'No simulated prices are shown.'}
+          </Text>
+        </View>
+      )}
+      {market.status === 'unavailable' ? (
+        <Text style={[styles.marketProviderNote, { color: colors.textMuted }]}>Configure the server market provider to load live prices.</Text>
+      ) : null}
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   screen: { flex: 1 },
-  header: { minHeight: 56, flexDirection: 'row', alignItems: 'center', gap: 2, paddingHorizontal: 10, borderBottomWidth: StyleSheet.hairlineWidth },
+  header: { minHeight: 64, flexDirection: 'row', alignItems: 'center', gap: 9, paddingHorizontal: 14, borderBottomWidth: StyleSheet.hairlineWidth },
   onboardingHeader: { minHeight: 56, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14 },
-  headerIcon: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center', position: 'relative' },
-  headerTitleWrap: { flex: 1, paddingLeft: 5 },
-  headerTitle: { fontSize: 19, fontFamily: 'Inter_700Bold' },
+  headerIcon: { width: 36, height: 40, alignItems: 'center', justifyContent: 'center', position: 'relative' },
+  headerTitleWrap: { flex: 1, minWidth: 0, gap: 2 },
+  headerTitle: { fontSize: 18, lineHeight: 22, fontFamily: 'Inter_700Bold' },
+  communitySubtitle: { fontSize: 9, fontFamily: 'Inter_400Regular' },
+  brandLockup: { flexDirection: 'row', alignItems: 'center' },
+  brandMark: { width: 34, height: 34, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
+  headerProfile: { width: 34, height: 40, alignItems: 'center', justifyContent: 'center' },
+  headerAvatar: { width: 30, height: 30, borderRadius: 15 },
+  headerAvatarFallback: { alignItems: 'center', justifyContent: 'center' },
+  headerAvatarText: { fontSize: 12, fontFamily: 'Inter_700Bold' },
   username: { fontSize: 12, fontFamily: 'Inter_700Bold' },
-  notificationDot: { width: 8, height: 8, borderRadius: 4, position: 'absolute', right: 8, top: 7 },
-  feedContent: { paddingHorizontal: 12, paddingTop: 7 },
-  feedTabRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 9, marginBottom: 2 },
+  notificationBadge: { minWidth: 15, height: 15, borderRadius: 8, alignItems: 'center', justifyContent: 'center', position: 'absolute', right: 0, top: 3, paddingHorizontal: 3 },
+  notificationBadgeText: { color: '#FFFFFF', fontSize: 8, fontFamily: 'Inter_700Bold' },
+  feedContent: { paddingHorizontal: 12, paddingTop: 10 },
+  feedTabRow: { marginTop: 5, marginBottom: 2, borderBottomWidth: StyleSheet.hairlineWidth },
   onlineBanner: { minHeight: 30, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 5 },
   onlineDot: { width: 7, height: 7, borderRadius: 4 },
   onlineLabel: { fontSize: 10, fontFamily: 'Inter_600SemiBold' },
-  feedPostCell: { paddingVertical: 5 },
-  feedTabs: { flexDirection: 'row', gap: 8 },
-  feedTab: { minHeight: 36, justifyContent: 'center', borderWidth: 1, borderRadius: 18, paddingHorizontal: 18 },
-  feedTabText: { fontSize: 11, fontFamily: 'Inter_700Bold' },
-  categories: { alignItems: 'center', gap: 8, paddingVertical: 8, paddingRight: 8 },
-  categoryChip: { minHeight: 33, justifyContent: 'center', borderWidth: 1, borderRadius: 17, paddingHorizontal: 13 },
+  feedPostCell: { paddingVertical: 6 },
+  feedTabs: { flexDirection: 'row', alignItems: 'stretch', gap: 5, paddingHorizontal: 1 },
+  feedTab: { minHeight: 36, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 9 },
+  feedTabText: { fontSize: 11, fontFamily: 'Inter_600SemiBold' },
+  feedTabUnderline: { height: 2, position: 'absolute', bottom: 0, left: 3, right: 3, borderTopLeftRadius: 2, borderTopRightRadius: 2 },
+  categories: { alignItems: 'center', gap: 7, paddingVertical: 7, paddingRight: 8 },
+  categoryChip: { minHeight: 35, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderWidth: 1, borderRadius: 18, paddingHorizontal: 12 },
   categoryText: { fontSize: 10, fontFamily: 'Inter_600SemiBold' },
+  marketTicker: { borderWidth: 1, borderRadius: 17, paddingTop: 8, paddingBottom: 7, marginBottom: 9, overflow: 'hidden', elevation: 1, shadowColor: '#17352A', shadowOpacity: 0.045, shadowRadius: 8, shadowOffset: { width: 0, height: 3 } },
+  marketTickerHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 11, paddingBottom: 5 },
+  marketTickerTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  marketTickerTitle: { fontSize: 10, fontFamily: 'Inter_700Bold' },
+  marketFreshness: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  marketFreshnessDot: { width: 6, height: 6, borderRadius: 3 },
+  marketFreshnessText: { fontSize: 8, fontFamily: 'Inter_500Medium' },
+  marketTickerItems: { alignItems: 'center' },
+  marketTickerItem: { width: 88, minHeight: 52, justifyContent: 'center', gap: 2, paddingHorizontal: 9, borderLeftWidth: StyleSheet.hairlineWidth },
+  marketSymbol: { fontSize: 9, fontFamily: 'Inter_700Bold' },
+  marketPrice: { fontSize: 11, fontFamily: 'Inter_600SemiBold', fontVariant: ['tabular-nums'] },
+  marketMovementRow: { minHeight: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 3 },
+  marketMovement: { fontSize: 8, fontFamily: 'Inter_600SemiBold' },
+  marketUnavailable: { minHeight: 34, justifyContent: 'center', paddingHorizontal: 9 },
+  marketUnavailableText: { fontSize: 8, lineHeight: 11, fontFamily: 'Inter_400Regular' },
+  marketProviderNote: { fontSize: 7, paddingHorizontal: 9, paddingTop: 2, fontFamily: 'Inter_400Regular' },
   composeAvatarText: { fontSize: 12, fontFamily: 'Inter_700Bold' },
-  feedLoading: { minHeight: 100, alignItems: 'center', justifyContent: 'center', gap: 9 },
   emptyCard: { alignItems: 'center', gap: 9, borderWidth: 1, borderRadius: 18, padding: 22, marginTop: 8, marginBottom: 14 },
   emptyTitle: { fontSize: 14, textAlign: 'center', fontFamily: 'Inter_700Bold' },
   emptyBody: { fontSize: 11, lineHeight: 17, textAlign: 'center', fontFamily: 'Inter_400Regular' },
@@ -1738,22 +2547,61 @@ const styles = StyleSheet.create({
   retryText: { fontSize: 11, fontFamily: 'Inter_700Bold' },
   loadMoreButton: { alignSelf: 'center', paddingVertical: 13 },
   loadMoreText: { fontSize: 12, fontFamily: 'Inter_600SemiBold' },
-  fab: { position: 'absolute', right: 19, width: 52, height: 52, alignItems: 'center', justifyContent: 'center', borderRadius: 27, elevation: 7, shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 8, shadowOffset: { width: 0, height: 4 } },
-  bottomNav: { position: 'absolute', left: 0, right: 0, bottom: 0, minHeight: 70, borderTopWidth: StyleSheet.hairlineWidth, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around', paddingTop: 7 },
+  createMenuScrim: { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 4, backgroundColor: 'rgba(8,18,19,0.1)' },
+  createMenu: { position: 'absolute', right: 18, width: 224, gap: 7, zIndex: 7 },
+  createMenuItem: { minHeight: 46, flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 1, borderRadius: 24, paddingHorizontal: 10, elevation: 3, shadowColor: '#10251D', shadowOpacity: 0.1, shadowRadius: 7, shadowOffset: { width: 0, height: 3 } },
+  createMenuPrimaryItem: { minHeight: 50, borderRadius: 25, paddingHorizontal: 11, elevation: 5, shadowOpacity: 0.14, shadowRadius: 9 },
+  createMenuIcon: { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
+  createMenuPrimaryIcon: { width: 30, height: 30, borderRadius: 15 },
+  createMenuLabel: { flex: 1, fontSize: 11, fontFamily: 'Inter_600SemiBold' },
+  createMenuPrimaryLabel: { fontSize: 12, fontFamily: 'Inter_700Bold' },
+  fabContainer: { position: 'absolute', right: 18, zIndex: 10, elevation: 10 },
+  fab: { width: 60, height: 60, alignItems: 'center', justifyContent: 'center', borderRadius: 30, elevation: 7, shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 8, shadowOffset: { width: 0, height: 4 } },
+  bottomNav: { position: 'absolute', left: 0, right: 0, bottom: 0, minHeight: 70, zIndex: 8, elevation: 8, borderTopWidth: StyleSheet.hairlineWidth, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around', paddingTop: 7 },
   bottomItem: { flex: 1, minHeight: 48, alignItems: 'center', justifyContent: 'center', gap: 4 },
   bottomLabel: { fontSize: 9, fontFamily: 'Inter_500Medium' },
   centerTab: { width: 58, alignItems: 'center', justifyContent: 'center', marginTop: -17 },
   centerTabCircle: { width: 52, height: 52, borderRadius: 26, alignItems: 'center', justifyContent: 'center', elevation: 6 },
   modalScreen: { flex: 1 },
   modalHeader: { minHeight: 54, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: StyleSheet.hairlineWidth, paddingHorizontal: 12 },
+  composerHeader: { minHeight: 70, flexDirection: 'row', alignItems: 'center', gap: 10, borderBottomWidth: StyleSheet.hairlineWidth, paddingHorizontal: 14 },
+  composerCloseButton: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderRadius: 19 },
+  composerHeaderCopy: { flex: 1, minWidth: 0, gap: 3 },
+  composerHeaderTitle: { fontSize: 15, fontFamily: 'Inter_700Bold' },
+  composerHeaderSubtitle: { fontSize: 9, fontFamily: 'Inter_400Regular' },
   modalTitle: { flex: 1, fontSize: 15, textAlign: 'center', fontFamily: 'Inter_700Bold' },
-  publishButton: { minWidth: 62, height: 34, alignItems: 'center', justifyContent: 'center', borderRadius: 18, paddingHorizontal: 12 },
+  publishButton: { minWidth: 68, height: 36, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, borderRadius: 18, paddingHorizontal: 12 },
   publishText: { fontSize: 11, fontFamily: 'Inter_700Bold' },
-  composerContent: { gap: 12, padding: 15, paddingBottom: 35 },
+  composerContent: { gap: 11, padding: 16, paddingBottom: 35 },
+  composerSectionHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 2, paddingHorizontal: 2 },
+  composerSectionTitle: { fontSize: 12, fontFamily: 'Inter_700Bold' },
+  composerSectionHint: { marginTop: 2, fontSize: 9, fontFamily: 'Inter_400Regular' },
   fieldLabel: { fontSize: 12, fontFamily: 'Inter_700Bold', marginTop: 4 },
   composerInput: { minHeight: 145, borderWidth: 1, borderRadius: 14, padding: 13, fontSize: 13, lineHeight: 20, fontFamily: 'Inter_400Regular' },
+  postEditorCard: { borderWidth: 1, borderRadius: 18, paddingHorizontal: 13, paddingTop: 12, paddingBottom: 9, elevation: 1, shadowColor: '#17352A', shadowOpacity: 0.045, shadowRadius: 8, shadowOffset: { width: 0, height: 3 } },
+  postEditorMeta: { flexDirection: 'row', alignItems: 'center', gap: 9 },
+  postEditorAvatar: { width: 34, height: 34, borderRadius: 17 },
+  postEditorAvatarFallback: { alignItems: 'center', justifyContent: 'center' },
+  postEditorAvatarText: { fontSize: 13, fontFamily: 'Inter_700Bold' },
+  postEditorIdentity: { flex: 1, gap: 2 },
+  postEditorName: { fontSize: 11, fontFamily: 'Inter_700Bold' },
+  postEditorAudience: { fontSize: 9, fontFamily: 'Inter_400Regular' },
+  postEditorInput: { minHeight: 150, borderWidth: 0, borderRadius: 0, paddingHorizontal: 0, paddingTop: 14, paddingBottom: 12 },
+  postEditorFooter: { minHeight: 30, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 5 },
+  postEditorTip: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  postEditorTipText: { fontSize: 9, fontFamily: 'Inter_400Regular' },
+  composerCharacterCount: { fontSize: 9, fontVariant: ['tabular-nums'], fontFamily: 'Inter_500Medium' },
   formInput: { minHeight: 44, borderWidth: 1, borderRadius: 11, paddingHorizontal: 12, fontSize: 12, fontFamily: 'Inter_500Medium' },
   signalForm: { gap: 9 },
+  quickChoiceRow: { flexDirection: 'row', gap: 7, paddingRight: 4 },
+  quickChoice: { minHeight: 31, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderRadius: 16, paddingHorizontal: 11 },
+  quickChoiceText: { fontSize: 10, fontFamily: 'Inter_600SemiBold' },
+  pollForm: { gap: 8 },
+  pollOptionInputRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
+  pollOptionInput: { flex: 1 },
+  removePollOption: { width: 36, height: 40, alignItems: 'center', justifyContent: 'center' },
+  addPollOption: { minHeight: 38, flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', paddingHorizontal: 4 },
+  addPollOptionText: { fontSize: 11, fontFamily: 'Inter_600SemiBold' },
   directionRow: { flexDirection: 'row', gap: 9 },
   directionButton: { flex: 1, minHeight: 38, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderRadius: 10 },
   directionText: { fontSize: 11, fontFamily: 'Inter_700Bold' },
@@ -1768,6 +2616,13 @@ const styles = StyleSheet.create({
   commentsContent: { padding: 13, paddingBottom: 18 },
   commentsHeading: { fontSize: 13, fontFamily: 'Inter_700Bold', marginTop: 4, marginBottom: 10 },
   commentCard: { borderWidth: 1, borderRadius: 13, padding: 10, marginBottom: 8, gap: 8 },
+  commentFooter: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  commentReactionSummary: { flexDirection: 'row', alignItems: 'center', gap: 4, minHeight: 26, paddingHorizontal: 8, borderRadius: 13 },
+  commentReactionEmoji: { fontSize: 17 },
+  commentReactionCount: { fontSize: 10, fontFamily: 'Inter_600SemiBold' },
+  commentReactionScrim: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(8,18,19,0.22)' },
+  commentReactionPicker: { flexDirection: 'row', alignItems: 'center', gap: 4, borderWidth: 1, borderRadius: 28, padding: 8, elevation: 6 },
+  commentReactionOption: { width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center' },
   commentHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   commentAvatar: { width: 30, height: 30, alignItems: 'center', justifyContent: 'center', borderRadius: 15 },
   commentBody: { fontSize: 12, lineHeight: 18, fontFamily: 'Inter_400Regular' },
