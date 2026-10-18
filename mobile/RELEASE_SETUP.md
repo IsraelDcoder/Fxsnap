@@ -15,18 +15,19 @@ Android release builds use R8 minification and resource shrinking. Test the resu
 
 Configure these exact product identifiers in Apple App Store Connect, Google Play Console, and RevenueCat:
 
-- `fxsnap_weekly`
-- `fxsnap_premium_monthly`
-- `fxsnap_quarterly`
+- `fxsnap_premium_weekly`
+- `fxsnap_premium_3months`
 
-Create the existing `premium` entitlement and attach all three products, then set:
+Create the existing `premium` entitlement and attach both products, then set:
 
 - `EXPO_PUBLIC_REVENUECAT_IOS_API_KEY`
 - `EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY`
 - `EXPO_PUBLIC_REVENUECAT_ENTITLEMENT_ID`
-- `EXPO_PUBLIC_REVENUECAT_MONTHLY_PRODUCT_ID` if the monthly product uses a different identifier
+- `EXPO_PUBLIC_REVENUECAT_WEEKLY_PRODUCT_ID` if the weekly product uses a different identifier
+- `EXPO_PUBLIC_REVENUECAT_QUARTERLY_PRODUCT_ID` if the three-month product uses a different identifier
 - `REVENUECAT_SECRET_API_KEY` on the server only
 
+Set each country’s weekly and three-month price tiers in App Store Connect and Google Play Console. The paywall reads localized prices from RevenueCat. Configure country tiers to support the “Save 71%” badge: $7.99 weekly and $29.99 for three months yields 71% savings against thirteen weekly renewals ($103.87), rounded to the nearest percent.
 Test purchases and restores in Apple Sandbox and Google Play license-test tracks. Do not use the public paywall in production until the backend entitlement endpoint returns verified active state.
 
 ## Backend secrets

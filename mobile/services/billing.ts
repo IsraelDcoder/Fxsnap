@@ -3,17 +3,13 @@ import Purchases, { LOG_LEVEL, type CustomerInfo, type PurchasesPackage } from '
 import { getDeviceId } from '@/services/apiAuth';
 import { hasRevenueCatEntitlement, REVENUECAT_ENTITLEMENT_CANDIDATES } from '@/services/revenuecatEntitlements';
 
-export type BillingPlan = 'weekly' | 'monthly' | 'quarterly';
+export type BillingPlan = 'weekly' | 'quarterly';
 export const PREMIUM_ENTITLEMENT_ID = process.env.EXPO_PUBLIC_RC_ENTITLEMENT_ID || 'premium';
 export const PREMIUM_ENTITLEMENT_IDS = REVENUECAT_ENTITLEMENT_CANDIDATES;
 
 const IOS_KEY = process.env.EXPO_PUBLIC_RC_IOS_KEY || '';
 const ANDROID_KEY = process.env.EXPO_PUBLIC_RC_ANDROID_KEY || '';
 const PRODUCT_IDS: Record<BillingPlan, string[]> = {
-  monthly: [
-    process.env.EXPO_PUBLIC_REVENUECAT_MONTHLY_PRODUCT_ID || 'fxsnap_premium_monthly',
-    'fxsnap_monthly',
-  ],
   weekly: [
     process.env.EXPO_PUBLIC_REVENUECAT_WEEKLY_PRODUCT_ID || 'fxsnap_premium_weekly',
     'fxsnap_weekly',
@@ -44,6 +40,8 @@ export interface PlanOffering {
   plan: BillingPlan;
   title: string;
   price: string;
+  priceAmount: number | null;
+  currencyCode: string | null;
   period: string;
   productId: string;
   available: boolean;
@@ -100,7 +98,7 @@ export async function getSubscriptionDetails(): Promise<SubscriptionDetails | nu
 
 function formatSubscriptionPeriod(product: any, plan: BillingPlan) {
   const period = product?.subscriptionPeriod;
-  const fallbackPeriod: Record<BillingPlan, string> = { weekly: 'week', monthly: 'month', quarterly: '3 months' };
+  const fallbackPeriod: Record<BillingPlan, string> = { weekly: 'week', quarterly: '3 months' };
   if (!period || typeof period !== 'object') {
     return fallbackPeriod[plan];
   }
@@ -120,9 +118,14 @@ function planMatchesPackage(plan: BillingPlan, pkg: PurchasesPackage): boolean {
 
   if (identifier === plan || productIdentifier === plan) return true;
   if (productIds.includes(productIdentifier)) return true;
-  if (plan === 'monthly' && (identifier.includes('monthly') || productIdentifier.includes('monthly'))) return true;
-  if (plan === 'quarterly' && (identifier.includes('three') || productIdentifier.includes('three') || identifier.includes('3') || productIdentifier.includes('3'))) return true;
   if (plan === 'weekly' && (identifier.includes('week') || productIdentifier.includes('week'))) return true;
+  if (
+    plan === 'quarterly'
+    && [identifier, productIdentifier].some((value) => {
+      const normalized = value.replace(/[^a-z0-9]/g, '');
+      return ['quarter', '3month', 'threemonth'].some((alias) => normalized.includes(alias));
+    })
+  ) return true;
   return false;
 }
 
@@ -143,14 +146,16 @@ export async function getAvailablePlans(): Promise<PlanOffering[]> {
 
   if (!current) return [];
 
-  return Object.entries(PRODUCT_IDS).map(([planKey, productIds]) => {
-    const plan = planKey as BillingPlan;
+  return (Object.keys(PRODUCT_IDS) as BillingPlan[]).map((plan) => {
+    const productIds = PRODUCT_IDS[plan];
     const selected = current.availablePackages.find((pkg) => planMatchesPackage(plan, pkg));
     const product = selected?.product;
     return {
       plan,
-      title: plan === 'weekly' ? 'Weekly' : plan === 'monthly' ? 'Monthly' : '3 Months',
+      title: plan === 'weekly' ? 'Weekly' : '3 Months',
       price: product?.priceString || '—',
+      priceAmount: typeof product?.price === 'number' && Number.isFinite(product.price) ? product.price : null,
+      currencyCode: product?.currencyCode || null,
       period: formatSubscriptionPeriod(product, plan),
       productId: product?.identifier || productIds[0],
       available: Boolean(selected),

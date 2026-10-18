@@ -15,11 +15,16 @@ const path = require('path');
 const crypto = require('crypto');
 
 function loadEnvFile() {
-  const envPath = path.resolve(__dirname, '..', '.env');
-  if (!fs.existsSync(envPath)) return;
-  for (const line of fs.readFileSync(envPath, 'utf8').split(/\r?\n/)) {
-    const match = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/);
-    if (match && !process.env[match[1]]) process.env[match[1]] = match[2].replace(/^['"]|['"]$/g, '');
+  const envPaths = [
+    path.resolve(__dirname, '..', '.env'),
+    path.resolve(__dirname, '..', '..', '.env'),
+  ];
+  for (const envPath of envPaths) {
+    if (!fs.existsSync(envPath)) continue;
+    for (const line of fs.readFileSync(envPath, 'utf8').split(/\r?\n/)) {
+      const match = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/);
+      if (match && !process.env[match[1]]) process.env[match[1]] = match[2].replace(/^['"]|['"]$/g, '');
+    }
   }
 }
 
@@ -897,17 +902,44 @@ function parseJsonField(value, fallback = null) {
   const stripped = trimmed.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
   if (!stripped) return fallback;
 
-  try {
-    return JSON.parse(stripped);
-  } catch {
-    const match = stripped.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
-    if (match) {
-      try { return JSON.parse(match[0]); } catch {
+  const candidateTexts = [stripped];
+  const firstBrace = stripped.indexOf('{');
+  const firstBracket = stripped.indexOf('[');
+  const startIndex = Math.min(firstBrace >= 0 ? firstBrace : Number.MAX_SAFE_INTEGER, firstBracket >= 0 ? firstBracket : Number.MAX_SAFE_INTEGER);
+  if (Number.isFinite(startIndex) && startIndex < Number.MAX_SAFE_INTEGER) {
+    const lastBrace = stripped.lastIndexOf('}');
+    const lastBracket = stripped.lastIndexOf(']');
+    const endIndex = Math.max(lastBrace >= 0 ? lastBrace : -1, lastBracket >= 0 ? lastBracket : -1);
+    if (endIndex > startIndex) {
+      candidateTexts.push(stripped.slice(startIndex, endIndex + 1));
+    }
+  }
+
+  for (const candidate of candidateTexts) {
+    try {
+      return JSON.parse(candidate);
+    } catch {
+      const cleaned = candidate.replace(/,\s*([}\]])/g, '$1');
+      if (cleaned !== candidate) {
+        try {
+          return JSON.parse(cleaned);
+        } catch {
+          // fall through for the next candidate
+        }
+      }
+    }
+  }
+
+  const match = stripped.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
+  if (match) {
+    try { return JSON.parse(match[0]); } catch {
+      try { return JSON.parse(match[0].replace(/,\s*([}\]])/g, '$1')); } catch {
         return fallback;
       }
     }
-    return fallback;
   }
+
+  return fallback;
 }
 
 function parseJsonPayload(rawContent) {
@@ -2183,9 +2215,9 @@ function applyMentorStrategy(normalized) {
 }
 
 function getTraderSystemPrompt() {
-  return `You are FXSnap's chart analyst. You receive ONE screenshot of a trading chart. Your only job is to read it and return a complete trade analysis. You ALWAYS succeed: every chart screenshot produces a full analysis. Identify the instrument and timeframe if visible. State the market bias as BUY or SELL — commit to the side the chart supports most; never answer neutral or undecided. Identify numeric support and resistance levels and the key structures they come from. Then build a complete trade setup from those levels: entry, stop loss, take profit 1, take profit 2, and the risk-to-reward ratio. For a BUY, the stop loss sits below entry and the targets above; for a SELL, the inverse. If price is ranging, build the setup from the range's support and resistance. Never refuse a chart screenshot, never call a chart unreadable, never ask for a clearer image, never wait for confirmation, and never attach conditions to the setup. The words 'wait for confirmation', 'not readable', 'cannot determine' and 'unable to analyze' must never appear in your output for a chart image. Describe what the chart shows honestly in your reasoning, but always deliver the complete setup.
+  return `You are FXSnap's chart analyst. You receive ONE screenshot of a trading chart. Your only job is to read it and return a complete trade analysis. Always return valid JSON only. Do not wrap it in markdown fences, labels, commentary, or prose. Do not emit a plain string, array, or empty object. The top-level response must be a single JSON object that parses with JSON.parse and matches the app's existing schema. If the chart is valid, include bias, levels, price_position, setup, verdict, conviction, verdict_reason, trade_plan, and no_trade_reason (null). If the chart is unreadable, return a valid no_trade object with trade_plan: null and a plain no_trade_reason. Never invent missing chart data. Never return the literal words 'wait for confirmation', 'not readable', 'cannot determine', or 'unable to analyze' for a real chart image. If a chart is weak or incomplete, still return the best supported trade plan with honest conviction instead of an empty response.
 
-Return one JSON object only using the app's existing schema. Keep the existing response envelope, include bias, levels, price_position, setup, verdict, conviction, verdict_reason, and trade_plan at the top level, and always include all required plan fields for a chart screenshot. For non-chart images, return the existing invalid_image response only.`;
+Return only one parseable JSON object. For non-chart images, return the existing invalid_image response only.`;
 }
 
 function normalizeCompleteChartAnalysis(raw, input = {}) {
@@ -4398,7 +4430,7 @@ async function getAnalysisAccess(req, res) {
 }
 
 function getPaywallRemoteConfig(req, res) {
-  const configuredCount = Number(process.env.FXSNAP_TRADER_COUNT || 3700);
+  const configuredCount = Number(process.env.FXSNAP_TRADER_COUNT || 6000);
   const configuredRating = Number(process.env.FXSNAP_GOOGLE_PLAY_RATING);
   const configuredRatingCount = Number(process.env.FXSNAP_GOOGLE_PLAY_RATING_COUNT);
   let testimonials = [];

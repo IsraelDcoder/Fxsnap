@@ -52,7 +52,7 @@ export default function PaywallScreen() {
     setExitOfferVisible(false);
     dismissPaywall();
   };
-  const [selectedPlan, setSelectedPlan] = useState<BillingPlan>('monthly');
+  const [selectedPlan, setSelectedPlan] = useState<BillingPlan>('quarterly');
   const [plans, setPlans] = useState<PlanOffering[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingPlans, setLoadingPlans] = useState(true);
@@ -75,7 +75,7 @@ export default function PaywallScreen() {
         setPlans(availablePlans);
 
         if (availablePlans.length > 0) {
-          const fallback = availablePlans.find((plan) => plan.plan === selectedPlan && plan.available)
+          const fallback = availablePlans.find((plan) => plan.plan === 'quarterly' && plan.available)
             || availablePlans.find((plan) => plan.available);
           if (fallback) setSelectedPlan(fallback.plan);
         }
@@ -110,23 +110,52 @@ export default function PaywallScreen() {
   const selectedPlanMeta = plans.find((plan) => plan.plan === selectedPlan) ?? plans[0];
   const canPurchaseSelectedPlan = Boolean(selectedPlanMeta?.available);
 
-  const orderedPlans: PlanOffering[] = (['weekly', 'monthly', 'quarterly'] as const).map((planType) => {
-    const configuredPlan = plans.find((plan) => plan.plan === planType);
-    return configuredPlan ?? {
-      plan: planType,
-      title: planType === 'quarterly' ? '3 Months' : planType,
+  const fallbackPlans: Record<BillingPlan, PlanOffering> = {
+    weekly: {
+      plan: 'weekly',
+      title: 'Weekly',
       price: '—',
-      period: planType === 'weekly' ? 'week' : planType === 'quarterly' ? '3 months' : 'month',
+      priceAmount: null,
+      currencyCode: null,
+      period: 'week',
       productId: '',
       available: false,
+    },
+    quarterly: {
+      plan: 'quarterly',
+      title: '3 Months',
+      price: '—',
+      priceAmount: null,
+      currencyCode: null,
+      period: '3 months',
+      productId: '',
+      available: false,
+    },
+  };
+  const orderedPlans: PlanOffering[] = (['weekly', 'quarterly'] as const).map((planType) => {
+    const configuredPlan = plans.find((plan) => plan.plan === planType);
+    if (!configuredPlan) return fallbackPlans[planType];
+    return {
+      ...configuredPlan,
+      price: configuredPlan.price === '—' ? fallbackPlans[planType].price : configuredPlan.price,
+      priceAmount: configuredPlan.priceAmount ?? fallbackPlans[planType].priceAmount,
+      currencyCode: configuredPlan.currencyCode ?? fallbackPlans[planType].currencyCode,
     };
   });
   const getPlanDisplayPrice = (plan: PlanOffering) => plan.price || '—';
   const getPlanDisplayPeriod = (plan: PlanOffering) => {
     if (plan.plan === 'weekly') return '/ week';
-    if (plan.plan === 'quarterly') return '/ 3 months';
-    return '/ month';
+    return '/ 3 months';
   };
+  const weeklyPlan = orderedPlans.find((plan) => plan.plan === 'weekly');
+  const quarterlyPlan = orderedPlans.find((plan) => plan.plan === 'quarterly');
+  const formatCurrency = (amount: number, currencyCode: string) =>
+    new Intl.NumberFormat(undefined, { style: 'currency', currency: currencyCode }).format(amount);
+  const quarterlyRateSummary = quarterlyPlan?.priceAmount !== null
+    && quarterlyPlan?.priceAmount !== undefined
+    && quarterlyPlan.currencyCode
+    ? `${formatCurrency(quarterlyPlan.priceAmount / 13, quarterlyPlan.currencyCode)}/week · ${formatCurrency(quarterlyPlan.priceAmount / 3, quarterlyPlan.currencyCode)}/month`
+    : null;
   const handleRestore = async () => {
     if (!billingAvailable) {
       Alert.alert('Restore unavailable', 'Connect App Store or Google Play billing to restore purchases.');
@@ -202,7 +231,7 @@ export default function PaywallScreen() {
         <Text style={[styles.subtitle, isCompact && styles.compactSubtitle, { color: colors.textSecondary }]}>Subscribe for AI chart analysis and strategy generation — cancel anytime</Text>
         <View style={styles.trustedRow}>
           <Feather name="users" size={20} color="#31D15B" />
-          <Text style={[styles.trustedText, { color: colors.textSecondary }]}>Trusted by <Text style={styles.trustedCount}>3,700+</Text> traders</Text>
+          <Text style={[styles.trustedText, { color: colors.textSecondary }]}>Trusted by <Text style={styles.trustedCount}>6,000+</Text> traders</Text>
         </View>
       </Animated.View>
 
@@ -242,7 +271,8 @@ export default function PaywallScreen() {
                   isCompact && styles.compactPlanCard,
                   isSelected && styles.planCardSelected,
                   !plan.available && styles.planCardUnavailable,
-                  plan.plan === 'monthly' && styles.monthlyPlanCard,
+                  plan.plan === 'weekly' && styles.weeklyPlanCard,
+                  plan.plan === 'quarterly' && styles.heroPlanCard,
                   { backgroundColor: isSelected ? `${colors.buy}18` : colors.card, borderColor: isSelected ? colors.buy : colors.cardBorder },
                 ]}
                 onPress={() => {
@@ -253,13 +283,12 @@ export default function PaywallScreen() {
                 disabled={!plan.available}
                 activeOpacity={0.95}
               >
-                {plan.plan === 'monthly' && <View style={[styles.planTag, styles.popularTag]}><Text style={styles.planTagText}>Most Popular</Text></View>}
-                {plan.plan === 'quarterly' && <View style={[styles.planTag, styles.bestValueTag]}><Text style={styles.planTagText}>Best Value - Save 22%</Text></View>}
-                <View style={[styles.planTextColumn, plan.plan === 'monthly' && styles.monthlyPlanText]}>
-                  <Text style={[styles.planName, { color: colors.text }]}>{plan.plan === 'quarterly' ? '3-Month' : plan.plan === 'weekly' ? 'Weekly' : 'Monthly'}</Text>
-                  <Text style={[styles.planPrice, { color: colors.text }]}>{getPlanDisplayPrice(plan)}</Text>
-                  <Text style={[styles.planPeriod, { color: colors.textSecondary }]}>{getPlanDisplayPeriod(plan)}</Text>
-                  {plan.plan === 'monthly' && <Text style={[styles.dailyPrice, { color: colors.buy }]}>Only $0.50/day</Text>}
+                {plan.plan === 'quarterly' && <View style={[styles.planTag, styles.popularTag]}><Text style={styles.planTagText}>MOST POPULAR · SAVE 71%</Text></View>}
+                <View style={[styles.planTextColumn, plan.plan === 'quarterly' && styles.heroPlanText]}>
+                <Text style={[styles.planName, plan.plan === 'quarterly' && styles.heroPlanName, { color: colors.text }]}>{plan.plan === 'quarterly' ? '3 Months' : 'Weekly'}</Text>
+                <Text style={[styles.planPrice, plan.plan === 'quarterly' && styles.heroPlanPrice, { color: colors.text }]}>{getPlanDisplayPrice(plan)}</Text>
+                <Text style={[styles.planPeriod, { color: colors.textSecondary }]}>{getPlanDisplayPeriod(plan)}</Text>
+                {plan.plan === 'quarterly' && quarterlyRateSummary && <Text style={[styles.dailyPrice, { color: colors.buy }]}>{quarterlyRateSummary}</Text>}
                 </View>
               </TouchableOpacity>
             );
@@ -292,7 +321,6 @@ export default function PaywallScreen() {
           <Feather name="lock" size={13} color="#31D15B" />
           <Text style={[styles.securityNoteText, { color: colors.textSecondary }]}>Cancel anytime  •  Secure payment  •  No auto-renew if cancelled</Text>
         </View>
-        <Text style={[styles.trialNote, { color: colors.textSecondary }]}>You won't be charged until your free trial (if any) ends.</Text>
       </Animated.View>
       <Modal
         visible={exitOfferVisible}
@@ -730,20 +758,44 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  weeklyPlanCard: {
+    flex: 0.9,
+  },
   compactPlanCard: {
-    minHeight: 122,
-    paddingTop: 25,
+    minHeight: 144,
+    paddingTop: 31,
     paddingBottom: 8,
     paddingHorizontal: 5,
   },
   planCardUnavailable: {
     opacity: 1,
   },
-  monthlyPlanCard: {
+  heroPlanCard: {
+    flex: 1.1,
+    minHeight: 154,
     backgroundColor: '#111A15',
     borderColor: '#31D15B',
     borderWidth: 2,
-    transform: [{ scaleY: 1.04 }],
+    shadowColor: '#31D15B',
+    shadowOpacity: 0.2,
+    shadowRadius: 13,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 5,
+  },
+  heroPlanName: {
+    fontSize: 14,
+    fontFamily: 'Inter_700Bold',
+  },
+  heroPlanPrice: {
+    fontSize: 29,
+    lineHeight: 34,
+  },
+  savingsDetail: {
+    fontSize: 10,
+    lineHeight: 14,
+    fontFamily: 'Inter_700Bold',
+    textAlign: 'center',
+    paddingHorizontal: 1,
   },
   planCardSelected: {
     borderColor: '#31D15B',
@@ -753,22 +805,25 @@ const styles = StyleSheet.create({
     top: 5,
     left: 3,
     right: 3,
+    flexDirection: 'row',
     backgroundColor: '#31D15B',
     paddingHorizontal: 3,
     paddingVertical: 4,
     borderRadius: 6,
     alignItems: 'center',
-  },
-  popularTag: {
-    top: -13,
-    left: '10%',
-    right: '10%',
+    justifyContent: 'center',
+    gap: 3,
   },
   bestValueTag: {
     backgroundColor: '#102818',
   },
+  popularTag: {
+    left: '12%',
+    right: '12%',
+  },
   planTagText: {
-    fontSize: 9,
+    fontSize: 8,
+    letterSpacing: 0.2,
     fontFamily: 'Inter_700Bold',
     color: '#D9F7E2',
     textAlign: 'center',
@@ -778,8 +833,9 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     gap: 2,
   },
-  monthlyPlanText: {
+  heroPlanText: {
     alignItems: 'center',
+    gap: 3,
   },
   planName: {
     fontSize: 13,
