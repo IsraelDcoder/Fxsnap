@@ -136,7 +136,7 @@ Replace the placeholders in app.json and eas.json with your real Expo project ID
 4. Set the public SDK keys in the Expo app environment and the secret key on the backend.
 5. Test with Google Play internal / license-test tracks.
 
-Set `EXPO_PUBLIC_REVENUECAT_WEEKLY_PRODUCT_ID` or `EXPO_PUBLIC_REVENUECAT_QUARTERLY_PRODUCT_ID` if your store product identifiers differ. Prices and localized currencies are loaded from the store products through RevenueCat. Configure country-specific price tiers to support the “Save 71%” badge: $7.99 weekly and $29.99 for three months yields 71% savings against thirteen weekly payments ($103.87), rounded to the nearest percent.
+Set `EXPO_PUBLIC_REVENUECAT_WEEKLY_PRODUCT_ID`, `EXPO_PUBLIC_REVENUECAT_MONTHLY_PRODUCT_ID`, or `EXPO_PUBLIC_REVENUECAT_QUARTERLY_PRODUCT_ID` if your store product identifiers differ. Configure all three products in App Store Connect, Google Play Console, and the RevenueCat offering. Prices and localized currencies are loaded from RevenueCat. The paywall labels Monthly as “Most Popular” and displays “Save 33%” on the three-month plan.
 
 ## 5. Production checklist
 

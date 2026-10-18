@@ -121,7 +121,7 @@ function RootLayoutNav({ fontsReady }: { fontsReady: boolean }) {
         <Stack.Screen name="paywall" options={{ headerShown: false, animation: 'slide_from_bottom', presentation: 'modal' }} />
         <Stack.Screen name="my-strategies" options={{ headerShown: false, animation: 'slide_from_right' }} />
       </Stack>
-      <CommunityInteractionPrompt enabled={!isLoading} />
+      <CommunityInteractionPrompt enabled={!isLoading && onboardingComplete && pathname !== '/onboarding'} />
     </>
   );
 }

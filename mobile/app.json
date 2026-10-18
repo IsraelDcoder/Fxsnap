@@ -5,7 +5,7 @@
     "version": "1.0.0",
     "icon": "./assets/images/icon.png",
     "scheme": "mobile",
-    "userInterfaceStyle": "automatic",
+    "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "splash": {
       "image": "./assets/images/icon.png",
@@ -55,6 +55,7 @@
         }
       ],
       "expo-font",
+      "expo-video",
       "expo-web-browser",
       [
         "expo-image-picker",
