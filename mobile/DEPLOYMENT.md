@@ -89,6 +89,22 @@ The app now includes backend-backed post/member/topic search, member profiles, a
 
 Keep the flag false until the migration is applied and verified. Publish a new Android build after deploying the backend to expose these UI changes, profile photos, persisted comment counts, post engagement, reposting, saved feeds, polls, multi-reactions, and own-post edit/delete actions; backend activation alone does not publish client changes. The text share flow increments the share count only when the native share API reports a completed share. Expo's image-share API does not distinguish completion from cancellation, so image-sheet launches are not counted.
 
+### Events spaces foundation
+
+The Events tab now reads published public sessions from the backend and refreshes when Supabase Realtime reports a space change. Authorized admins can create drafts, schedule and publish sessions, edit unpublished or scheduled details, open a waiting room, cancel sessions, and archive cancelled/ended records. LiveKit Cloud now powers audio rooms, with short-lived server-signed join tokens, listener-first permissions, waiting-room admission, speaker requests, host controls, and explicit session start/end.
+
+1. In LiveKit Cloud, open your FXSnap project and copy its secure Project URL, API key, and API secret. Add these backend-only environment variables to the production API host:
+   - `LIVEKIT_URL` — the project `wss://...` URL.
+   - `LIVEKIT_API_KEY`.
+   - `LIVEKIT_API_SECRET`.
+   Do not add these as `EXPO_PUBLIC_*` variables or put them in the mobile app. The API secret must remain private.
+2. Apply `server/eventSpaces.sql` to the production Supabase project before deploying the API. It creates the event table and server-only participant roster, adds the room-name migration for an already-created event table, enables row-level security, and publishes public event changes to Supabase Realtime.
+3. Confirm the backend also has the existing `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and `FXSNAP_COMMUNITY_ADMIN_SUPABASE_USER_IDS` settings. Keep the Supabase service-role key server-side and populate the admin allowlist with approved Supabase Auth user UUIDs.
+4. Deploy the updated backend only after both the migration and LiveKit environment variables are in place. Admins can create/publish a session, open its waiting room, and start the LiveKit room. Users must sign in to join; users in the waiting room receive no LiveKit token until the host/admin admits them. New attendees enter as listeners with publishing disabled.
+5. Build and distribute a new native app after applying the Expo LiveKit plugins. Expo Go cannot run the native WebRTC module. For internal testing, use the configured EAS development profile, for example `npx eas build --platform android --profile development` (or `ios`); production releases need a new native build too. Web Events pages can discover sessions but direct users to mobile to join audio.
+6. Test with separate admin/host and listener accounts: enter the waiting room, start the room, admit a listener, verify the listener can hear but cannot publish, request to speak, approve the request, verify microphone publishing works only after approval, leave the room, and end the session. The LiveKit room is deleted when the host/admin ends the session.
+7. The current audio phase does not include in-room text chat/reactions, push reminders, or private-room invitations. Private rooms can currently be joined only by their assigned host or an administrator.
+
 ### System announcements and push notification center
 
 System announcements are stored separately from Community posts and can reach signed-in FXSnap users without Community membership. The admin API derives privileges from the server-side `FXSNAP_COMMUNITY_ADMIN_SUPABASE_USER_IDS` allowlist; use Supabase Auth user UUIDs, never emails or client-provided admin flags.

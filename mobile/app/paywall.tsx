@@ -257,7 +257,7 @@ export default function PaywallScreen() {
           <Text style={[styles.brandName, { color: colors.text }]}>FXSnap <Text style={[styles.brandAccent, { color: colors.primary }]}>AI</Text></Text>
         </View>
         <Text style={[typography.heroHeading, styles.title, isCompact && styles.compactTitle, { color: colors.text }]} accessibilityRole="header">Unlock FXSnap{"\n"}Premium</Text>
-        <Text style={[typography.body, styles.subtitle, isCompact && typography.compactBody, { color: colors.textSecondary }]}>Subscribe for AI chart analysis and strategy generation — cancel anytime</Text>
+        <Text style={[typography.body, styles.subtitle, isCompact && typography.compactBody, { color: colors.textSecondary }]}>Subscribe for AI chart analysis, strategy tools and full access to the FXSnap Community — cancel anytime</Text>
         <View style={styles.trustedRow}>
           <Feather name="users" size={20} color={colors.primary} />
           <Text style={[styles.trustedText, { color: colors.textSecondary }]}>Trusted by <Text style={[styles.trustedCount, { color: colors.primary }]}>6,000+</Text> traders</Text>
@@ -272,6 +272,7 @@ export default function PaywallScreen() {
           'Structured chart reviews with entry, stop and target levels',
           'Support & resistance + pattern detection',
           'Works with TradingView, MT4, MT5 & any broker',
+          'Full access to the FXSnap Premium Community',
         ].map((benefit) => (
           <View key={benefit} style={styles.featureRow}>
             <View style={[styles.featureCheck, { backgroundColor: colors.primary }]}><Feather name="check" size={12} color={colors.primaryForeground} /></View>

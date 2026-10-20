@@ -40,11 +40,12 @@ export default function HomeDashboard({ previewMode = false }: { previewMode?: b
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const { width: viewportWidth } = useWindowDimensions();
+  const compactHeader = viewportWidth < 360;
   const reduceMotion = useReducedMotion();
   const { settings, savedBriefs, saveBriefCard, deleteBriefCard, checkFeatureAccess } = useApp();
   const [sessionModalVisible, setSessionModalVisible] = useState(false);
   const [showCommunityBanner, setShowCommunityBanner] = useState(true);
-  const [toolsExpanded, setToolsExpanded] = useState(true);
+  const [toolsExpanded, setToolsExpanded] = useState(false);
   const [sessionState, setSessionState] = useState(getTradingSessionState());
   const [briefState, setBriefState] = useState<DailyBriefState | null>(null);
   const [briefSaveMessage, setBriefSaveMessage] = useState('');
@@ -86,7 +87,7 @@ export default function HomeDashboard({ previewMode = false }: { previewMode?: b
     return () => clearTimeout(timer);
   }, [briefSaveError, briefSaveMessage]);
 
-  const navigate = (path: '/analysis' | '/strategy' | '/settings' | '/daily-brief' | '/economic-calendar' | '/lot-size-calculator' | '/risk-management' | '/saved' | '/my-strategies' | '/learning-hub') => {
+  const navigate = (path: '/analysis' | '/strategy' | '/settings' | '/daily-brief' | '/community-notifications' | '/economic-calendar' | '/lot-size-calculator' | '/risk-management' | '/saved' | '/my-strategies' | '/learning-hub') => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     router.push(path);
   };
@@ -160,18 +161,28 @@ export default function HomeDashboard({ previewMode = false }: { previewMode?: b
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ paddingTop: previewMode ? 4 : insets.top + 12, paddingBottom: previewMode ? 76 : 116 + insets.bottom }}
       >
-        <Animated.View entering={reduceMotion ? undefined : FadeInDown.duration(380)} style={styles.header}>
+        <Animated.View entering={reduceMotion ? undefined : FadeInDown.duration(380)} style={[styles.header, compactHeader && styles.compactHeader]}>
           <View style={styles.brand}>
-            <View style={styles.brandMark}>
+            <View style={[styles.brandMark, compactHeader && styles.compactBrandMark]}>
               <Feather name="trending-up" size={22} color="#FFFFFF" />
             </View>
-            <View>
-              <Text style={[styles.greetingName, { color: colors.text }]}>{greeting}, {firstName}! 👋</Text>
-              <Text style={[styles.headerSubtitle, { color: colors.textSecondary }]}>Trade with more clarity today 📈</Text>
+            <View style={styles.brandCopy}>
+              <Text
+                numberOfLines={1}
+                ellipsizeMode="tail"
+                style={[styles.greetingName, compactHeader && styles.compactGreetingName, { color: colors.text }]}
+              >
+                {compactHeader
+                  ? `${greeting.replace(/^Good\s+/, '').replace(/^./, (character) => character.toUpperCase())}, ${firstName}!`
+                  : `${greeting}, ${firstName}! 👋`}
+              </Text>
+              <Text numberOfLines={1} style={[styles.headerSubtitle, { color: colors.textSecondary }]}>
+                {compactHeader ? 'Trade with more clarity.' : 'Trade with more clarity today 📈'}
+              </Text>
             </View>
           </View>
           {!previewMode ? (
-            <View style={styles.headerActions}>
+            <View style={[styles.headerActions, compactHeader && styles.compactHeaderActions]}>
               <TouchableOpacity onPress={support} style={styles.headerIconTouch} accessibilityLabel="Contact support">
                 <LiquidGlassSurface
                   style={styles.headerIcon}
@@ -182,7 +193,7 @@ export default function HomeDashboard({ previewMode = false }: { previewMode?: b
                   <Feather name="mail" size={18} color={colors.text} />
                 </LiquidGlassSurface>
               </TouchableOpacity>
-              <TouchableOpacity onPress={() => navigate('/daily-brief')} style={styles.headerIconTouch} accessibilityLabel="Open Daily Brief">
+              <TouchableOpacity onPress={() => navigate('/community-notifications')} style={styles.headerIconTouch} accessibilityLabel="Open notifications">
                 <LiquidGlassSurface
                   style={styles.headerIcon}
                   fallbackStyle={{ borderColor: colors.cardBorder, backgroundColor: colors.card }}
@@ -241,10 +252,10 @@ export default function HomeDashboard({ previewMode = false }: { previewMode?: b
                   <Feather name="users" size={19} color={colors.buy} />
                 </View>
                 <View style={styles.communityBannerCopy}>
-                  <Text style={[styles.communityBannerEyebrow, { color: colors.buy }]}>FXSNAP COMMUNITY</Text>
+                  <Text style={[styles.communityBannerEyebrow, { color: colors.buy }]}>FXSNAP PREMIUM COMMUNITY</Text>
                   <Text style={[styles.communityBannerTitle, { color: colors.text }]}>Join the conversation</Text>
                   <Text style={[styles.communityBannerDescription, { color: colors.textSecondary }]}>
-                    Share ideas and learn alongside other traders.
+                    Share ideas and learn with an active Premium subscription.
                   </Text>
                 </View>
                 <TouchableOpacity
@@ -260,10 +271,10 @@ export default function HomeDashboard({ previewMode = false }: { previewMode?: b
               <TouchableOpacity
                 onPress={openCommunity}
                 accessibilityRole="button"
-                accessibilityLabel="Explore FXSnap Community"
+                accessibilityLabel="Unlock FXSnap Community"
                 style={[styles.communityBannerAction, { backgroundColor: colors.buy }]}
               >
-                <Text style={[styles.communityBannerActionText, { color: colors.primaryForeground }]}>Explore Community</Text>
+                <Text style={[styles.communityBannerActionText, { color: colors.primaryForeground }]}>Unlock Community</Text>
                 <Feather name="arrow-right" size={15} color={colors.primaryForeground} />
               </TouchableOpacity>
             </View>
@@ -613,11 +624,16 @@ function NavItem({ icon, label, active, colors, onPress }: { icon: string; label
 const styles = StyleSheet.create({
   screen: { flex: 1 },
   header: { minHeight: 56, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20 },
-  brand: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
+  compactHeader: { paddingHorizontal: 14 },
+  brand: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1, minWidth: 0 },
   brandMark: { width: 48, height: 48, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: '#168779' },
+  compactBrandMark: { width: 40, height: 40, borderRadius: 13 },
+  brandCopy: { flex: 1, minWidth: 0 },
   greetingName: { fontSize: 19, lineHeight: 24, fontFamily: 'Inter_700Bold' },
+  compactGreetingName: { fontSize: 15, lineHeight: 20 },
   headerSubtitle: { marginTop: 1, fontSize: 11, fontFamily: 'Inter_500Medium' },
   headerActions: { flexDirection: 'row', gap: 9, marginLeft: 8 },
+  compactHeaderActions: { gap: 6, marginLeft: 6 },
   headerIconTouch: { width: 42, height: 42, borderRadius: 21 },
   headerIcon: { width: 42, height: 42, borderRadius: 21, borderWidth: 1, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
   fallbackGlassSurface: { borderWidth: 1, borderColor: 'rgba(255,255,255,0.28)' },

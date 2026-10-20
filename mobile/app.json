@@ -17,7 +17,8 @@
       "bundleIdentifier": "com.fxsnap.mobile",
       "infoPlist": {
         "NSCameraUsageDescription": "FXSnap uses the camera so you can submit a trading chart for analysis.",
-        "NSPhotoLibraryUsageDescription": "FXSnap uses your photo library so you can select a trading chart for analysis."
+        "NSPhotoLibraryUsageDescription": "FXSnap uses your photo library so you can select a trading chart for analysis.",
+        "NSMicrophoneUsageDescription": "FXSnap uses your microphone when you choose to speak in a live Events space."
       }
     },
     "android": {
@@ -25,6 +26,7 @@
       "softwareKeyboardLayoutMode": "resize",
       "permissions": [
         "CAMERA",
+        "RECORD_AUDIO",
         "POST_NOTIFICATIONS"
       ],
       "blockedPermissions": [
@@ -63,7 +65,21 @@
           "microphonePermission": false
         }
       ],
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "@livekit/react-native-expo-plugin",
+        {
+          "android": {
+            "audioType": "communication"
+          }
+        }
+      ],
+      [
+        "@config-plugins/react-native-webrtc",
+        {
+          "microphonePermission": "FXSnap uses your microphone when you choose to speak in a live Events space."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

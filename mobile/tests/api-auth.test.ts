@@ -8,7 +8,7 @@ const { API_BASE_URL, resolveApiBaseUrl, normalizeServerAnalysisAccess } = requi
 const { normalizeChartAnalysisError } = require('../services/chartDetection.ts');
 const { hasRevenueCatEntitlement } = require('../services/revenuecatEntitlements.ts');
 const { normalizePaywallRemoteConfig } = require('../services/paywallConfig.ts');
-const { canViewFullAnalysis, getFeatureAccessDecision, isDevelopmentPremiumBypassEnabled, isPremiumFeatureRoute, shouldGuardFeatureRoute } = require('../services/featureAccess.ts');
+const { canViewFullAnalysis, getFeatureAccessDecision, isCommunityFeatureRoute, isDevelopmentPremiumBypassEnabled, isPremiumFeatureRoute, shouldGuardFeatureRoute } = require('../services/featureAccess.ts');
 const { getInstrument, INSTRUMENTS, INSTRUMENT_GROUPS } = require('../services/instruments.ts');
 
 test('signed anonymous tokens round-trip and reject tampering', () => {
@@ -108,6 +108,9 @@ test('exhausted API quota is shown as a temporary analysis outage instead of a r
 test('premium routes are centrally recognized and must gate before navigation', () => {
   assert.equal(isPremiumFeatureRoute('/analysis'), true);
   assert.equal(isPremiumFeatureRoute('/strategy'), true);
+  assert.equal(isPremiumFeatureRoute('/community'), true);
+  assert.equal(isCommunityFeatureRoute('/community-notifications'), true);
+  assert.equal(isCommunityFeatureRoute('/community-member'), true);
   assert.equal(isPremiumFeatureRoute('/risk-management'), false);
   assert.equal(isPremiumFeatureRoute('/lot-size-calculator'), false);
   assert.equal(isPremiumFeatureRoute('/daily-brief'), false);
@@ -115,6 +118,9 @@ test('premium routes are centrally recognized and must gate before navigation', 
   assert.equal(shouldGuardFeatureRoute('/analysis', true), false);
   assert.equal(shouldGuardFeatureRoute('/strategy', false), true);
   assert.equal(shouldGuardFeatureRoute('/strategy', true), false);
+  assert.equal(shouldGuardFeatureRoute('/community', false), true);
+  assert.equal(shouldGuardFeatureRoute('/community-search', false), true);
+  assert.equal(shouldGuardFeatureRoute('/community-notifications', true), false);
   assert.equal(shouldGuardFeatureRoute('/lot-size-calculator', false), false);
   assert.equal(shouldGuardFeatureRoute('/risk-management', false), false);
   assert.equal(shouldGuardFeatureRoute('/daily-brief', false), false);
@@ -143,6 +149,8 @@ test('analysis, trade setup, and strategy generation all require an active subsc
   assert.deepEqual(getFeatureAccessDecision('AI_ANALYSIS', true), { allowed: true, requiresPaywall: false });
   assert.deepEqual(getFeatureAccessDecision('TRADE_SETUP', true), { allowed: true, requiresPaywall: false });
   assert.deepEqual(getFeatureAccessDecision('STRATEGY_GENERATOR', true), { allowed: true, requiresPaywall: false });
+  assert.deepEqual(getFeatureAccessDecision('COMMUNITY', false), { allowed: false, requiresPaywall: true });
+  assert.deepEqual(getFeatureAccessDecision('COMMUNITY', true), { allowed: true, requiresPaywall: false });
   assert.deepEqual(getFeatureAccessDecision('LOT_SIZE', false), { allowed: true, requiresPaywall: false });
   assert.deepEqual(getFeatureAccessDecision('LIVE_CHARTS', false), { allowed: true, requiresPaywall: false });
 });
@@ -158,6 +166,7 @@ test('development premium bypass is opt-in and limited to analysis features', ()
     assert.deepEqual(getFeatureAccessDecision('AI_ANALYSIS', false), { allowed: true, requiresPaywall: false });
     assert.deepEqual(getFeatureAccessDecision('TRADE_SETUP', false), { allowed: true, requiresPaywall: false });
     assert.deepEqual(getFeatureAccessDecision('STRATEGY_GENERATOR', false), { allowed: false, requiresPaywall: true });
+    assert.deepEqual(getFeatureAccessDecision('COMMUNITY', false), { allowed: false, requiresPaywall: true });
     assert.equal(canViewFullAnalysis(false), true);
 
     runtime.__DEV__ = false;
