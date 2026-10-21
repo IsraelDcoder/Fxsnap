@@ -1,8 +1,7 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
-  Linking,
   Platform,
   ScrollView,
   StyleSheet,
@@ -15,59 +14,111 @@ import { Feather } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useColors } from '@/hooks/useColors';
-import { sendSupportChatMessage, type SupportChatMessage } from '@/services/supportChat';
+import {
+  getSupportContext,
+  getSupportConversation,
+  sendSupportChatMessage,
+  subscribeToSupportConversation,
+  type SupportChatMessage,
+  type SupportTopic,
+} from '@/services/supportChat';
 
-const SUGGESTIONS = [
-  'How do I analyze a chart?',
-  'Help with my account',
-  'Question about subscriptions',
+const TOPICS: Array<{ id: SupportTopic; title: string; icon: React.ComponentProps<typeof Feather>['name'] }> = [
+  { id: 'account', title: 'Account', icon: 'user' },
+  { id: 'billing', title: 'Subscription', icon: 'credit-card' },
+  { id: 'analysis', title: 'Analysis', icon: 'bar-chart-2' },
+  { id: 'navigation', title: 'Using the app', icon: 'compass' },
+  { id: 'other', title: 'Other', icon: 'more-horizontal' },
 ];
+
+function formatMessageTime(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? ''
+    : new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(date);
+}
 
 export default function SupportChatScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const scrollRef = useRef<ScrollView>(null);
   const [messages, setMessages] = useState<SupportChatMessage[]>([]);
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [conversationStatus, setConversationStatus] = useState<string | null>(null);
+  const [topic, setTopic] = useState<SupportTopic>('other');
   const [draft, setDraft] = useState('');
+  const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
+
+  const loadConversation = useCallback(async (showError = true) => {
+    try {
+      const result = await getSupportConversation();
+      setMessages((current) => {
+        const currentLatest = current[current.length - 1]?.id;
+        const nextLatest = result.messages[result.messages.length - 1]?.id;
+        if (currentLatest && currentLatest === nextLatest && current.length === result.messages.length) return current;
+        return result.messages;
+      });
+      setConversationId(result.conversation?.id ?? null);
+      setConversationStatus(result.conversation?.status ?? null);
+      if (result.conversation?.topic) setTopic(result.conversation.topic);
+      setError('');
+    } catch (loadError) {
+      if (showError) setError(loadError instanceof Error ? loadError.message : 'Could not load your private support conversation.');
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadConversation();
+    const interval = setInterval(() => { void loadConversation(false); }, 5000);
+    return () => clearInterval(interval);
+  }, [loadConversation]);
+
+  useEffect(() => {
+    if (!conversationId) return undefined;
+    try {
+      return subscribeToSupportConversation(conversationId, () => { void loadConversation(false); });
+    } catch (subscriptionError) {
+      console.error('[Support] Could not start realtime updates; polling fallback remains active.', subscriptionError);
+      return undefined;
+    }
+  }, [conversationId, loadConversation]);
 
   useEffect(() => {
     scrollRef.current?.scrollToEnd({ animated: true });
-  }, [messages, sending, error]);
+  }, [messages, sending]);
 
-  const requestReply = async (conversation: SupportChatMessage[]) => {
+  const sendMessage = async () => {
+    const content = draft.trim();
+    if (!content || sending) return;
     setSending(true);
     setError('');
     try {
-      const reply = await sendSupportChatMessage(conversation);
-      setMessages((current) => [...current, { role: 'assistant', content: reply }]);
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'Could not send your message. Please try again.');
+      const result = await sendSupportChatMessage(content, topic, getSupportContext());
+      setMessages((current) => result.duplicate || current.some((message) => message.id === result.message.id)
+        ? current
+        : [...current, result.message]);
+      setConversationStatus('open');
+      setDraft('');
+      await loadConversation(false);
+    } catch (sendError) {
+      setError(sendError instanceof Error ? sendError.message : 'Could not send your message. Please try again.');
     } finally {
       setSending(false);
     }
   };
 
-  const sendMessage = async (text = draft) => {
-    const content = text.trim();
-    if (!content || sending) return;
-    const nextMessages = [...messages, { role: 'user' as const, content }];
-    setMessages(nextMessages);
-    setDraft('');
-    await requestReply(nextMessages);
+  const goBack = () => {
+    if (router.canGoBack()) router.back();
+    else router.replace('/home');
   };
 
-  const retry = () => {
-    if (sending || messages[messages.length - 1]?.role !== 'user') return;
-    void requestReply(messages);
-  };
-
-  const contactByEmail = () => {
-    void Linking.openURL(`mailto:${process.env.EXPO_PUBLIC_SUPPORT_EMAIL || 'support@fxsnap.app'}`).catch(() => {
-      setError(`Unable to open email. Contact ${process.env.EXPO_PUBLIC_SUPPORT_EMAIL || 'support@fxsnap.app'} directly.`);
-    });
-  };
+  const isNewConversation = messages.length === 0;
 
   return (
     <KeyboardAvoidingView
@@ -77,10 +128,7 @@ export default function SupportChatScreen() {
     >
       <View style={[styles.header, { paddingTop: insets.top + 8, borderBottomColor: colors.cardBorder }]}>
         <TouchableOpacity
-          onPress={() => {
-            if (router.canGoBack()) router.back();
-            else router.replace('/home');
-          }}
+          onPress={goBack}
           style={[styles.headerButton, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}
           accessibilityRole="button"
           accessibilityLabel="Go back"
@@ -89,124 +137,150 @@ export default function SupportChatScreen() {
         </TouchableOpacity>
         <View style={styles.headerCenter}>
           <View style={styles.avatar}>
-            <Feather name="headphones" size={18} color={colors.primaryForeground} />
+            <Feather name="headphones" size={18} color="#FFFFFF" />
             <View style={[styles.onlineDot, { borderColor: colors.background }]} />
           </View>
           <View>
-            <Text style={[styles.headerTitle, { color: colors.text }]}>Customer Care</Text>
-            <Text style={[styles.headerSubtitle, { color: colors.textSecondary }]}>FXSnap AI assistant</Text>
+            <Text style={[styles.headerTitle, { color: colors.text }]}>FXSnap Support</Text>
+            <Text style={[styles.headerSubtitle, { color: colors.textSecondary }]}>Private conversation</Text>
           </View>
         </View>
         <TouchableOpacity
-          onPress={contactByEmail}
+          onPress={() => { setRefreshing(true); void loadConversation(); }}
           style={[styles.headerButton, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}
           accessibilityRole="button"
-          accessibilityLabel="Email customer support"
+          accessibilityLabel="Refresh support messages"
         >
-          <Feather name="mail" size={17} color={colors.text} />
+          <Feather name="refresh-cw" size={16} color={colors.text} />
         </TouchableOpacity>
+      </View>
+
+      <View style={[styles.privacyBanner, { backgroundColor: `${colors.buy}10`, borderBottomColor: `${colors.buy}22` }]}>
+        <Feather name="lock" size={13} color={colors.buy} />
+        <Text style={[styles.privacyText, { color: colors.textSecondary }]}>Only you and authorized FXSnap support staff can see this chat.</Text>
       </View>
 
       <ScrollView
         ref={scrollRef}
         style={styles.conversation}
-        contentContainerStyle={styles.conversationContent}
+        contentContainerStyle={[styles.conversationContent, messages.length === 0 && styles.emptyContent]}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        {messages.length === 0 ? (
+        {loading ? (
+          <View style={styles.loadingState}>
+            <ActivityIndicator color={colors.buy} />
+            <Text style={[styles.emptyCopy, { color: colors.textSecondary }]}>Opening your private inbox…</Text>
+          </View>
+        ) : isNewConversation ? (
           <View style={styles.welcome}>
-            <View style={[styles.welcomeIcon, { backgroundColor: `${colors.buy}20` }]}>
-              <Feather name="message-circle" size={26} color={colors.buy} />
+            <View style={[styles.welcomeIcon, { backgroundColor: `${colors.buy}18` }]}>
+              <Feather name="message-circle" size={25} color={colors.buy} />
             </View>
-            <Text style={[styles.welcomeTitle, { color: colors.text }]}>Hi there! How can we help?</Text>
+            <Text style={[styles.welcomeTitle, { color: colors.text }]}>How can we help?</Text>
             <Text style={[styles.welcomeCopy, { color: colors.textSecondary }]}>
-              Ask me about using FXSnap, chart analysis, your account, or subscriptions. For private account or billing actions, I can help connect you with our support team.
+              Start a private conversation with our support team. Replies and your message history stay here in FXSnap.
             </Text>
-            <View style={styles.suggestions}>
-              {SUGGESTIONS.map((suggestion) => (
+            <Text style={[styles.topicHeading, { color: colors.text }]}>Choose a topic</Text>
+            <View style={styles.topicList}>
+              {TOPICS.map((item) => (
                 <TouchableOpacity
-                  key={suggestion}
-                  onPress={() => void sendMessage(suggestion)}
-                  disabled={sending}
-                  style={[styles.suggestion, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}
-                  accessibilityRole="button"
+                  key={item.id}
+                  onPress={() => setTopic(item.id)}
+                  style={[
+                    styles.topicChip,
+                    {
+                      backgroundColor: topic === item.id ? `${colors.buy}14` : colors.card,
+                      borderColor: topic === item.id ? colors.buy : colors.cardBorder,
+                    },
+                  ]}
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected: topic === item.id }}
                 >
-                  <Text style={[styles.suggestionText, { color: colors.text }]}>{suggestion}</Text>
-                  <Feather name="arrow-up-right" size={14} color={colors.buy} />
+                  <Feather name={item.icon} size={14} color={topic === item.id ? colors.buy : colors.textSecondary} />
+                  <Text style={[styles.topicLabel, { color: topic === item.id ? colors.text : colors.textSecondary }]}>{item.title}</Text>
                 </TouchableOpacity>
               ))}
             </View>
           </View>
         ) : (
-          messages.map((message, index) => {
-            const isUser = message.role === 'user';
-            return (
-              <View key={`${index}-${message.role}`} style={[styles.messageRow, isUser && styles.userMessageRow]}>
-                {!isUser ? (
-                  <View style={[styles.messageAvatar, { backgroundColor: `${colors.buy}20` }]}>
-                    <Feather name="headphones" size={14} color={colors.buy} />
-                  </View>
-                ) : null}
-                <View style={[
-                  styles.messageBubble,
-                  isUser
-                    ? { backgroundColor: colors.buy }
-                    : { backgroundColor: colors.card, borderColor: colors.cardBorder },
-                ]}>
-                  <Text style={[styles.messageText, { color: isUser ? colors.primaryForeground : colors.text }]}>{message.content}</Text>
+          <>
+            <View style={styles.conversationMeta}>
+              <Text style={[styles.conversationDate, { color: colors.textMuted }]}>This conversation is private</Text>
+              {conversationStatus ? (
+                <View style={[styles.statusPill, { backgroundColor: `${colors.buy}12` }]}>
+                  <View style={[styles.statusDot, { backgroundColor: conversationStatus === 'resolved' ? colors.textMuted : colors.buy }]} />
+                  <Text style={[styles.statusText, { color: colors.textSecondary }]}>{conversationStatus === 'resolved' ? 'Resolved' : conversationStatus === 'pending' ? 'Awaiting support' : 'Open'}</Text>
                 </View>
-              </View>
-            );
-          })
+              ) : null}
+            </View>
+            {messages.map((message) => {
+              const isMember = message.sender_kind === 'member';
+              return (
+                <View key={message.id} style={[styles.messageRow, isMember && styles.memberMessageRow]}>
+                  {!isMember ? (
+                    <View style={[styles.messageAvatar, { backgroundColor: `${colors.buy}20` }]}>
+                      <Feather name="headphones" size={13} color={colors.buy} />
+                    </View>
+                  ) : null}
+                  <View style={styles.messageColumn}>
+                    {!isMember ? <Text style={[styles.senderLabel, { color: colors.buy }]}>FXSNAP SUPPORT</Text> : null}
+                    <View style={[
+                      styles.messageBubble,
+                      isMember
+                        ? { backgroundColor: colors.buy, borderBottomRightRadius: 5 }
+                        : { backgroundColor: colors.card, borderColor: colors.cardBorder },
+                    ]}>
+                      <Text style={[styles.messageText, { color: isMember ? colors.primaryForeground : colors.text }]}>{message.body}</Text>
+                    </View>
+                    <Text style={[styles.messageTime, { color: colors.textMuted, textAlign: isMember ? 'right' : 'left' }]}>
+                      {formatMessageTime(message.created_at)}
+                    </Text>
+                  </View>
+                </View>
+              );
+            })}
+          </>
         )}
-        {sending ? (
-          <View style={styles.typingRow}>
-            <View style={[styles.messageAvatar, { backgroundColor: `${colors.buy}20` }]}>
-              <Feather name="headphones" size={14} color={colors.buy} />
-            </View>
-            <View style={[styles.typingBubble, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
-              <ActivityIndicator size="small" color={colors.buy} />
-              <Text style={[styles.typingText, { color: colors.textSecondary }]}>Customer Care is replying…</Text>
-            </View>
-          </View>
-        ) : null}
         {error ? (
           <View style={[styles.errorBox, { backgroundColor: `${colors.sell}12`, borderColor: `${colors.sell}55` }]}>
+            <Feather name="alert-circle" size={15} color={colors.sell} />
             <Text style={[styles.errorText, { color: colors.sell }]}>{error}</Text>
-            <TouchableOpacity onPress={retry} accessibilityRole="button">
-              <Text style={[styles.retryText, { color: colors.sell }]}>Try again</Text>
-            </TouchableOpacity>
           </View>
         ) : null}
-        <Text style={[styles.disclaimer, { color: colors.textMuted }]}>AI assistant · Never share passwords or payment details</Text>
       </ScrollView>
 
       <View style={[styles.composerWrap, { paddingBottom: Math.max(insets.bottom, 12), borderTopColor: colors.cardBorder, backgroundColor: colors.background }]}>
+        {isNewConversation && !loading ? (
+          <Text style={[styles.topicSelectedLabel, { color: colors.textMuted }]}>
+            Topic: {TOPICS.find((item) => item.id === topic)?.title}
+          </Text>
+        ) : null}
         <View style={[styles.composer, { backgroundColor: colors.input, borderColor: colors.cardBorder }]}>
           <TextInput
             value={draft}
             onChangeText={setDraft}
-            placeholder="Message Customer Care…"
+            placeholder="Write a private message…"
             placeholderTextColor={colors.textMuted}
             style={[styles.input, { color: colors.text }]}
             multiline
-            maxLength={1500}
-            editable={!sending}
+            maxLength={2000}
+            editable={!loading && !sending}
             onSubmitEditing={() => void sendMessage()}
             blurOnSubmit={false}
-            accessibilityLabel="Message Customer Care"
+            accessibilityLabel="Private support message"
           />
           <TouchableOpacity
             onPress={() => void sendMessage()}
-            disabled={sending || !draft.trim()}
-            style={[styles.sendButton, { backgroundColor: colors.buy, opacity: sending || !draft.trim() ? 0.48 : 1 }]}
+            disabled={sending || loading || !draft.trim()}
+            style={[styles.sendButton, { backgroundColor: colors.buy, opacity: sending || loading || !draft.trim() ? 0.48 : 1 }]}
             accessibilityRole="button"
-            accessibilityLabel="Send message"
+            accessibilityLabel="Send private support message"
           >
-            <Feather name="arrow-up" size={19} color={colors.primaryForeground} />
+            {sending ? <ActivityIndicator size="small" color={colors.primaryForeground} /> : <Feather name="arrow-up" size={19} color={colors.primaryForeground} />}
           </TouchableOpacity>
         </View>
+        <Text style={[styles.disclaimer, { color: colors.textMuted }]}>Never send passwords, full card numbers, or verification codes.</Text>
       </View>
     </KeyboardAvoidingView>
   );
@@ -221,29 +295,40 @@ const styles = StyleSheet.create({
   onlineDot: { position: 'absolute', width: 10, height: 10, right: -2, bottom: -2, borderRadius: 5, borderWidth: 2, backgroundColor: '#2DB77A' },
   headerTitle: { fontSize: 14, fontFamily: 'Inter_700Bold' },
   headerSubtitle: { marginTop: 2, fontSize: 10, fontFamily: 'Inter_400Regular' },
+  privacyBanner: { minHeight: 34, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, paddingHorizontal: 12, borderBottomWidth: StyleSheet.hairlineWidth },
+  privacyText: { fontSize: 9, fontFamily: 'Inter_500Medium' },
   conversation: { flex: 1 },
-  conversationContent: { paddingHorizontal: 18, paddingTop: 20, paddingBottom: 22, flexGrow: 1 },
-  welcome: { flex: 1, justifyContent: 'center', paddingBottom: 22 },
-  welcomeIcon: { width: 56, height: 56, borderRadius: 19, alignItems: 'center', justifyContent: 'center', marginBottom: 18 },
-  welcomeTitle: { fontSize: 22, lineHeight: 28, fontFamily: 'Inter_700Bold' },
-  welcomeCopy: { marginTop: 8, fontSize: 13, lineHeight: 20, fontFamily: 'Inter_400Regular' },
-  suggestions: { gap: 9, marginTop: 22 },
-  suggestion: { minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, borderWidth: 1, borderRadius: 15, paddingHorizontal: 14 },
-  suggestionText: { flex: 1, fontSize: 12, fontFamily: 'Inter_500Medium' },
-  messageRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, marginBottom: 14, paddingRight: 28 },
-  userMessageRow: { justifyContent: 'flex-end', paddingRight: 0, paddingLeft: 38 },
-  messageAvatar: { width: 28, height: 28, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
-  messageBubble: { maxWidth: '88%', borderWidth: 1, borderRadius: 18, borderBottomLeftRadius: 5, paddingVertical: 11, paddingHorizontal: 13 },
-  messageText: { fontSize: 13, lineHeight: 19, fontFamily: 'Inter_400Regular' },
-  typingRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 },
-  typingBubble: { minHeight: 42, flexDirection: 'row', alignItems: 'center', gap: 9, borderWidth: 1, borderRadius: 15, paddingHorizontal: 12 },
-  typingText: { fontSize: 11, fontFamily: 'Inter_400Regular' },
-  errorBox: { borderWidth: 1, borderRadius: 12, padding: 12, marginBottom: 10, gap: 8 },
-  errorText: { fontSize: 12, lineHeight: 17, fontFamily: 'Inter_400Regular' },
-  retryText: { fontSize: 12, fontFamily: 'Inter_700Bold' },
-  disclaimer: { marginTop: 8, fontSize: 9, textAlign: 'center', fontFamily: 'Inter_400Regular' },
+  conversationContent: { paddingHorizontal: 18, paddingTop: 15, paddingBottom: 22, flexGrow: 1 },
+  emptyContent: { justifyContent: 'center' },
+  loadingState: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 10 },
+  welcome: { flex: 1, justifyContent: 'center', paddingVertical: 20 },
+  welcomeIcon: { width: 54, height: 54, borderRadius: 19, alignItems: 'center', justifyContent: 'center', marginBottom: 15 },
+  welcomeTitle: { fontSize: 23, lineHeight: 29, fontFamily: 'Inter_700Bold' },
+  welcomeCopy: { marginTop: 8, fontSize: 12, lineHeight: 19, fontFamily: 'Inter_400Regular' },
+  topicHeading: { marginTop: 21, marginBottom: 9, fontSize: 11, fontFamily: 'Inter_700Bold' },
+  topicList: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  topicChip: { minHeight: 37, flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 11, borderWidth: 1, borderRadius: 13 },
+  topicLabel: { fontSize: 10, fontFamily: 'Inter_600SemiBold' },
+  conversationMeta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 },
+  conversationDate: { fontSize: 9, fontFamily: 'Inter_400Regular' },
+  statusPill: { minHeight: 24, flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 8, borderRadius: 10 },
+  statusDot: { width: 5, height: 5, borderRadius: 3 },
+  statusText: { fontSize: 9, fontFamily: 'Inter_600SemiBold' },
+  messageRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 7, marginBottom: 13, paddingRight: 25 },
+  memberMessageRow: { justifyContent: 'flex-end', paddingRight: 0, paddingLeft: 32 },
+  messageAvatar: { width: 26, height: 26, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
+  messageColumn: { maxWidth: '88%' },
+  senderLabel: { marginBottom: 4, fontSize: 7, letterSpacing: 0.6, fontFamily: 'Inter_700Bold' },
+  messageBubble: { borderWidth: 1, borderRadius: 17, borderBottomLeftRadius: 5, paddingVertical: 10, paddingHorizontal: 12 },
+  messageText: { fontSize: 12, lineHeight: 18, fontFamily: 'Inter_400Regular' },
+  messageTime: { marginTop: 4, fontSize: 8, fontFamily: 'Inter_400Regular' },
+  emptyCopy: { textAlign: 'center', fontSize: 11, fontFamily: 'Inter_400Regular' },
+  errorBox: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, borderWidth: 1, borderRadius: 12, padding: 11, marginTop: 10 },
+  errorText: { flex: 1, fontSize: 10, lineHeight: 15, fontFamily: 'Inter_400Regular' },
+  topicSelectedLabel: { marginBottom: 7, fontSize: 9, fontFamily: 'Inter_500Medium' },
   composerWrap: { paddingHorizontal: 14, paddingTop: 11, borderTopWidth: StyleSheet.hairlineWidth },
   composer: { minHeight: 50, maxHeight: 130, flexDirection: 'row', alignItems: 'flex-end', borderWidth: 1, borderRadius: 18, padding: 5 },
-  input: { flex: 1, maxHeight: 114, minHeight: 38, paddingHorizontal: 10, paddingVertical: 9, fontSize: 13, lineHeight: 19, fontFamily: 'Inter_400Regular' },
+  input: { flex: 1, maxHeight: 114, minHeight: 38, paddingHorizontal: 10, paddingVertical: 9, fontSize: 12, lineHeight: 18, fontFamily: 'Inter_400Regular' },
   sendButton: { width: 38, height: 38, borderRadius: 13, alignItems: 'center', justifyContent: 'center' },
+  disclaimer: { marginTop: 7, textAlign: 'center', fontSize: 8, fontFamily: 'Inter_400Regular' },
 });

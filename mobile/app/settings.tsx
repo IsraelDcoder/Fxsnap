@@ -37,6 +37,7 @@ import {
   type NotificationPreferences,
 } from '@/services/notifications';
 import { getSystemAnnouncementAdminAccess } from '@/services/community';
+import { getSupportAdminAccess } from '@/services/supportChat';
 
 type ThemeMode = 'light' | 'dark' | 'system';
 type SettingsIcon = React.ComponentProps<typeof Feather>['name'];
@@ -76,6 +77,7 @@ export default function SettingsScreen() {
   const [accountBusy, setAccountBusy] = useState(false);
   const [accountError, setAccountError] = useState<string | null>(null);
   const [systemAnnouncementAdmin, setSystemAnnouncementAdmin] = useState(false);
+  const [supportInboxAdmin, setSupportInboxAdmin] = useState(false);
   const [subscriptionDetails, setSubscriptionDetails] = useState<SubscriptionDetails | null>(null);
   const [subscriptionLoading, setSubscriptionLoading] = useState(true);
   const [subscriptionError, setSubscriptionError] = useState<string | null>(null);
@@ -132,6 +134,7 @@ export default function SettingsScreen() {
     let active = true;
     if (!account) {
       setSystemAnnouncementAdmin(false);
+      setSupportInboxAdmin(false);
       return () => { active = false; };
     }
     void getSystemAnnouncementAdminAccess()
@@ -139,6 +142,12 @@ export default function SettingsScreen() {
       .catch((error: unknown) => {
         console.error('[Settings] Could not check system announcement admin access.', error);
         if (active) setSystemAnnouncementAdmin(false);
+      });
+    void getSupportAdminAccess()
+      .then((access) => { if (active) setSupportInboxAdmin(access.allowed); })
+      .catch((error: unknown) => {
+        console.error('[Settings] Could not check support inbox admin access.', error);
+        if (active) setSupportInboxAdmin(false);
       });
     return () => { active = false; };
   }, [account]);
@@ -261,7 +270,7 @@ export default function SettingsScreen() {
     });
   };
 
-  const openHelpAndSupport = () => Alert.alert('Coming soon', 'Help & Support will be available in a future update.');
+  const openHelpAndSupport = () => router.push('/support-chat');
 
   const openSubscriptionOptions = async () => {
     if (!isSubscribed && subscriptionDetails?.status !== 'active') {
@@ -612,7 +621,7 @@ export default function SettingsScreen() {
             disabled={notificationsLoading || notificationsBusy || !notificationPreferences.enabled}
             colors={colors}
             onValueChange={(systemAnnouncements) => void changeNotificationPreferences({ systemAnnouncements })}
-            last={!systemAnnouncementAdmin}
+            last={!systemAnnouncementAdmin && !supportInboxAdmin}
           />
           {notificationsLoading ? (
             <Text style={[styles.inlineMessage, { color: colors.textSecondary }]}>Loading notification preferences…</Text>
@@ -629,6 +638,15 @@ export default function SettingsScreen() {
               label="System announcement admin"
               colors={colors}
               onPress={() => router.push({ pathname: '/community-admin', params: { tab: 'announcements', systemOnly: 'true' } })}
+              last={!supportInboxAdmin}
+            />
+          ) : null}
+          {supportInboxAdmin ? (
+            <SettingsRow
+              icon="inbox"
+              label="Customer support inbox"
+              colors={colors}
+              onPress={() => router.push('/support-admin')}
               last
             />
           ) : null}

@@ -33,6 +33,7 @@ loadEnvFile();
 const { z } = require('zod');
 const persistentStore = require('./persistentStore');
 const { createCommunityApi } = require('./communityApi');
+const { createSupportInboxApi } = require('./supportInboxApi');
 const { getMaximumScreenshotAgeMinutes } = require('./strategyConfig');
 const {
   createAccountAuth,
@@ -103,12 +104,6 @@ const StrategyResponseSchema = z.object({
   const required = ['Entry rules', 'Stop loss', 'Take profit', 'Risk management', 'When not to trade'];
   const titles = value.sections.map((section) => section.title);
   if (new Set(titles).size !== required.length || required.some((title) => !titles.includes(title))) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'AI response must contain the five required strategy sections.' });
-});
-const SupportChatInputSchema = z.object({
-  messages: z.array(z.object({
-    role: z.enum(['user', 'assistant']),
-    content: z.string().trim().min(1).max(1500),
-  })).min(1).max(12),
 });
 const ANALYSIS_STATUS = ['success', 'no_trade', 'invalid_image', 'ai_unavailable', 'ai_invalid_response'];
 const DEFAULT_CHART = {
@@ -3209,56 +3204,6 @@ async function generateStrategy(req, res) {
   }
 }
 
-async function generateSupportChatReply(req, res) {
-  const deviceId = requireAuth(req, res);
-  if (!deviceId) return;
-  if (!(await allowRequest(req, deviceId))) return sendJson(res, 429, { error: 'Too many requests. Please wait a moment and try again.' });
-  if (!process.env.OPENROUTER_API_KEY || process.env.OPENROUTER_API_KEY.startsWith('replace_')) {
-    return sendJson(res, 503, { error: 'Customer care AI is not configured right now. Please contact support@fxsnap.app.' });
-  }
-
-  try {
-    const inputResult = SupportChatInputSchema.safeParse(await readJsonBody(req));
-    if (!inputResult.success) return sendJson(res, 400, { error: 'Enter a message to continue.' });
-    const baseUrl = (process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/$/, '');
-    const response = await fetchWithTimeout(`${baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
-        'HTTP-Referer': process.env.OPENROUTER_SITE_URL || 'https://fxsnap.vercel.app',
-        'X-Title': process.env.OPENROUTER_APP_NAME || 'FXSnap',
-      },
-      body: JSON.stringify({
-        model: process.env.OPENROUTER_MODEL || 'openai/gpt-4o-mini',
-        temperature: 0.4,
-        max_tokens: 600,
-        messages: [
-          {
-            role: 'system',
-            content: 'You are FXSnap Customer Care, a friendly AI support assistant inside the FXSnap trading app. Help users understand app features, navigation, subscriptions, sign-in, and common troubleshooting. Keep replies concise, empathetic, and practical. Never claim to have checked or changed a user account, payment, subscription, or analysis. Do not give personalized financial advice or promise trading outcomes. If the request needs account access, billing action, or a human decision, explain that you cannot perform it and direct the user to support@fxsnap.app. Make clear when information may be uncertain.',
-          },
-          ...inputResult.data.messages,
-        ],
-      }),
-    });
-    const payload = await response.json();
-    if (!response.ok) {
-      console.error('[Support Chat] Provider request failed:', response.status);
-      return sendJson(res, 502, { error: 'Customer care AI is temporarily unavailable. Please try again.' });
-    }
-    const content = payload.choices?.[0]?.message?.content;
-    if (typeof content !== 'string' || !content.trim()) {
-      console.error('[Support Chat] Provider returned an empty reply.');
-      return sendJson(res, 502, { error: 'Customer care AI could not prepare a reply. Please try again.' });
-    }
-    return sendJson(res, 200, { reply: content.trim().slice(0, 3000) });
-  } catch (error) {
-    console.error('[Support Chat] Request failed:', error?.name || 'Unknown error');
-    return sendJson(res, 502, { error: 'Customer care AI is temporarily unavailable. Please try again.' });
-  }
-}
-
 async function allowRequest(req, deviceId) {
   const ip = deviceId || req.socket.remoteAddress || 'unknown';
   const redisCount = await persistentStore.increment(`fxsnap:rate:${ip}`, 60);
@@ -4478,6 +4423,20 @@ const termsTemplate = fs.existsSync(TERMS_TEMPLATE_PATH) ? fs.readFileSync(TERMS
 const appName = getAppName();
 
 function createRequestHandler() {
+  const handleSupportInboxRequest = createSupportInboxApi({
+    getActor: async (req, res) => {
+      const actor = await getCommunityActor(req, res);
+      if (!actor) return null;
+      const adminIds = new Set((process.env.FXSNAP_COMMUNITY_ADMIN_SUPABASE_USER_IDS || '')
+        .split(',').map((id) => id.trim()).filter(Boolean));
+      return { ...actor, isAdmin: adminIds.has(actor.supabaseUserId) };
+    },
+    sendJson,
+    readJsonBody,
+    getPremiumStatus: getRevenueCatPremiumStatus,
+    notifyAdmins: () => require('./notificationService').sendSupportInboxNotification(),
+    notifyMember: (accountId) => require('./notificationService').sendSupportReplyNotification(accountId),
+  });
   const handleCommunityRequest = createCommunityApi({
     getActor: getCommunityActor,
     sendJson,
@@ -4490,6 +4449,11 @@ function createRequestHandler() {
 
     if (req.method === 'OPTIONS') return sendJson(res, 204, {});
     if (pathname === '/api/health' && req.method === 'GET') return sendJson(res, 200, { status: 'ok', service: 'fxsnap' });
+    if (pathname.startsWith('/api/support/') || pathname.startsWith('/api/admin/support/')) {
+      return Promise.resolve(handleSupportInboxRequest(req, res, url)).then((handled) => (
+        handled ? undefined : sendJson(res, 404, { error: 'Support endpoint not found.' })
+      ));
+    }
     if (pathname === '/api/session' && req.method === 'POST') {
       return readJsonBody(req).then((body) => {
         const deviceId = String(body.deviceId || '');
@@ -4591,7 +4555,7 @@ function createRequestHandler() {
     }
 
     if (pathname === '/api/strategy' && req.method === 'POST') return generateStrategy(req, res);
-    if (pathname === '/api/support-chat' && req.method === 'POST') return generateSupportChatReply(req, res);
+    if (pathname === '/api/support-chat') return sendJson(res, 410, { error: 'The automated support chat has been retired. Use the private in-app support conversation.' });
     // Market endpoints (demo/skeleton)
     if (pathname === '/market/quotes' && req.method === 'GET') {
       const symbolsParam = url.searchParams.get('symbols') || '';
@@ -4717,7 +4681,6 @@ function createRequestHandler() {
     if (pathname === '/api/signals' && req.method === 'POST') return recordSignal(req, res);
     if (pathname.startsWith('/api/signals/') && req.method === 'PATCH') return updateSignalOutcome(req, res);
     if (pathname === '/api/strategy' && req.method !== 'POST') return sendJson(res, 405, { error: 'POST required.' });
-    if (pathname === '/api/support-chat' && req.method !== 'POST') return sendJson(res, 405, { error: 'POST required.' });
 
     if (basePath && pathname.startsWith(basePath)) {
       pathname = pathname.slice(basePath.length) || '/';

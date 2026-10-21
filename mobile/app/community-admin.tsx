@@ -155,7 +155,7 @@ export default function CommunityAdminScreen() {
     }
   };
 
-  const setStatus = async (status: 'open' | 'in_progress' | 'resolved') => {
+  const setStatus = async (status: 'open' | 'pending' | 'resolved') => {
     if (!selected) return;
     setError('');
     try {
@@ -340,7 +340,7 @@ export default function CommunityAdminScreen() {
       {selected ? (
         <>
           <View style={styles.statusRow}>
-            {(['open', 'in_progress', 'resolved'] as const).map((status) => (
+            {(['open', 'pending', 'resolved'] as const).map((status) => (
               <TouchableOpacity
                 key={status}
                 onPress={() => void setStatus(status)}

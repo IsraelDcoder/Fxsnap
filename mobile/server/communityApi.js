@@ -1780,7 +1780,7 @@ function createCommunityApi({
           return sendJson(res, 200, { conversation, messages });
         }
         if (req.method === 'PATCH') {
-          const input = z.object({ status: z.enum(['open', 'in_progress', 'resolved']) }).safeParse(await readJsonBody(req));
+          const input = z.object({ status: z.enum(['open', 'pending', 'resolved']) }).safeParse(await readJsonBody(req));
           if (!input.success) return sendJson(res, 400, { error: 'Invalid support conversation state.' });
           await patchRows('fxsnap_support_conversations', `id=eq.${encodeURIComponent(conversationId)}`, {
             status: input.data.status,
@@ -1807,12 +1807,6 @@ function createCommunityApi({
           status: conversation.status === 'resolved' ? 'open' : conversation.status,
           updated_at: new Date().toISOString(),
         });
-        await insertRows('fxsnap_community_notifications', {
-          recipient_account_id: conversation.account_id,
-          kind: 'support_reply',
-          message: 'FXSnap Support replied to your private conversation.',
-          object_id: conversation.id,
-        }, 'return=minimal');
         return sendJson(res, 201, { message: inserted[0], duplicate: false });
       }
 

@@ -17,6 +17,8 @@ export type NotificationRoute =
   | '/events'
   | '/profile'
   | '/community-notifications'
+  | '/support-admin'
+  | '/support-chat'
   | '/system-announcement'
   | '/';
 export type NotificationTarget = NotificationRoute | {
@@ -120,6 +122,10 @@ export async function requestAndRegisterPushNotifications(preferences?: Notifica
       name: 'System announcements',
       importance: Notifications.AndroidImportance.HIGH,
     });
+    await Notifications.setNotificationChannelAsync('fxsnap-support', {
+      name: 'Private support',
+      importance: Notifications.AndroidImportance.HIGH,
+    });
   }
   const projectId = Constants.easConfig?.projectId ?? Constants.expoConfig?.extra?.eas?.projectId;
   if (!projectId) throw new Error('Expo project ID is missing from app configuration.');
@@ -203,7 +209,8 @@ function getNotificationTarget(data: Record<string, unknown> | undefined): Notif
 export function getNotificationRoute(data: Record<string, unknown> | undefined): NotificationRoute | null {
   const route = data?.route;
   if (route === '/daily-brief' || route === '/analysis' || route === '/saved' || route === '/community'
-    || route === '/events' || route === '/profile' || route === '/community-notifications'
+    || route === '/events' || route === '/profile' || route === '/community-notifications' || route === '/support-admin'
+    || route === '/support-chat'
     || route === '/system-announcement' || route === '/') return route;
   return null;
 }

@@ -561,7 +561,7 @@ export interface CommunityAdminConversation {
   id: string;
   account_id: string;
   username: string;
-  status: 'open' | 'in_progress' | 'resolved';
+  status: 'open' | 'pending' | 'resolved';
   created_at: string;
   updated_at: string;
 }
@@ -590,7 +590,7 @@ export async function getCommunityAdminSupportInbox() {
 
 export async function getCommunityAdminConversation(id: string) {
   return request<{
-    conversation: { id: string; account_id: string; status: 'open' | 'in_progress' | 'resolved' };
+    conversation: { id: string; account_id: string; status: 'open' | 'pending' | 'resolved' };
     messages: Array<CommunitySupportMessage & { sender_account_id: string }>;
   }>(`/api/admin/community/support/${encodeURIComponent(id)}`);
 }
@@ -602,7 +602,7 @@ export async function sendCommunityAdminReply(id: string, body: string, clientMe
   );
 }
 
-export async function setCommunitySupportStatus(id: string, status: 'open' | 'in_progress' | 'resolved') {
+export async function setCommunitySupportStatus(id: string, status: 'open' | 'pending' | 'resolved') {
   return request<{ updated: boolean }>(`/api/admin/community/support/${encodeURIComponent(id)}`, {
     method: 'PATCH',
     body: JSON.stringify({ status }),
