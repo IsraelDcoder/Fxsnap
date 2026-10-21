@@ -331,17 +331,29 @@ function createEventSpacesApi({ getActor, sendJson, readJsonBody, livekit = crea
       }
       const roomName = space.livekit_room_name || `fxsnap-event-${space.id.replaceAll('-', '')}`;
       await livekit.createRoom(roomName, { eventSpaceId: space.id });
-      const rows = await database(`fxsnap_event_spaces?id=eq.${space.id}`, {
-        method: 'PATCH',
-        prefer: 'return=representation',
-        body: {
-          status: 'live',
-          livekit_room_name: roomName,
-          actual_started_at: now,
-          updated_at: now,
-        },
-      });
-      return Array.isArray(rows) ? rows[0] : null;
+      try {
+        const rows = await database(`fxsnap_event_spaces?id=eq.${space.id}`, {
+          method: 'PATCH',
+          prefer: 'return=representation',
+          body: {
+            status: 'live',
+            livekit_room_name: roomName,
+            actual_started_at: now,
+            updated_at: now,
+          },
+        });
+        if (!Array.isArray(rows) || !rows[0]) {
+          throw Object.assign(new Error('The LiveKit room started, but the event status could not be updated.'), { status: 502 });
+        }
+        return rows[0];
+      } catch (error) {
+        try {
+          await livekit.deleteRoom(roomName);
+        } catch (cleanupError) {
+          console.error('[Events] LiveKit room cleanup after a failed start was unsuccessful.', cleanupError instanceof Error ? cleanupError.message : 'Unknown error.');
+        }
+        throw error;
+      }
     }
     if (action === 'end_live') {
       if (space.status !== 'live') {
@@ -488,6 +500,39 @@ function createEventSpacesApi({ getActor, sendJson, readJsonBody, livekit = crea
           },
         });
         return sendJson(res, 201, { space: Array.isArray(rows) ? rows[0] : null });
+      }
+      if (pathname === '/api/admin/event-spaces/go-live' && req.method === 'POST') {
+        const parsed = spaceInput.safeParse(await readJsonBody(req));
+        if (!parsed.success) return sendJson(res, 400, { error: 'Check the required space details and try again.' });
+        const input = { ...parsed.data, status: 'draft', scheduledAt: null, waitingRoomOpensAt: null };
+        validateSchedule(input);
+        const host = await resolveHost(input.hostAccountId, actor);
+        const createdRows = await database('fxsnap_event_spaces', {
+          method: 'POST',
+          prefer: 'return=representation',
+          body: {
+            title: input.title,
+            description: input.description,
+            topic: input.topic,
+            visibility: input.visibility,
+            status: 'waiting_room_open',
+            host_account_id: host.accountId,
+            host_name: host.name,
+            host_picture_url: host.pictureUrl,
+            scheduled_at: null,
+            timezone: input.timezone,
+            waiting_room_opens_at: new Date().toISOString(),
+            duration_minutes: input.durationMinutes ?? null,
+            allow_speaking_requests: input.allowSpeakingRequests,
+            comments_enabled: input.commentsEnabled,
+            featured: input.featured,
+            created_by_account_id: actor.accountId,
+          },
+        });
+        const created = Array.isArray(createdRows) ? createdRows[0] : null;
+        if (!created) return sendJson(res, 502, { error: 'Could not create the event space.' });
+        const space = await transitionLiveState(created, 'start_live');
+        return sendJson(res, 201, { space });
       }
 
       const match = pathname.match(/^\/api\/admin\/event-spaces\/([0-9a-f-]+)$/i);

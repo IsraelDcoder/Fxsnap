@@ -1,9 +1,18 @@
 const { z } = require('zod');
+const crypto = require('node:crypto');
 const persistentStore = require('./persistentStore');
 
-const MESSAGE_BODY = z.string().trim().min(1).max(2000);
+const MESSAGE_BODY = z.string().trim().max(2000);
 const MESSAGE_ID = z.string().uuid();
 const SUPPORT_TOPIC = z.enum(['account', 'billing', 'analysis', 'navigation', 'other']);
+const SUPPORT_MEDIA_BUCKET = 'fxsnap-support-media';
+const MAX_ATTACHMENT_BYTES = 3 * 1024 * 1024;
+const MAX_ATTACHMENT_BASE64_LENGTH = Math.ceil(MAX_ATTACHMENT_BYTES / 3) * 4;
+const IMAGE_TYPES = {
+  'image/jpeg': { extension: 'jpg', matches: (bytes) => bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff },
+  'image/png': { extension: 'png', matches: (bytes) => bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) },
+  'image/webp': { extension: 'webp', matches: (bytes) => bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP' },
+};
 
 class SupportInboxError extends Error {
   constructor(message, status = 500) {
@@ -32,7 +41,7 @@ function createSupportInboxApi({ getActor, sendJson, readJsonBody, getPremiumSta
         ...options,
         headers: {
           apikey: config.serviceKey,
-          authorization: `Bearer ${config.serviceKey}`,
+          authorization: 'Bearer ' + config.serviceKey,
           'content-type': 'application/json',
           ...(options.headers || {}),
         },
@@ -57,6 +66,92 @@ function createSupportInboxApi({ getActor, sendJson, readJsonBody, getPremiumSta
     }
     return payload;
   }
+
+  async function storage(path, options = {}) {
+    const config = getConfig();
+    if (!config.ready) throw new SupportInboxError('Private support storage is not configured.', 503);
+    let response;
+    try {
+      response = await fetch(`${config.supabaseUrl}/storage/v1/${path}`, {
+        ...options,
+        headers: {
+          apikey: config.serviceKey,
+          authorization: 'Bearer ' + config.serviceKey,
+          ...(options.headers || {}),
+        },
+      });
+    } catch {
+      throw new SupportInboxError('Private support media storage is temporarily unavailable. Please try again.', 502);
+    }
+    if (!response.ok) throw new SupportInboxError('Private support media could not be stored or loaded.', 502);
+    return response;
+  }
+
+  function storageObjectPath(path) {
+    return path.split('/').map(encodeURIComponent).join('/');
+  }
+
+  async function uploadAttachment(conversationId, base64, contentType) {
+    const imageType = IMAGE_TYPES[contentType];
+    if (!imageType || typeof base64 !== 'string' || base64.length > MAX_ATTACHMENT_BASE64_LENGTH
+      || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(base64)) {
+      throw new SupportInboxError('Choose a JPEG, PNG, or WebP image smaller than 3 MB.', 400);
+    }
+    const bytes = Buffer.from(base64, 'base64');
+    if (!bytes.length || bytes.length > MAX_ATTACHMENT_BYTES || !imageType.matches(bytes)) {
+      throw new SupportInboxError('This image is invalid or larger than 3 MB.', 400);
+    }
+    const path = `${conversationId}/${crypto.randomUUID()}.${imageType.extension}`;
+    await storage(`object/${SUPPORT_MEDIA_BUCKET}/${storageObjectPath(path)}`, {
+      method: 'POST',
+      headers: { 'content-type': contentType, 'x-upsert': 'false' },
+      body: bytes,
+    });
+    return path;
+  }
+
+  async function deleteAttachment(path) {
+    try {
+      await storage(`object/${SUPPORT_MEDIA_BUCKET}`, {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ prefixes: [path] }),
+      });
+    } catch (error) {
+      console.error('[Support Inbox] Orphaned attachment cleanup failed.', {
+        error: error instanceof Error ? error.message : 'Unknown storage error.',
+      });
+    }
+  }
+
+  async function withAttachmentUrl(message) {
+    if (!message.attachment_path) {
+      const { attachment_path: _, ...result } = message;
+      return result;
+    }
+    const response = await storage(
+      `object/sign/${SUPPORT_MEDIA_BUCKET}/${storageObjectPath(message.attachment_path)}`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ expiresIn: 3600 }),
+      },
+    );
+    const signed = await response.json();
+    const signedUrl = typeof signed.signedURL === 'string'
+      ? signed.signedURL.startsWith('http')
+        ? signed.signedURL
+        : `${getConfig().supabaseUrl}/storage/v1${signed.signedURL}`
+      : null;
+    if (!signedUrl) throw new SupportInboxError('Private support image could not be loaded.', 502);
+    const { attachment_path: _, ...result } = message;
+    const contentType = IMAGE_TYPES[message.attachment_content_type]
+      ? message.attachment_content_type
+      : 'image/jpeg';
+    return { ...result, attachment: { url: signedUrl, contentType } };
+  }
+
+  const withAttachmentUrls = (messages) => Promise.all(messages.map(withAttachmentUrl));
 
   const getRows = (table, query) => database(`${table}?${query}`);
   const insertRows = (table, body) => database(table, {
@@ -176,7 +271,7 @@ function createSupportInboxApi({ getActor, sendJson, readJsonBody, getPremiumSta
         });
         const messages = parseRows(await getRows(
           'fxsnap_support_messages',
-          `conversation_id=eq.${encodeURIComponent(conversation.id)}&select=id,sender_kind,body,created_at&order=created_at.asc&limit=500`,
+          `conversation_id=eq.${encodeURIComponent(conversation.id)}&select=id,sender_kind,body,created_at,attachment_path,attachment_content_type&order=created_at.asc&limit=500`,
         ));
         return sendJson(res, 200, {
           conversation: {
@@ -186,41 +281,63 @@ function createSupportInboxApi({ getActor, sendJson, readJsonBody, getPremiumSta
             created_at: conversation.created_at,
             updated_at: conversation.updated_at,
           },
-          messages,
+          messages: await withAttachmentUrls(messages),
         });
       }
 
       if (pathname === '/api/support/conversation/messages' && req.method === 'POST') {
         const input = z.object({
-          body: MESSAGE_BODY,
+          body: MESSAGE_BODY.optional(),
           clientMessageId: MESSAGE_ID,
           topic: SUPPORT_TOPIC.optional(),
           appVersion: z.string().trim().min(1).max(32),
           platform: z.enum(['ios', 'android', 'web', 'unknown']),
+          attachmentBase64: z.string().max(MAX_ATTACHMENT_BASE64_LENGTH).optional(),
+          attachmentContentType: z.enum(['image/jpeg', 'image/png', 'image/webp']).optional(),
         }).safeParse(await readJsonBody(req));
-        if (!input.success) return sendJson(res, 400, { error: 'Enter a message of 1–2,000 characters and valid app context.' });
+        if (!input.success || (!input.data.body?.trim() && !input.data.attachmentBase64)
+          || Boolean(input.data.attachmentBase64) !== Boolean(input.data.attachmentContentType)) {
+          return sendJson(res, 400, { error: 'Enter a message or attach a JPEG, PNG, or WebP image, and provide valid app context.' });
+        }
         const count = await persistentStore.increment(`fxsnap:support:rate:${actor.accountId}`, 3600);
         if (count > 20) return sendJson(res, 429, { error: 'You have sent several messages recently. Please wait before sending another.' });
         const existing = parseRows(await getRows(
           'fxsnap_support_messages',
-          `sender_account_id=eq.${encodeURIComponent(actor.accountId)}&client_message_id=eq.${encodeURIComponent(input.data.clientMessageId)}&select=id,conversation_id,sender_kind,body,created_at&limit=1`,
+          `sender_account_id=eq.${encodeURIComponent(actor.accountId)}&client_message_id=eq.${encodeURIComponent(input.data.clientMessageId)}&select=id,conversation_id,sender_kind,body,created_at,attachment_path,attachment_content_type&limit=1`,
         ));
-        if (existing.length) return sendJson(res, 200, { message: existing[0], duplicate: true });
+        if (existing.length) return sendJson(res, 200, { message: await withAttachmentUrl(existing[0]), duplicate: true });
         const conversation = await ensureConversation(actor, input.data);
-        const inserted = parseRows(await insertRows('fxsnap_support_messages', {
-          conversation_id: conversation.id,
-          sender_account_id: actor.accountId,
-          sender_kind: 'member',
-          body: input.data.body,
-          client_message_id: input.data.clientMessageId,
-        }));
-        if (!inserted.length) throw new SupportInboxError('Your message could not be confirmed. Retry safely.', 502);
-        await patchRows('fxsnap_support_conversations', `id=eq.${encodeURIComponent(conversation.id)}`, {
-          status: conversation.status === 'resolved' ? 'open' : conversation.status,
-          updated_at: inserted[0].created_at || new Date().toISOString(),
-        });
-        notifySupportAdmins(conversation.id);
-        return sendJson(res, 201, { message: inserted[0], duplicate: false });
+        let attachmentPath = null;
+        let messagePersisted = false;
+        try {
+          if (input.data.attachmentBase64 && input.data.attachmentContentType) {
+            attachmentPath = await uploadAttachment(
+              conversation.id,
+              input.data.attachmentBase64,
+              input.data.attachmentContentType,
+            );
+          }
+          const inserted = parseRows(await insertRows('fxsnap_support_messages', {
+            conversation_id: conversation.id,
+            sender_account_id: actor.accountId,
+            sender_kind: 'member',
+            body: input.data.body || '',
+            client_message_id: input.data.clientMessageId,
+            attachment_path: attachmentPath,
+            attachment_content_type: attachmentPath ? input.data.attachmentContentType : null,
+          }));
+          if (!inserted.length) throw new SupportInboxError('Your message could not be confirmed. Retry safely.', 502);
+          messagePersisted = true;
+          await patchRows('fxsnap_support_conversations', `id=eq.${encodeURIComponent(conversation.id)}`, {
+            status: conversation.status === 'resolved' ? 'open' : conversation.status,
+            updated_at: inserted[0].created_at || new Date().toISOString(),
+          });
+          notifySupportAdmins(conversation.id);
+          return sendJson(res, 201, { message: await withAttachmentUrl(inserted[0]), duplicate: false });
+        } catch (error) {
+          if (attachmentPath && !messagePersisted) await deleteAttachment(attachmentPath);
+          throw error;
+        }
       }
 
       if (adminCollection && req.method === 'GET') {
@@ -232,7 +349,7 @@ function createSupportInboxApi({ getActor, sendJson, readJsonBody, getPremiumSta
         const ids = conversations.map((item) => item.id).filter((id) => /^[0-9a-f-]{36}$/i.test(id));
         const messages = ids.length ? parseRows(await getRows(
           'fxsnap_support_messages',
-          `conversation_id=in.(${ids.map((id) => `"${id}"`).join(',')})&select=id,conversation_id,sender_kind,body,created_at&order=created_at.desc&limit=5000`,
+          `conversation_id=in.(${ids.map((id) => `"${id}"`).join(',')})&select=id,conversation_id,sender_kind,body,created_at,attachment_path&order=created_at.desc&limit=5000`,
         )) : [];
         const grouped = new Map();
         for (const message of messages) {
@@ -249,7 +366,7 @@ function createSupportInboxApi({ getActor, sendJson, readJsonBody, getPremiumSta
           )).length;
           return {
             ...conversation,
-            latest_message: newest?.body || '',
+            latest_message: newest?.attachment_path && !newest?.body ? 'Photo attachment' : newest?.body || '',
             latest_message_at: newest?.created_at || conversation.updated_at,
             unread_count: unreadCount,
             matches_message_search: Boolean(query) && conversationMessages.some((message) => message.body.toLowerCase().includes(query)),
@@ -274,9 +391,9 @@ function createSupportInboxApi({ getActor, sendJson, readJsonBody, getPremiumSta
         await patchRows('fxsnap_support_conversations', `id=eq.${encodeURIComponent(conversation.id)}`, { admin_last_read_at: now });
         const messages = parseRows(await getRows(
           'fxsnap_support_messages',
-          `conversation_id=eq.${encodeURIComponent(conversation.id)}&select=id,sender_account_id,sender_kind,body,created_at&order=created_at.asc&limit=500`,
+          `conversation_id=eq.${encodeURIComponent(conversation.id)}&select=id,sender_account_id,sender_kind,body,created_at,attachment_path,attachment_content_type&order=created_at.asc&limit=500`,
         ));
-        return sendJson(res, 200, { conversation, messages });
+        return sendJson(res, 200, { conversation, messages: await withAttachmentUrls(messages) });
       }
 
       if (adminMatch && req.method === 'PATCH') {

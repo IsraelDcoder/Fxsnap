@@ -13,6 +13,10 @@ export interface SupportChatMessage {
   sender_kind: 'member' | 'admin';
   body: string;
   created_at: string;
+  attachment?: {
+    url: string;
+    contentType: string;
+  };
 }
 
 export interface SupportConversation {
@@ -77,10 +81,25 @@ export function getSupportConversation() {
   return request<{ conversation: SupportConversation | null; messages: SupportChatMessage[] }>('/api/support/conversation');
 }
 
-export function sendSupportChatMessage(body: string, topic: SupportTopic, context: SupportContext, clientMessageId = newId()) {
+export function sendSupportChatMessage(
+  body: string,
+  topic: SupportTopic,
+  context: SupportContext,
+  attachment?: { base64: string; contentType: string },
+  clientMessageId = newId(),
+) {
   return request<{ message: SupportChatMessage; duplicate: boolean }>('/api/support/conversation/messages', {
     method: 'POST',
-    body: JSON.stringify({ body, topic, ...context, clientMessageId }),
+    body: JSON.stringify({
+      body,
+      topic,
+      ...context,
+      clientMessageId,
+      ...(attachment ? {
+        attachmentBase64: attachment.base64,
+        attachmentContentType: attachment.contentType,
+      } : {}),
+    }),
   });
 }
 

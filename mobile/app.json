@@ -18,7 +18,10 @@
       "infoPlist": {
         "NSCameraUsageDescription": "FXSnap uses the camera so you can submit a trading chart for analysis.",
         "NSPhotoLibraryUsageDescription": "FXSnap uses your photo library so you can select a trading chart for analysis.",
-        "NSMicrophoneUsageDescription": "FXSnap uses your microphone when you choose to speak in a live Events space."
+        "NSMicrophoneUsageDescription": "FXSnap uses your microphone when you choose to speak in a live Events space.",
+        "UIBackgroundModes": [
+          "audio"
+        ]
       }
     },
     "android": {
@@ -90,6 +93,9 @@
       "eas": {
         "projectId": "34e68993-4970-4cd5-8804-4e9805ef6d8c"
       }
+    },
+    "autolinking": {
+      "nativeModulesDir": "./modules"
     },
     "owner": "eazy001kng1"
   }

@@ -11,13 +11,15 @@ import {
 } from 'react-native';
 import { AnimatedTouchableOpacity as TouchableOpacity } from '@/components/AnimatedTouchableOpacity';
 import { Feather } from '@expo/vector-icons';
-import { router, useFocusEffect } from 'expo-router';
+import { LinearGradient } from 'expo-linear-gradient';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useColors } from '@/hooks/useColors';
 import { hasSupabaseConfiguration } from '@/services/supabase';
 import {
   getAdminEventSpaceAccess,
   getEventSpaces,
+  isLocalEventsDemoEnabled,
   subscribeToEventSpaceChanges,
   type EventSpace,
 } from '@/services/eventSpaces';
@@ -44,6 +46,8 @@ function statusLabel(status: EventSpace['status']) {
 export default function EventsScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
+  const { demo: demoParam } = useLocalSearchParams<{ demo?: string }>();
+  const isDemo = isLocalEventsDemoEnabled(demoParam);
   const [spaces, setSpaces] = useState<EventSpace[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -54,7 +58,7 @@ export default function EventsScreen() {
     if (refresh) setRefreshing(true);
     setError('');
     try {
-      const result = await getEventSpaces();
+      const result = await getEventSpaces(isDemo);
       setSpaces(result.spaces);
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : 'Events could not be loaded. Please try again.');
@@ -62,16 +66,17 @@ export default function EventsScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [isDemo]);
 
   useFocusEffect(useCallback(() => {
     void load();
-    void getAdminEventSpaceAccess()
+    void getAdminEventSpaceAccess(isDemo)
       .then((result) => setAdminAccess(result.allowed))
       .catch(() => setAdminAccess(false));
-  }, [load]));
+  }, [isDemo, load]));
 
   useEffect(() => {
+    if (isDemo) return;
     if (!hasSupabaseConfiguration()) return;
     try {
       return subscribeToEventSpaceChanges(() => { void load(true); });
@@ -79,7 +84,7 @@ export default function EventsScreen() {
       console.error('[Events] Could not initialize realtime updates.', subscriptionError);
       return undefined;
     }
-  }, [load]);
+  }, [isDemo, load]);
 
   const liveSpaces = useMemo(() => spaces.filter((space) => space.status === 'live'), [spaces]);
   const upcomingSpaces = useMemo(
@@ -101,7 +106,9 @@ export default function EventsScreen() {
           </View>
           {adminAccess ? (
             <TouchableOpacity
-              onPress={() => router.push('/events-admin')}
+              onPress={() => router.push(isDemo
+                ? { pathname: '/events-admin', params: { demo: '1' } }
+                : '/events-admin')}
               style={[styles.adminButton, { borderColor: colors.cardBorder, backgroundColor: colors.card }]}
               accessibilityRole="button"
               accessibilityLabel="Manage events"
@@ -110,6 +117,15 @@ export default function EventsScreen() {
             </TouchableOpacity>
           ) : null}
         </View>
+
+        {isDemo ? (
+          <View style={[styles.demoNotice, { backgroundColor: `${colors.buy}12`, borderColor: `${colors.buy}35` }]}>
+            <Feather name="eye" size={15} color={colors.buy} />
+            <Text style={[styles.demoNoticeText, { color: colors.text }]}>
+              LOCAL PREVIEW — Demo events stay in this browser only. No server, Supabase, or LiveKit changes are made.
+            </Text>
+          </View>
+        ) : null}
 
         {liveSpaces.length > 0 ? (
           <View style={[styles.liveCount, { backgroundColor: `${colors.sell}10` }]}>
@@ -216,7 +232,20 @@ function SpaceCard({ space, colors, compact = false }: { space: EventSpace; colo
           <Text style={[styles.statusText, { color: live ? colors.sell : colors.buy }]}>{statusLabel(space.status)}</Text>
         </View>
       </View>
-      <Text style={[styles.spaceTitle, { color: colors.text }]}>{space.title}</Text>
+      <LinearGradient
+        colors={live ? ['#082A25', '#0D5146', '#116C59'] : ['#102D29', '#16483F', '#1B5B4D']}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.spaceHero}
+      >
+        <View style={styles.spaceHeroCopy}>
+          <Text style={styles.spaceEyebrow}>{live ? 'LIVE AUDIO SPACE' : 'FXSNAP EVENT SPACE'}</Text>
+          <Text style={styles.spaceTitle} numberOfLines={2}>{space.title}</Text>
+        </View>
+        <View style={styles.spaceHeroIcon}>
+          <Feather name={live ? 'headphones' : 'radio'} size={21} color="#C5F5E9" />
+        </View>
+      </LinearGradient>
       {space.description ? <Text style={[styles.spaceDescription, { color: colors.textSecondary }]} numberOfLines={3}>{space.description}</Text> : null}
       <View style={styles.hostRow}>
         {space.host_picture_url ? (
@@ -287,6 +316,8 @@ function BottomItem({
 const styles = StyleSheet.create({
   screen: { flex: 1 },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingBottom: 19 },
+  demoNotice: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, marginHorizontal: 18, marginBottom: 12, padding: 11, borderWidth: 1, borderRadius: 12 },
+  demoNoticeText: { flex: 1, fontSize: 10, lineHeight: 15, fontFamily: 'Inter_600SemiBold' },
   headingCopy: { flex: 1, paddingRight: 12 },
   title: { fontSize: 24, fontFamily: 'Inter_700Bold' },
   subtitle: { marginTop: 4, fontSize: 11, lineHeight: 16, fontFamily: 'Inter_400Regular' },
@@ -310,14 +341,18 @@ const styles = StyleSheet.create({
   noUpcomingText: { flex: 1, fontSize: 11, fontFamily: 'Inter_400Regular' },
   emptyExplore: { alignItems: 'center', marginHorizontal: 18, padding: 20, borderWidth: 1, borderRadius: 17 },
   emptyExploreTitle: { marginTop: 9, fontSize: 13, fontFamily: 'Inter_700Bold' },
-  spaceCard: { marginHorizontal: 18, marginBottom: 10, padding: 15, borderWidth: 1, borderRadius: 18 },
+  spaceCard: { marginHorizontal: 18, marginBottom: 12, padding: 12, borderWidth: 1, borderRadius: 21, shadowColor: '#041C18', shadowOpacity: 0.08, shadowRadius: 14, shadowOffset: { width: 0, height: 6 }, elevation: 2 },
   compactSpaceCard: { paddingVertical: 13 },
   spaceTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   topicPill: { maxWidth: '58%', paddingHorizontal: 9, paddingVertical: 5, borderRadius: 14 },
   topicText: { fontSize: 9, fontFamily: 'Inter_600SemiBold' },
   statusPill: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 8, paddingVertical: 5, borderRadius: 14 },
   statusText: { fontSize: 8, letterSpacing: 0.35, fontFamily: 'Inter_700Bold' },
-  spaceTitle: { marginTop: 11, fontSize: 15, lineHeight: 20, fontFamily: 'Inter_700Bold' },
+  spaceHero: { minHeight: 82, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginTop: 10, paddingHorizontal: 14, paddingVertical: 12, borderRadius: 16, borderWidth: 1, borderColor: 'rgba(255,255,255,0.12)' },
+  spaceHeroCopy: { flex: 1 },
+  spaceEyebrow: { color: '#A9D8CC', fontSize: 8, letterSpacing: 1.1, fontFamily: 'Inter_700Bold' },
+  spaceHeroIcon: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 15, borderWidth: 1, borderColor: 'rgba(225,255,247,0.22)', backgroundColor: 'rgba(225,255,247,0.10)' },
+  spaceTitle: { marginTop: 6, color: '#F5FFFC', fontSize: 14, lineHeight: 19, fontFamily: 'Inter_700Bold' },
   spaceDescription: { marginTop: 5, fontSize: 11, lineHeight: 16, fontFamily: 'Inter_400Regular' },
   hostRow: { flexDirection: 'row', alignItems: 'center', marginTop: 11, gap: 7 },
   hostAvatar: { width: 25, height: 25, borderRadius: 13 },

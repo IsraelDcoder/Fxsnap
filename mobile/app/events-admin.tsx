@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 import { AnimatedTouchableOpacity as TouchableOpacity } from '@/components/AnimatedTouchableOpacity';
 import { Feather } from '@expo/vector-icons';
-import { router, useFocusEffect } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useColors } from '@/hooks/useColors';
 import {
@@ -18,6 +18,8 @@ import {
   getAdminEventSpaceAccess,
   getAdminEventSpaces,
   getEventHosts,
+  goLiveEventSpace,
+  isLocalEventsDemoEnabled,
   manageEventLifecycle,
   transitionEventSpace,
   updateEventSpace,
@@ -41,6 +43,8 @@ function labelForStatus(status: EventSpace['status']) {
 export default function EventsAdminScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
+  const { demo: demoParam } = useLocalSearchParams<{ demo?: string }>();
+  const isDemo = isLocalEventsDemoEnabled(demoParam);
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
   const [spaces, setSpaces] = useState<EventSpace[]>([]);
   const [hosts, setHosts] = useState<EventHost[]>([]);
@@ -65,10 +69,10 @@ export default function EventsAdminScreen() {
     setLoading(true);
     setError('');
     try {
-      const access = await getAdminEventSpaceAccess();
+      const access = await getAdminEventSpaceAccess(isDemo);
       setAllowed(access.allowed);
       if (!access.allowed) return;
-      const [spaceResult, hostResult] = await Promise.all([getAdminEventSpaces(), getEventHosts()]);
+      const [spaceResult, hostResult] = await Promise.all([getAdminEventSpaces(isDemo), getEventHosts(isDemo)]);
       setSpaces(spaceResult.spaces);
       setHosts(hostResult.hosts);
       setSelectedHost((current) => current || access.accountId);
@@ -77,7 +81,7 @@ export default function EventsAdminScreen() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [isDemo]);
 
   useFocusEffect(useCallback(() => { void load(); }, [load]));
 
@@ -164,12 +168,12 @@ export default function EventsAdminScreen() {
     try {
       if (editing) {
         const { status: _status, ...changes } = input;
-        await updateEventSpace(editing.id, changes);
+        await updateEventSpace(editing.id, changes, isDemo);
         if (editing.status === 'draft' && status === 'scheduled') {
-          await transitionEventSpace(editing.id, 'publish');
+          await transitionEventSpace(editing.id, 'publish', undefined, isDemo);
         }
       } else {
-        await createEventSpace(input);
+        await createEventSpace(input, isDemo);
       }
       resetForm();
       await load();
@@ -180,10 +184,49 @@ export default function EventsAdminScreen() {
     }
   };
 
+  const goLiveNow = async () => {
+    if (saving) return;
+    setError('');
+    if (!title.trim() || title.trim().length < 3 || !topic.trim()) {
+      setError('Add a space name and topic before going live.');
+      return;
+    }
+    const durationMinutes = duration.trim() ? Number(duration) : null;
+    if (durationMinutes !== null && (!Number.isInteger(durationMinutes) || durationMinutes < 5 || durationMinutes > 480)) {
+      setError('Expected duration must be between 5 and 480 minutes.');
+      return;
+    }
+    const input: EventSpaceDraft = {
+      title: title.trim(),
+      description: description.trim(),
+      topic: topic.trim(),
+      visibility,
+      hostAccountId: selectedHost || undefined,
+      scheduledAt: null,
+      timezone,
+      waitingRoomOpensAt: null,
+      durationMinutes,
+      allowSpeakingRequests,
+      commentsEnabled,
+      featured,
+      status: 'draft',
+    };
+    setSaving(true);
+    try {
+      await goLiveEventSpace(input, isDemo);
+      resetForm();
+      router.replace(isDemo ? { pathname: '/events', params: { demo: '1' } } : '/events');
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'Could not start this live space.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const transition = async (space: EventSpace, action: 'publish' | 'open_waiting_room' | 'cancel' | 'archive') => {
     setError('');
     try {
-      await transitionEventSpace(space.id, action);
+      await transitionEventSpace(space.id, action, undefined, isDemo);
       await load();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : 'Could not update this event space.');
@@ -193,7 +236,7 @@ export default function EventsAdminScreen() {
   const setLiveState = async (space: EventSpace, action: 'start_live' | 'end_live') => {
     setError('');
     try {
-      await manageEventLifecycle(space.id, action);
+      await manageEventLifecycle(space.id, action, isDemo);
       await load();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : 'Could not control the LiveKit room.');
@@ -231,6 +274,14 @@ export default function EventsAdminScreen() {
         </View>
       ) : (
         <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 28 }} keyboardShouldPersistTaps="handled">
+          {isDemo ? (
+            <View style={[styles.demoNotice, { backgroundColor: `${colors.buy}12`, borderColor: `${colors.buy}35` }]}>
+              <Feather name="eye" size={15} color={colors.buy} />
+              <Text style={[styles.demoNoticeText, { color: colors.text }]}>
+                LOCAL PREVIEW — Admin and saved spaces are mock data stored only in this browser. LiveKit audio and backend actions are not connected.
+              </Text>
+            </View>
+          ) : null}
           {error ? <Text style={[styles.error, { color: colors.sell, backgroundColor: `${colors.sell}10` }]}>{error}</Text> : null}
 
           <View style={styles.metrics}>
@@ -244,7 +295,7 @@ export default function EventsAdminScreen() {
             <View style={styles.formHeading}>
               <View>
                 <Text style={[styles.cardTitle, { color: colors.text }]}>{editing ? 'Edit space' : 'Create a space'}</Text>
-                <Text style={[styles.cardSubtitle, { color: colors.textSecondary }]}>Save a draft or publish a scheduled session.</Text>
+                <Text style={[styles.cardSubtitle, { color: colors.textSecondary }]}>Schedule a future session or start a live space now.</Text>
               </View>
               {editing ? (
                 <TouchableOpacity onPress={resetForm} accessibilityLabel="Cancel editing">
@@ -291,7 +342,7 @@ export default function EventsAdminScreen() {
             <Toggle label="Feature this space" value={featured} onChange={setFeatured} colors={colors} />
             <View style={[styles.audioNotice, { backgroundColor: colors.surface }]}>
               <Feather name="headphones" size={15} color={colors.textSecondary} />
-              <Text style={[styles.audioNoticeText, { color: colors.textSecondary }]}>LiveKit audio starts after you open the waiting room. Listeners join muted and hosts can admit listeners or approve speakers.</Text>
+              <Text style={[styles.audioNoticeText, { color: colors.textSecondary }]}>{isDemo ? 'Preview only: direct live appears in Events but does not connect to LiveKit.' : 'Scheduled sessions open a waiting room first. Go live now starts the LiveKit audio room immediately; listeners still join muted and wait for host admission.'}</Text>
             </View>
             <View style={styles.formActions}>
               <TouchableOpacity disabled={saving} onPress={() => void save('draft')} style={[styles.secondaryButton, { borderColor: colors.cardBorder }]}>
@@ -301,6 +352,12 @@ export default function EventsAdminScreen() {
                 {saving ? <ActivityIndicator color={colors.primaryForeground} /> : <Text style={[styles.primaryButtonText, { color: colors.primaryForeground }]}>{editing?.status === 'draft' ? 'Publish & schedule' : editing ? 'Save changes' : 'Schedule'}</Text>}
               </TouchableOpacity>
             </View>
+            {!editing ? (
+              <TouchableOpacity disabled={saving} onPress={() => void goLiveNow()} style={[styles.goLiveButton, { backgroundColor: colors.sell }]}>
+                {saving ? <ActivityIndicator color="#FFFFFF" /> : <Feather name="radio" size={15} color="#FFFFFF" />}
+                <Text style={styles.goLiveButtonText}>Go live now</Text>
+              </TouchableOpacity>
+            ) : null}
           </View>
 
           <View style={styles.listHeading}>
@@ -431,6 +488,8 @@ function Action({ label, icon, onPress, colors, destructive = false }: {
 
 const styles = StyleSheet.create({
   screen: { flex: 1 },
+  demoNotice: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, marginHorizontal: 14, marginTop: 12, padding: 11, borderWidth: 1, borderRadius: 12 },
+  demoNoticeText: { flex: 1, fontSize: 10, lineHeight: 15, fontFamily: 'Inter_600SemiBold' },
   header: { minHeight: 62, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingBottom: 10, borderBottomWidth: StyleSheet.hairlineWidth },
   backButton: { width: 38, height: 40, alignItems: 'center', justifyContent: 'center' },
   headerCopy: { flex: 1, paddingHorizontal: 5 },
@@ -465,6 +524,8 @@ const styles = StyleSheet.create({
   audioNotice: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8, padding: 10, borderRadius: 11 },
   audioNoticeText: { flex: 1, fontSize: 9, lineHeight: 13, fontFamily: 'Inter_400Regular' },
   formActions: { flexDirection: 'row', gap: 8, marginTop: 14 },
+  goLiveButton: { minHeight: 42, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 9, borderRadius: 11, paddingHorizontal: 12 },
+  goLiveButtonText: { color: '#FFFFFF', fontSize: 11, fontFamily: 'Inter_700Bold' },
   primaryButton: { minHeight: 40, flex: 1, alignItems: 'center', justifyContent: 'center', borderRadius: 11, paddingHorizontal: 12 },
   primaryButtonText: { fontSize: 11, fontFamily: 'Inter_700Bold' },
   secondaryButton: { minHeight: 40, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderRadius: 11, paddingHorizontal: 13 },

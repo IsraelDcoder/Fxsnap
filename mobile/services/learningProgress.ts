@@ -4,6 +4,8 @@ import { notifyAccountDataChanged } from '@/services/accountDataEvents';
 export const LEARNING_PROGRESS_KEY = 'fxsnap:learningHub:v1';
 const MAX_RECENT_LESSONS = 8;
 
+export type LearningExperienceLevel = 'new_to_fx' | 'know_the_basics' | 'experienced';
+
 export interface LearningProgress {
   lastOpenedLessonId: string | null;
   recentLessonIds: string[];
@@ -13,6 +15,8 @@ export interface LearningProgress {
   stepPositions: Record<string, number>;
   lastCompletionDate: string | null;
   streakCount: number;
+  learningOnboardingCompleted: boolean;
+  experienceLevel: LearningExperienceLevel | null;
 }
 
 const emptyProgress: LearningProgress = {
@@ -24,6 +28,8 @@ const emptyProgress: LearningProgress = {
   stepPositions: {},
   lastCompletionDate: null,
   streakCount: 0,
+  learningOnboardingCompleted: false,
+  experienceLevel: null,
 };
 
 let writeQueue: Promise<void> = Promise.resolve();
@@ -36,6 +42,16 @@ function normalizeProgress(value: unknown): LearningProgress {
   const stringList = (list: unknown) => Array.isArray(list)
     ? [...new Set(list.filter((item): item is string => typeof item === 'string' && item.length > 0))]
     : [];
+  const completedLessonIds = stringList(data.completedLessonIds);
+  const recentLessonIds = stringList(data.recentLessonIds).slice(0, MAX_RECENT_LESSONS);
+  const hasLearningHistory = completedLessonIds.length > 0
+    || recentLessonIds.length > 0
+    || (typeof data.lastOpenedLessonId === 'string' && data.lastOpenedLessonId.length > 0);
+  const experienceLevel = data.experienceLevel === 'new_to_fx'
+    || data.experienceLevel === 'know_the_basics'
+    || data.experienceLevel === 'experienced'
+    ? data.experienceLevel
+    : null;
   const normalizePositions = (value: unknown) => {
     const rawPositions = value && typeof value === 'object' && !Array.isArray(value)
       ? value as Record<string, unknown>
@@ -48,9 +64,9 @@ function normalizeProgress(value: unknown): LearningProgress {
   };
   return {
     lastOpenedLessonId: typeof data.lastOpenedLessonId === 'string' ? data.lastOpenedLessonId : null,
-    recentLessonIds: stringList(data.recentLessonIds).slice(0, MAX_RECENT_LESSONS),
+    recentLessonIds,
     bookmarkedLessonIds: stringList(data.bookmarkedLessonIds),
-    completedLessonIds: stringList(data.completedLessonIds),
+    completedLessonIds,
     lessonPositions: normalizePositions(data.lessonPositions),
     stepPositions: normalizePositions(data.stepPositions),
     lastCompletionDate: typeof data.lastCompletionDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(data.lastCompletionDate)
@@ -59,6 +75,10 @@ function normalizeProgress(value: unknown): LearningProgress {
     streakCount: typeof data.streakCount === 'number' && Number.isInteger(data.streakCount) && data.streakCount >= 0
       ? data.streakCount
       : 0,
+    learningOnboardingCompleted: typeof data.learningOnboardingCompleted === 'boolean'
+      ? data.learningOnboardingCompleted
+      : hasLearningHistory,
+    experienceLevel,
   };
 }
 
@@ -106,6 +126,17 @@ export function recordLessonOpened(lessonId: string) {
     ...progress,
     lastOpenedLessonId: lessonId,
     recentLessonIds: [lessonId, ...progress.recentLessonIds.filter((id) => id !== lessonId)].slice(0, MAX_RECENT_LESSONS),
+  }));
+}
+
+export function completeLearningOnboarding(experienceLevel: LearningExperienceLevel) {
+  if (!['new_to_fx', 'know_the_basics', 'experienced'].includes(experienceLevel)) {
+    return Promise.reject(new Error('Choose a valid Learning Hub experience level.'));
+  }
+  return updateLearningProgress((progress) => ({
+    ...progress,
+    learningOnboardingCompleted: true,
+    experienceLevel,
   }));
 }
 

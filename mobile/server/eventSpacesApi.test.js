@@ -214,6 +214,38 @@ test('admins can create, schedule, and open an event waiting room', async () => 
   assert.equal(harness.spaces[0].status, 'waiting_room_open');
 });
 
+test('admins can create a space and start its LiveKit room immediately without scheduling', async () => {
+  const harness = makeHarness();
+  const result = await harness.call('/api/admin/event-spaces/go-live', {
+    method: 'POST',
+    body: validInput({
+      status: 'draft',
+      scheduledAt: null,
+      waitingRoomOpensAt: null,
+      title: 'Live market briefing',
+    }),
+  });
+
+  assert.equal(result.statusCode, 201, JSON.stringify(result.body));
+  assert.equal(result.body.space.title, 'Live market briefing');
+  assert.equal(result.body.space.status, 'live');
+  assert.equal(result.body.space.scheduled_at, null);
+  assert.match(result.body.space.livekit_room_name, /^fxsnap-event-/);
+  assert.equal(harness.liveRooms.has(result.body.space.livekit_room_name), true);
+});
+
+test('non-admins cannot create and immediately start an event space', async () => {
+  const harness = makeHarness({ isAdmin: false });
+  const result = await harness.call('/api/admin/event-spaces/go-live', {
+    method: 'POST',
+    body: validInput({ status: 'draft', scheduledAt: null, waitingRoomOpensAt: null }),
+  });
+
+  assert.equal(result.statusCode, 403);
+  assert.equal(harness.spaces.length, 0);
+  assert.equal(harness.liveRooms.size, 0);
+});
+
 test('draft sessions require a valid future schedule before publishing', async () => {
   const harness = makeHarness();
   const created = await harness.call('/api/admin/event-spaces', {

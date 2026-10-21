@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AppState,
   ActivityIndicator,
   Alert,
   ScrollView,
@@ -9,11 +10,13 @@ import {
 } from 'react-native';
 import { AnimatedTouchableOpacity as TouchableOpacity } from '@/components/AnimatedTouchableOpacity';
 import { Feather } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AudioSession, LiveKitRoom, registerGlobals, useLocalParticipant, useParticipants, useRoomContext } from '@livekit/react-native';
 import { RoomEvent } from 'livekit-client';
 import { useColors } from '@/hooks/useColors';
+import { startBackgroundEventAudio, stopBackgroundEventAudio } from '@/services/backgroundEventAudio';
 import {
   getEventParticipants,
   getEventSpace,
@@ -300,8 +303,11 @@ function RoomContent({
   const { localParticipant, isMicrophoneEnabled } = useLocalParticipant();
   const participants = useParticipants();
   const [microphoneError, setMicrophoneError] = useState('');
+  const [backgroundAudioError, setBackgroundAudioError] = useState('');
+  const [backgroundMicMuted, setBackgroundMicMuted] = useState(false);
   const [speaking, setSpeaking] = useState(false);
   const [roomConnected, setRoomConnected] = useState(false);
+  const mutedForBackground = useRef(false);
   const remoteParticipants = participants.filter((participant) => participant.identity !== localParticipant.identity);
 
   useEffect(() => {
@@ -319,11 +325,49 @@ function RoomContent({
     }
   }, [canSpeak, isMicrophoneEnabled, localParticipant]);
 
+  useEffect(() => {
+    if (!roomConnected) {
+      void stopBackgroundEventAudio().catch((failure: unknown) => {
+        console.error('[Events] Could not stop the background audio service.', failure);
+      });
+      return undefined;
+    }
+
+    let active = true;
+    setBackgroundAudioError('');
+    void startBackgroundEventAudio(title).catch((failure: unknown) => {
+      console.error('[Events] Could not start the background audio service.', failure);
+      if (active) setBackgroundAudioError('Background audio could not be enabled on this device.');
+    });
+    return () => {
+      active = false;
+      void stopBackgroundEventAudio().catch((failure: unknown) => {
+        console.error('[Events] Could not stop the background audio service.', failure);
+      });
+    };
+  }, [roomConnected, title]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState !== 'background' || !canSpeak || !isMicrophoneEnabled || mutedForBackground.current) return;
+      mutedForBackground.current = true;
+      void localParticipant.setMicrophoneEnabled(false)
+        .then(() => setBackgroundMicMuted(true))
+        .catch((failure: unknown) => {
+          mutedForBackground.current = false;
+          console.error('[Events] Could not mute the microphone in the background.', failure);
+        });
+    });
+    return () => subscription.remove();
+  }, [canSpeak, isMicrophoneEnabled, localParticipant]);
+
   const toggleMicrophone = async () => {
     if (!canSpeak) return;
     setMicrophoneError('');
     try {
       await localParticipant.setMicrophoneEnabled(!isMicrophoneEnabled);
+      mutedForBackground.current = false;
+      setBackgroundMicMuted(false);
     } catch (failure) {
       setMicrophoneError(failure instanceof Error
         ? failure.message
@@ -333,20 +377,42 @@ function RoomContent({
 
   return (
     <ScrollView contentContainerStyle={styles.roomContent} showsVerticalScrollIndicator={false}>
-      <View style={[styles.roomStatus, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
-        <View style={[styles.roomOrb, { backgroundColor: `${colors.buy}18` }]}>
-          <Feather name="headphones" size={29} color={colors.buy} />
+      <LinearGradient
+        colors={['#071F1B', '#0A4037', '#116754']}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.roomStatus}
+      >
+        <View style={styles.roomEyebrow}>
+          <View style={styles.connectedDot} />
+          <Text style={styles.roomEyebrowText}>{roomConnected ? 'LIVE AUDIO SPACE' : 'CONNECTING TO SPACE'}</Text>
         </View>
-        <Text style={[styles.roomTitle, { color: colors.text }]}>{title}</Text>
-        <Text style={[styles.roomSubTitle, { color: colors.textSecondary }]}>
+        <View style={styles.roomOrb}>
+          <Feather name="headphones" size={29} color="#BDF4E4" />
+        </View>
+        <Text style={styles.roomTitle}>{title}</Text>
+        <Text style={styles.roomSubTitle}>
           {roomConnected ? `${participants.length} connected · ${role === 'host' ? 'Host' : role === 'speaker' ? 'Speaker' : 'Listener'}` : 'Connecting audio…'}
         </Text>
         <View style={styles.waveform}>
           {[14, 24, 34, 21, 30, 16, 27, 12].map((height, index) => (
-            <View key={index} style={[styles.waveBar, { height, backgroundColor: colors.buy, opacity: 0.48 + index * 0.06 }]} />
+            <View key={index} style={[styles.waveBar, { height, backgroundColor: '#8DE7D0', opacity: 0.48 + index * 0.06 }]} />
           ))}
         </View>
+      </LinearGradient>
+
+      <View style={[styles.backgroundAudioNote, { backgroundColor: `${colors.buy}10`, borderColor: `${colors.buy}2A` }]}>
+        <Feather name="smartphone" size={15} color={colors.buy} />
+        <Text style={[styles.backgroundAudioText, { color: colors.textSecondary }]}>
+          Keep listening when you switch apps. Your microphone is muted while the app is in the background.
+        </Text>
       </View>
+      {backgroundMicMuted ? (
+        <Text style={[styles.backgroundMicNote, { color: colors.textSecondary }]}>Your microphone was muted when you left the app. Turn it back on when you return.</Text>
+      ) : null}
+      {backgroundAudioError ? (
+        <Text style={[styles.microphoneError, { color: colors.sell }]}>{backgroundAudioError}</Text>
+      ) : null}
 
       <Text style={[styles.sectionTitle, { color: colors.text }]}>In this room</Text>
       <View style={[styles.participantCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
@@ -520,12 +586,18 @@ const styles = StyleSheet.create({
   leaveWaiting: { padding: 12 },
   leaveText: { fontSize: 10, fontFamily: 'Inter_500Medium' },
   roomContent: { paddingHorizontal: 16, paddingTop: 17, paddingBottom: 28 },
-  roomStatus: { alignItems: 'center', padding: 20, borderWidth: 1, borderRadius: 20 },
-  roomOrb: { width: 66, height: 66, alignItems: 'center', justifyContent: 'center', borderRadius: 23 },
-  roomTitle: { marginTop: 12, fontSize: 17, textAlign: 'center', fontFamily: 'Inter_700Bold' },
-  roomSubTitle: { marginTop: 4, fontSize: 10, fontFamily: 'Inter_500Medium' },
+  roomStatus: { alignItems: 'center', paddingHorizontal: 20, paddingTop: 18, paddingBottom: 16, borderWidth: 1, borderColor: 'rgba(203,255,239,0.17)', borderRadius: 24, overflow: 'hidden' },
+  roomEyebrow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
+  connectedDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#73E2BB' },
+  roomEyebrowText: { color: '#B8D9D0', fontSize: 8, letterSpacing: 1.1, fontFamily: 'Inter_700Bold' },
+  roomOrb: { width: 70, height: 70, alignItems: 'center', justifyContent: 'center', marginTop: 15, borderRadius: 24, borderWidth: 1, borderColor: 'rgba(225,255,247,0.25)', backgroundColor: 'rgba(225,255,247,0.10)' },
+  roomTitle: { maxWidth: 290, marginTop: 12, color: '#F5FFFC', fontSize: 17, lineHeight: 23, textAlign: 'center', fontFamily: 'Inter_700Bold' },
+  roomSubTitle: { marginTop: 5, color: '#C1D8D2', fontSize: 10, fontFamily: 'Inter_500Medium' },
   waveform: { height: 38, flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 12 },
   waveBar: { width: 4, borderRadius: 3 },
+  backgroundAudioNote: { flexDirection: 'row', alignItems: 'center', gap: 9, marginTop: 12, paddingHorizontal: 12, paddingVertical: 11, borderWidth: 1, borderRadius: 14 },
+  backgroundAudioText: { flex: 1, fontSize: 9, lineHeight: 14, fontFamily: 'Inter_500Medium' },
+  backgroundMicNote: { marginTop: 8, fontSize: 9, lineHeight: 14, fontFamily: 'Inter_500Medium' },
   sectionTitle: { marginTop: 20, marginBottom: 8, fontSize: 13, fontFamily: 'Inter_700Bold' },
   participantCard: { paddingHorizontal: 12, borderWidth: 1, borderRadius: 16 },
   participantRow: { minHeight: 55, flexDirection: 'row', alignItems: 'center', gap: 9, borderBottomWidth: StyleSheet.hairlineWidth },
