@@ -74,6 +74,40 @@ async function list() {
   }
 }
 
+async function listBySupabaseUserIds(userIds) {
+  const validIds = [...new Set(userIds)].filter((id) => (
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)
+  ));
+  if (!validIds.length) return [];
+  const expression = validIds.map((id) => `"${id}"`).join(',');
+  const rows = await request(
+    `${TABLE}?select=device_id,account_id,supabase_user_id,expo_token,platform&supabase_user_id=in.(${expression})&expo_token=not.is.null`,
+  );
+  return (rows || []).map((row) => ({
+    deviceId: row.device_id,
+    accountId: row.account_id,
+    supabaseUserId: row.supabase_user_id,
+    token: row.expo_token,
+    platform: row.platform,
+  }));
+}
+
+async function listByAccountIds(accountIds) {
+  const validIds = [...new Set(accountIds)].filter((id) => typeof id === 'string' && id.length > 0 && id.length <= 128);
+  if (!validIds.length) return [];
+  const expression = validIds.map((id) => `"${id.replace(/["\\]/g, '')}"`).join(',');
+  const rows = await request(
+    `${TABLE}?select=device_id,account_id,supabase_user_id,expo_token,platform&account_id=in.(${expression})&expo_token=not.is.null`,
+  );
+  return (rows || []).map((row) => ({
+    deviceId: row.device_id,
+    accountId: row.account_id,
+    supabaseUserId: row.supabase_user_id,
+    token: row.expo_token,
+    platform: row.platform,
+  }));
+}
+
 async function markNotified(deviceId, notifiedAt) {
   await request(`${TABLE}?device_id=eq.${encodeURIComponent(deviceId)}`, {
     method: 'PATCH',
@@ -96,4 +130,4 @@ async function finishCommunityEvent(id, error = null) {
   });
 }
 
-module.exports = { register, remove, list, markNotified, claimCommunityEvents, finishCommunityEvent };
+module.exports = { register, remove, list, listBySupabaseUserIds, listByAccountIds, markNotified, claimCommunityEvents, finishCommunityEvent };

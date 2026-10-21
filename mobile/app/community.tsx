@@ -1438,7 +1438,7 @@ export default function CommunityScreen() {
       { text: 'Share trading signal', onPress: () => openComposer('signal', 'chart_analysis') },
       ...(profile?.isAdmin ? [{ text: 'Post announcement', onPress: () => openComposer('text', 'events') }] : []),
       { text: 'Manage blocked traders', onPress: () => void openBlockedMembers() },
-      { text: 'Contact FXSnap support', onPress: () => Alert.alert('Coming soon', 'Help & Support will be available in a future update.') },
+      { text: 'Contact FXSnap support', onPress: () => router.push('/support-chat') },
       ...(profile?.isAdmin ? [{ text: 'Moderation tools', onPress: () => router.push('/community-admin') }] : []),
       { text: 'Cancel', style: 'cancel' },
     ]);

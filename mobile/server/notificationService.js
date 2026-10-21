@@ -149,6 +149,55 @@ async function dispatchCommunityPushNotifications(objectId = null, limit = 100) 
   return result;
 }
 
+async function sendSupportInboxNotification() {
+  if (!process.env.EXPO_ACCESS_TOKEN) return { sent: 0, skipped: 'EXPO_ACCESS_TOKEN is not configured.' };
+  const adminIds = (process.env.FXSNAP_COMMUNITY_ADMIN_SUPABASE_USER_IDS || '')
+    .split(',')
+    .map((id) => id.trim())
+    .filter((id) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id));
+  if (!adminIds.length) return { sent: 0, skipped: 'No support administrators are configured.' };
+  const entries = await supabasePushStore.listBySupabaseUserIds(adminIds);
+  const { Expo, expo } = await getExpoClient();
+  const tokens = entries.filter((entry) => Expo.isExpoPushToken(entry.token));
+  if (!tokens.length) return { sent: 0, skipped: 'No registered administrator push devices are available.' };
+
+  const tickets = [];
+  for (const chunk of expo.chunkPushNotifications(tokens.map((entry) => ({
+    to: entry.token,
+    title: 'New private support message',
+    body: 'A user is waiting for help in the FXSnap support inbox.',
+    data: { type: 'support-inbox', route: '/support-admin' },
+    channelId: 'fxsnap-support',
+    sound: 'default',
+    priority: 'high',
+  })))) {
+    tickets.push(...await expo.sendPushNotificationsAsync(chunk));
+  }
+  return { sent: tickets.filter((ticket) => ticket.status === 'ok').length, total: tickets.length };
+}
+
+async function sendSupportReplyNotification(accountId) {
+  if (!process.env.EXPO_ACCESS_TOKEN) return { sent: 0, skipped: 'EXPO_ACCESS_TOKEN is not configured.' };
+  const entries = await supabasePushStore.listByAccountIds([accountId]);
+  const { Expo, expo } = await getExpoClient();
+  const tokens = entries.filter((entry) => Expo.isExpoPushToken(entry.token));
+  if (!tokens.length) return { sent: 0, skipped: 'No registered user push devices are available.' };
+
+  const tickets = [];
+  for (const chunk of expo.chunkPushNotifications(tokens.map((entry) => ({
+    to: entry.token,
+    title: 'FXSnap Support replied',
+    body: 'Your private support conversation has a new reply.',
+    data: { type: 'support-reply', route: '/support-chat' },
+    channelId: 'fxsnap-support',
+    sound: 'default',
+    priority: 'high',
+  })))) {
+    tickets.push(...await expo.sendPushNotificationsAsync(chunk));
+  }
+  return { sent: tickets.filter((ticket) => ticket.status === 'ok').length, total: tickets.length };
+}
+
 module.exports = {
   registerPushToken,
   unregisterPushToken,
@@ -157,4 +206,6 @@ module.exports = {
   sendCampaign,
   sendScheduledCampaigns,
   dispatchCommunityPushNotifications,
+  sendSupportInboxNotification,
+  sendSupportReplyNotification,
 };
