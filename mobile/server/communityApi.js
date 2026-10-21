@@ -94,6 +94,7 @@ function createCommunityApi({
   sendJson,
   readJsonBody,
   saveCommunityUsername,
+  requirePremiumSubscription,
   dispatchCommunityPush: sendCommunityPush = dispatchCommunityPush,
 }) {
   function dispatchQueuedNotifications(messageId) {
@@ -236,6 +237,13 @@ function createCommunityApi({
         ? 'Sign in with your linked Google account to join Community.'
         : 'Sign in with your linked Google account to access FXSnap announcements.' });
       return null;
+    }
+    if (requireCommunity) {
+      if (typeof requirePremiumSubscription !== 'function' || typeof actor.deviceId !== 'string' || !actor.deviceId) {
+        sendJson(res, 503, { error: 'Community subscription verification is unavailable. Please try again.' });
+        return null;
+      }
+      if (!await requirePremiumSubscription(actor.deviceId, res)) return null;
     }
     const isAdmin = config.adminUserIds.has(actor.supabaseUserId);
     const result = { ...actor, isAdmin };

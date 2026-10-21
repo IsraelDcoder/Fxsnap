@@ -22,7 +22,7 @@ function makeResponse(status, body) {
 }
 
 function makeHarness({
-  actor = { accountId: ACCOUNT_ID, supabaseUserId: MEMBER_ID },
+  actor = { accountId: ACCOUNT_ID, deviceId: 'community-test-device-1234', supabaseUserId: MEMBER_ID },
   initialProfiles = [],
   initialMessages = [],
   initialReactions = [],
@@ -32,6 +32,7 @@ function makeHarness({
   initialConversations = [],
   initialSupportMessages = [],
   databaseFailure = null,
+  requirePremiumSubscription = async () => true,
 } = {}) {
   const profiles = [...initialProfiles];
   const messages = [...initialMessages];
@@ -327,6 +328,7 @@ function makeHarness({
     },
     readJsonBody: async (request) => request.body || {},
     saveCommunityUsername: async (_accountId, username) => { savedNames.push(username); },
+    requirePremiumSubscription,
     dispatchCommunityPush: async (objectId) => { pushedCommunityEvents.push(objectId); },
   });
 
@@ -350,6 +352,22 @@ function makeHarness({
     },
   };
 }
+
+test('community API requests require a verified premium subscription before accessing stored community data', async () => {
+  const harness = makeHarness({
+    requirePremiumSubscription: async (_deviceId, response) => {
+      response.statusCode = 402;
+      response.body = { code: 'PREMIUM_REQUIRED' };
+      return false;
+    },
+  });
+
+  const response = await harness.call('/api/community/bootstrap');
+
+  assert.equal(response.statusCode, 402);
+  assert.deepEqual(response.body, { code: 'PREMIUM_REQUIRED' });
+  assert.equal(harness.requests.length, 0);
+});
 
 test('members can load and publish replies in a post discussion', async () => {
   const messageId = '00000000-0000-4000-8000-000000000041';
@@ -1251,6 +1269,7 @@ test('members can edit and remove only their own text content', async () => {
         response.body = body;
       },
       readJsonBody: async (request) => request.body || {},
+      requirePremiumSubscription: async () => true,
     });
   }
 
@@ -1264,7 +1283,7 @@ test('members can edit and remove only their own text content', async () => {
     return response;
   }
 
-  const ownerApi = apiFor({ accountId: ACCOUNT_ID, supabaseUserId: MEMBER_ID, pictureUrl: null });
+  const ownerApi = apiFor({ accountId: ACCOUNT_ID, deviceId: 'community-test-device-1234', supabaseUserId: MEMBER_ID, pictureUrl: null });
   const edited = await call(ownerApi, 'PATCH', {
     body: 'Edited post',
     category: 'market_discussion',
@@ -1285,7 +1304,7 @@ test('members can edit and remove only their own text content', async () => {
   assert.equal(invalidImageDimensions.statusCode, 400);
   assert.equal(messages[0].body, 'Edited post');
 
-  const otherApi = apiFor({ accountId: otherAccountId, supabaseUserId: otherUserId });
+  const otherApi = apiFor({ accountId: otherAccountId, deviceId: 'community-test-device-1234', supabaseUserId: otherUserId });
   const rejectedEdit = await call(otherApi, 'PATCH', { body: 'Unauthorized edit' });
   const rejectedDelete = await call(otherApi, 'DELETE');
   assert.equal(rejectedEdit.statusCode, 403);
@@ -1456,7 +1475,7 @@ test('a signed-in member cannot access another member’s private support thread
   const otherAccountId = 'usr_another-member';
   const otherUserId = '00000000-0000-4000-8000-000000000011';
   const harness = makeHarness({
-    actor: { accountId: otherAccountId, supabaseUserId: otherUserId },
+    actor: { accountId: otherAccountId, deviceId: 'community-test-device-1234', supabaseUserId: otherUserId },
     initialProfiles: [{
       account_id: otherAccountId,
       supabase_user_id: otherUserId,
@@ -1484,7 +1503,7 @@ test('admin may claim the reserved official username when no account owns it', a
   const previous = process.env.FXSNAP_COMMUNITY_ADMIN_SUPABASE_USER_IDS;
   process.env.FXSNAP_COMMUNITY_ADMIN_SUPABASE_USER_IDS = adminId;
   try {
-    const harness = makeHarness({ actor: { accountId: 'usr_official-admin', supabaseUserId: adminId } });
+    const harness = makeHarness({ actor: { accountId: 'usr_official-admin', deviceId: 'community-test-device-1234', supabaseUserId: adminId } });
     const available = await harness.call('/api/community/username?value=fxsnap_official');
     assert.equal(available.body.available, true);
     const joined = await harness.call('/api/community/join', {

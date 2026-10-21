@@ -89,6 +89,26 @@ The app now includes backend-backed post/member/topic search, member profiles, a
 
 Keep the flag false until the migration is applied and verified. Publish a new Android build after deploying the backend to expose these UI changes, profile photos, persisted comment counts, post engagement, reposting, saved feeds, polls, multi-reactions, and own-post edit/delete actions; backend activation alone does not publish client changes. The text share flow increments the share count only when the native share API reports a completed share. Expo's image-share API does not distinguish completion from cancellation, so image-sheet launches are not counted.
 
+### Events spaces foundation
+
+The Events tab now reads published public sessions from the backend and refreshes when Supabase Realtime reports a space change. Authorized admins can create drafts, schedule and publish sessions, start a new space directly into a LiveKit room, edit unpublished or scheduled details, open a scheduled session's waiting room, cancel sessions, and archive cancelled/ended records. LiveKit Cloud powers audio rooms, with short-lived server-signed join tokens, listener-first permissions, waiting-room admission, speaker requests, host controls, and explicit session start/end.
+
+1. In LiveKit Cloud, open your FXSnap project and copy its secure Project URL, API key, and API secret. Add these backend-only environment variables to the production API host:
+   - `LIVEKIT_URL` — the project `wss://...` URL.
+   - `LIVEKIT_API_KEY`.
+   - `LIVEKIT_API_SECRET`.
+   Do not add these as `EXPO_PUBLIC_*` variables or put them in the mobile app. The API secret must remain private.
+2. Apply `server/eventSpaces.sql` to the production Supabase project before deploying the API. It creates the event table and server-only participant roster, adds the room-name migration for an already-created event table, enables row-level security, and publishes public event changes to Supabase Realtime.
+3. Confirm the backend also has the existing `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and `FXSNAP_COMMUNITY_ADMIN_SUPABASE_USER_IDS` settings. Keep the Supabase service-role key server-side and populate the admin allowlist with approved Supabase Auth user UUIDs.
+4. Deploy the updated backend only after both the migration and LiveKit environment variables are in place. Admins can schedule a future session (then open its waiting room and start it) or create a new space and start LiveKit immediately. Users must sign in to join; users in a scheduled session's waiting room receive no LiveKit token until the host/admin admits them. New attendees enter as listeners with publishing disabled.
+5. Build and distribute a new native app after applying the Expo LiveKit plugins. Expo Go cannot run the native WebRTC module. For internal testing, use the configured EAS development profile, for example `npx eas build --platform android --profile development` (or `ios`); production releases need a new native build too. Web Events pages can discover sessions but direct users to mobile to join audio.
+6. Test with separate admin/host and listener accounts: enter the waiting room, start the room, admit a listener, verify the listener can hear but cannot publish, request to speak, approve the request, verify microphone publishing works only after approval, leave the room, and end the session. The LiveKit room is deleted when the host/admin ends the session.
+7. The current audio phase does not include in-room text chat/reactions, push reminders, or private-room invitations. Private rooms can currently be joined only by their assigned host or an administrator.
+
+Live Events audio continues in the background for listeners. iOS enables the audio background mode; Android runs a media-playback foreground service and shows an ongoing notification while connected. Speakers are automatically muted when the app is backgrounded and must turn their microphone back on after returning. This requires a new native iOS/Android build; it cannot be verified in Expo Go or the browser preview. Test backgrounding, returning to the room, notification dismissal on leave, Bluetooth/headphone routing, and interrupted network sessions on physical devices for both platforms before release.
+
+For a browser-only UI walkthrough, run the Expo development server and open `/events?demo=1`. This development-web-only preview lets you create a scheduled sample space in Events management and view it on the Events page; it stores data in that browser only and does not call the backend, Supabase, or LiveKit. It is not a production admin flow or an audio-room test.
+
 ### System announcements and push notification center
 
 System announcements are stored separately from Community posts and can reach signed-in FXSnap users without Community membership. The admin API derives privileges from the server-side `FXSNAP_COMMUNITY_ADMIN_SUPABASE_USER_IDS` allowlist; use Supabase Auth user UUIDs, never emails or client-provided admin flags.
@@ -105,11 +125,11 @@ System announcements are stored separately from Community posts and can reach si
 
 Customer support is a persistent, human-to-human conversation inside FXSnap. It does not use the AI support endpoint. User messages are tied to the signed-in FXSnap/Google account; only the owner and allowlisted support admins can read a conversation. Message contents are not sent in push notifications.
 
-1. Ensure `server/community.sql` and `server/supabase-kv.sql` have been applied to the production Supabase project. Then apply `server/supportInbox.sql`. The support migration updates the inbox statuses to Open, Pending, and Resolved, adds non-sensitive app/subscription context and unread timestamps, and enables owner-only message reads for Supabase Realtime. It grants authenticated users select access only to their own conversation/messages; message writes continue through the server API.
+1. Ensure `server/community.sql` and `server/supabase-kv.sql` have been applied to the production Supabase project. Then apply `server/supportInbox.sql` and `server/supportInboxAttachments.sql`. The migrations update the inbox statuses to Open, Pending, and Resolved; add non-sensitive app/subscription context and unread timestamps; enable owner-only message reads for Supabase Realtime; and create a private support-media bucket limited to JPEG, PNG, and WebP images of at most 3 MB. Message writes and signed image access continue through the server API.
 2. Set `FXSNAP_COMMUNITY_ADMIN_SUPABASE_USER_IDS` to the approved support staff Supabase Auth UUIDs. This same server-side allowlist controls the admin inbox. Never use emails or client-provided admin flags.
 3. Keep `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `FXSNAP_AUTH_SECRET`, and `REVENUECAT_SECRET_API_KEY` in the backend secret manager only. The admin inbox reports subscription status as active/free/unavailable; it does not retrieve or store payment credentials or full billing data.
 4. For background admin and user reply notifications, configure `EXPO_ACCESS_TOKEN`, allowlisted admins must sign in and enable app notifications on a registered mobile device, and users must opt into push. Notifications contain no support message text. Foreground chats receive Supabase Realtime message events and retain a short polling fallback; the admin inbox refreshes frequently and can also alert allowlisted admins by push.
-5. Deploy the updated backend and install a new mobile build. Test with two signed-in accounts and an allowlisted admin: send a user message, confirm it appears in the admin inbox with unread count/context, reply as admin, verify the user sees the reply while the chat is open, background the user/admin app to verify push, change Open/Pending/Resolved, and confirm a different user cannot read either conversation.
+5. Deploy the updated backend and install a new mobile build. Test with two signed-in accounts and an allowlisted admin: send a user message with and without a photo, confirm it appears in the admin inbox with unread count/context and the image is visible only in the conversation, reply as admin, verify the user sees the reply while the chat is open, background the user/admin app to verify push, change Open/Pending/Resolved, and confirm a different user cannot read the conversation or access its private media.
 
 For UI work, opening `/community` in an Expo development build (web or Expo Go) bypasses Google sign-in with a clearly labeled local preview identity and in-memory demo posts. Create, react, follow, and comment interactions stay in the app session and reset on reload; this preview does not authenticate against or write to production. It is gated to development builds only and is not a substitute for testing the authenticated mobile app or backend.
 
@@ -125,6 +145,12 @@ Your API endpoints will be available at:
 - https://<your-project>.vercel.app/api/strategy
 - https://<your-project>.vercel.app/api/market-data
 ```
+
+### Learning Hub onboarding
+
+New learners see a four-screen welcome, curriculum roadmap, Pro Trader learning milestone, and experience-level choice before starting the first Foundations lesson. Completion and the selected level are saved with Learning Hub progress on the device. Learners with existing saved lesson history skip the introduction, and it is not shown again after completion.
+
+The Pro Trader introduction describes an educational milestone only. Badge issuance and display on profiles or other identity surfaces must be implemented and verified separately before presenting the badge as an already-awarded credential.
 
 ## 3. Build with EAS
 
@@ -146,7 +172,7 @@ Replace the placeholders in app.json and eas.json with your real Expo project ID
 4. Set the public SDK keys in the Expo app environment and the secret key on the backend.
 5. Test with Google Play internal / license-test tracks.
 
-Set `EXPO_PUBLIC_REVENUECAT_WEEKLY_PRODUCT_ID` or `EXPO_PUBLIC_REVENUECAT_QUARTERLY_PRODUCT_ID` if your store product identifiers differ. Prices and localized currencies are loaded from the store products through RevenueCat. Configure country-specific price tiers to support the “Save 71%” badge: $7.99 weekly and $29.99 for three months yields 71% savings against thirteen weekly payments ($103.87), rounded to the nearest percent.
+Set `EXPO_PUBLIC_REVENUECAT_WEEKLY_PRODUCT_ID`, `EXPO_PUBLIC_REVENUECAT_MONTHLY_PRODUCT_ID`, or `EXPO_PUBLIC_REVENUECAT_QUARTERLY_PRODUCT_ID` if your store product identifiers differ. Configure all three products in App Store Connect, Google Play Console, and the RevenueCat offering. Prices and localized currencies are loaded from RevenueCat. The paywall labels Monthly as “Most Popular” and displays “Save 33%” on the three-month plan.
 
 ## 5. Production checklist
 

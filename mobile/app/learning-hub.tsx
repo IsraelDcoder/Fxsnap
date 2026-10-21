@@ -15,9 +15,16 @@ import Svg, { Circle } from 'react-native-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AnimatedTouchableOpacity as TouchableOpacity } from '@/components/AnimatedTouchableOpacity';
 import { AmbientBackdrop } from '@/components/AmbientBackdrop';
+import { LearningHubOnboarding } from '@/components/LearningHubOnboarding';
 import { useColors } from '@/hooks/useColors';
 import { getEstimatedLessonMinutes, getLearningLesson, LEARNING_CATEGORIES, LEARNING_LESSONS } from '@/data/learningContent';
-import { getCurrentLearningStreak, getLearningProgress, type LearningProgress } from '@/services/learningProgress';
+import {
+  completeLearningOnboarding,
+  getCurrentLearningStreak,
+  getLearningProgress,
+  type LearningExperienceLevel,
+  type LearningProgress,
+} from '@/services/learningProgress';
 import { getLearningLevelForLesson } from '@/data/learningCurriculum';
 import {
   getCurrentLearningLesson,
@@ -36,6 +43,8 @@ export default function LearningHubScreen({ previewMode = false }: { previewMode
   const [progress, setProgress] = useState<LearningProgress | null>(null);
   const [progressError, setProgressError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [onboardingSaving, setOnboardingSaving] = useState(false);
+  const [onboardingError, setOnboardingError] = useState<string | null>(null);
 
   useFocusEffect(useCallback(() => {
     let active = true;
@@ -87,10 +96,45 @@ export default function LearningHubScreen({ previewMode = false }: { previewMode
   const completedCount = lessonJourney.filter((lesson) => completedLessonIds.includes(lesson.id)).length;
   const overallPercent = lessonJourney.length ? Math.round(completedCount / lessonJourney.length * 100) : 0;
   const streakCount = progress ? getCurrentLearningStreak(progress) : 0;
+  const experienceLabel = progress?.experienceLevel
+    ? {
+      new_to_fx: 'New to forex',
+      know_the_basics: 'I know the basics',
+      experienced: 'Experienced',
+    }[progress.experienceLevel]
+    : null;
 
   const openLesson = (lessonId: string) => {
     router.push({ pathname: '/learning-lesson/[lessonId]', params: { lessonId } });
   };
+
+  const startLearningJourney = async (experienceLevel: LearningExperienceLevel) => {
+    if (onboardingSaving) return;
+    setOnboardingSaving(true);
+    setOnboardingError(null);
+    try {
+      const firstLesson = getLearningJourneyLessons()[0];
+      if (!firstLesson) throw new Error('The first Learning Hub lesson is not available right now.');
+      const savedProgress = await completeLearningOnboarding(experienceLevel);
+      setProgress(savedProgress);
+      router.replace({ pathname: '/learning-lesson/[lessonId]', params: { lessonId: firstLesson.id } });
+    } catch (error) {
+      setOnboardingError(error instanceof Error ? error.message : 'Your Learning Hub setup could not be saved. Please try again.');
+    } finally {
+      setOnboardingSaving(false);
+    }
+  };
+
+  if (!isLoading && progress && !progress.learningOnboardingCompleted) {
+    return (
+      <LearningHubOnboarding
+        saving={onboardingSaving}
+        error={onboardingError}
+        onStart={(experienceLevel) => { void startLearningJourney(experienceLevel); }}
+        onBack={() => router.replace('/(tabs)/home')}
+      />
+    );
+  }
 
   return (
     <View style={[styles.screen, { backgroundColor: colors.background, paddingTop: previewMode ? 0 : Platform.OS === 'web' ? 67 : insets.top + 8 }]}>
@@ -138,6 +182,12 @@ export default function LearningHubScreen({ previewMode = false }: { previewMode
       >
         <Text style={[styles.title, { color: colors.text }]}>Learning Hub</Text>
         <Text style={[styles.subtitle, { color: colors.textSecondary }]}>Beginner → Advanced • Master the markets, one step at a time.</Text>
+        {experienceLabel ? (
+          <View style={[styles.experiencePill, { backgroundColor: `${colors.buy}12` }]}>
+            <Feather name="sliders" size={12} color={colors.buy} />
+            <Text style={[styles.experienceLabel, { color: colors.buy }]}>{experienceLabel}</Text>
+          </View>
+        ) : null}
 
         <View style={[styles.searchBox, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
           <Feather name="search" size={18} color={colors.textSecondary} />
@@ -345,6 +395,8 @@ const styles = StyleSheet.create({
   content: { paddingHorizontal: 18, paddingTop: 9, paddingBottom: 32 },
   title: { fontSize: 28, lineHeight: 34, fontFamily: 'Inter_700Bold', letterSpacing: -0.7 },
   subtitle: { marginTop: 5, marginBottom: 15, fontSize: 12, lineHeight: 18, fontFamily: 'Inter_400Regular' },
+  experiencePill: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: -5, marginBottom: 12, paddingHorizontal: 9, paddingVertical: 6, borderRadius: 13 },
+  experienceLabel: { fontSize: 9, fontFamily: 'Inter_600SemiBold' },
   searchBox: { minHeight: 49, borderWidth: 1, borderRadius: 25, paddingHorizontal: 15, flexDirection: 'row', alignItems: 'center', gap: 10, elevation: 1, shadowColor: '#16372D', shadowOpacity: 0.06, shadowRadius: 8, shadowOffset: { width: 0, height: 3 } },
   searchInput: { flex: 1, minHeight: 46, fontSize: 14, fontFamily: 'Inter_400Regular' },
   errorCard: { marginTop: 14, borderWidth: 1, borderRadius: 14, padding: 12, flexDirection: 'row', gap: 9, alignItems: 'center' },

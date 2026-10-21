@@ -5,7 +5,7 @@
     "version": "1.0.0",
     "icon": "./assets/images/icon.png",
     "scheme": "mobile",
-    "userInterfaceStyle": "automatic",
+    "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "splash": {
       "image": "./assets/images/icon.png",
@@ -17,7 +17,11 @@
       "bundleIdentifier": "com.fxsnap.mobile",
       "infoPlist": {
         "NSCameraUsageDescription": "FXSnap uses the camera so you can submit a trading chart for analysis.",
-        "NSPhotoLibraryUsageDescription": "FXSnap uses your photo library so you can select a trading chart for analysis."
+        "NSPhotoLibraryUsageDescription": "FXSnap uses your photo library so you can select a trading chart for analysis.",
+        "NSMicrophoneUsageDescription": "FXSnap uses your microphone when you choose to speak in a live Events space.",
+        "UIBackgroundModes": [
+          "audio"
+        ]
       }
     },
     "android": {
@@ -25,6 +29,7 @@
       "softwareKeyboardLayoutMode": "resize",
       "permissions": [
         "CAMERA",
+        "RECORD_AUDIO",
         "POST_NOTIFICATIONS"
       ],
       "blockedPermissions": [
@@ -55,6 +60,7 @@
         }
       ],
       "expo-font",
+      "expo-video",
       "expo-web-browser",
       [
         "expo-image-picker",
@@ -62,7 +68,21 @@
           "microphonePermission": false
         }
       ],
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "@livekit/react-native-expo-plugin",
+        {
+          "android": {
+            "audioType": "communication"
+          }
+        }
+      ],
+      [
+        "@config-plugins/react-native-webrtc",
+        {
+          "microphonePermission": "FXSnap uses your microphone when you choose to speak in a live Events space."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,
@@ -73,6 +93,9 @@
       "eas": {
         "projectId": "34e68993-4970-4cd5-8804-4e9805ef6d8c"
       }
+    },
+    "autolinking": {
+      "nativeModulesDir": "./modules"
     },
     "owner": "eazy001kng1"
   }

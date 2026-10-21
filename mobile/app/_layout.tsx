@@ -1,5 +1,5 @@
-import React, { useEffect, useRef } from 'react';
-import { Platform } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Platform, StyleSheet, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -14,7 +14,7 @@ import {
   Inter_700Bold,
   useFonts,
 } from '@expo-google-fonts/inter';
-import { Stack, usePathname } from 'expo-router';
+import { router, Stack, usePathname } from 'expo-router';
 import { useApp } from '@/context/AppContext';
 import * as SplashScreen from 'expo-splash-screen';
 import * as Sentry from '@sentry/react-native';
@@ -22,6 +22,8 @@ import * as Notifications from 'expo-notifications';
 import { registerForegroundNotificationHandler, getNotificationResponseRoute, syncRegisteredPushNotifications } from '@/services/notifications';
 import { markSystemAnnouncementRead } from '@/services/community';
 import { trackEvent } from '@/services/telemetry';
+import { isCommunityFeatureRoute } from '@/services/featureAccess';
+import { useColors } from '@/hooks/useColors';
 
 SplashScreen.preventAutoHideAsync();
 const sentryDsn = process.env.EXPO_PUBLIC_SENTRY_DSN?.trim();
@@ -36,9 +38,12 @@ if (hasValidSentryDsn) {
 const queryClient = new QueryClient();
 
 function RootLayoutNav({ fontsReady }: { fontsReady: boolean }) {
-  const { onboardingComplete, isLoading } = useApp();
+  const { onboardingComplete, isLoading, isSubscribed, checkFeatureAccess } = useApp();
+  const colors = useColors();
   const pathname = usePathname();
   const handledNotificationResponse = useRef<string | null>(null);
+  const [communityAccessVerifiedPath, setCommunityAccessVerifiedPath] = useState<string | null>(null);
+  const isCommunityPath = isCommunityFeatureRoute(pathname);
 
   useEffect(() => {
     if (fontsReady && !isLoading && pathname !== '/') {
@@ -55,6 +60,29 @@ function RootLayoutNav({ fontsReady }: { fontsReady: boolean }) {
       void syncRegisteredPushNotifications().catch(() => undefined);
     }
   }, [isLoading, onboardingComplete]);
+
+  useEffect(() => {
+    if (!isCommunityPath || isLoading) {
+      if (!isCommunityPath) setCommunityAccessVerifiedPath(null);
+      return;
+    }
+    let active = true;
+    setCommunityAccessVerifiedPath(null);
+    void checkFeatureAccess('COMMUNITY', pathname).then((access) => {
+      if (!active) return;
+      if (access.error) {
+        console.error('[ACCESS] Community subscription check failed.', access.error);
+        router.replace({ pathname: '/paywall', params: { source: 'subscription-required' } });
+        return;
+      }
+      if (access.allowed) setCommunityAccessVerifiedPath(pathname);
+    }).catch((error: unknown) => {
+      if (!active) return;
+      console.error('[ACCESS] Could not verify Community subscription.', error);
+      router.replace({ pathname: '/paywall', params: { source: 'subscription-required' } });
+    });
+    return () => { active = false; };
+  }, [checkFeatureAccess, isCommunityPath, isLoading, pathname]);
 
   useEffect(() => {
     if (Platform.OS === 'web') return;
@@ -103,6 +131,8 @@ function RootLayoutNav({ fontsReady }: { fontsReady: boolean }) {
         <Stack.Screen name="daily-brief" options={{ headerShown: false, animation: 'slide_from_right' }} />
         <Stack.Screen name="economic-calendar" options={{ headerShown: false, animation: 'slide_from_right' }} />
         <Stack.Screen name="events" options={{ headerShown: false, animation: 'slide_from_right' }} />
+        <Stack.Screen name="events-admin" options={{ headerShown: false, animation: 'slide_from_right' }} />
+        <Stack.Screen name="event-room" options={{ headerShown: false, animation: 'slide_from_right' }} />
         <Stack.Screen name="settings" options={{ headerShown: false, animation: 'slide_from_right' }} />
         <Stack.Screen name="auth/callback" options={{ headerShown: false, animation: 'none' }} />
         <Stack.Screen name="support-chat" options={{ headerShown: false, animation: 'slide_from_right' }} />
@@ -122,10 +152,22 @@ function RootLayoutNav({ fontsReady }: { fontsReady: boolean }) {
         <Stack.Screen name="paywall" options={{ headerShown: false, animation: 'slide_from_bottom', presentation: 'modal' }} />
         <Stack.Screen name="my-strategies" options={{ headerShown: false, animation: 'slide_from_right' }} />
       </Stack>
-      <CommunityInteractionPrompt enabled={!isLoading} />
+      {isCommunityPath && communityAccessVerifiedPath !== pathname ? (
+        <View style={[StyleSheet.absoluteFillObject, styles.accessCheck, { backgroundColor: colors.background }]}>
+          <ActivityIndicator color={colors.buy} />
+        </View>
+      ) : null}
+      <CommunityInteractionPrompt enabled={!isLoading && onboardingComplete && isSubscribed && pathname !== '/onboarding' && (!isCommunityPath || communityAccessVerifiedPath === pathname)} />
     </>
   );
 }
+
+const styles = StyleSheet.create({
+  accessCheck: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+});
 
 export default function RootLayout() {
   const [fontsLoaded, fontError] = useFonts({

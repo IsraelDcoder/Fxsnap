@@ -33,6 +33,7 @@ loadEnvFile();
 const { z } = require('zod');
 const persistentStore = require('./persistentStore');
 const { createCommunityApi } = require('./communityApi');
+const { createEventSpacesApi } = require('./eventSpacesApi');
 const { createSupportInboxApi } = require('./supportInboxApi');
 const { getMaximumScreenshotAgeMinutes } = require('./strategyConfig');
 const {
@@ -2895,7 +2896,9 @@ async function getCommunityActor(req, res) {
   }
   return {
     accountId: session.sub,
+    deviceId,
     supabaseUserId: account.supabaseUserId || null,
+    displayName: typeof account.displayName === 'string' ? account.displayName : '',
     pictureUrl: typeof account.pictureUrl === 'string'
       && account.pictureUrl.startsWith('https://')
       && account.pictureUrl.length <= 2048
@@ -4437,11 +4440,27 @@ function createRequestHandler() {
     notifyAdmins: () => require('./notificationService').sendSupportInboxNotification(),
     notifyMember: (accountId) => require('./notificationService').sendSupportReplyNotification(accountId),
   });
+  const handleEventSpacesRequest = createEventSpacesApi({
+    getActor: async (req, res) => {
+      const actor = await getCommunityActor(req, res);
+      if (!actor) return null;
+      const adminIds = new Set((process.env.FXSNAP_COMMUNITY_ADMIN_SUPABASE_USER_IDS || '')
+        .split(',').map((id) => id.trim()).filter(Boolean));
+      return {
+        ...actor,
+        displayName: actor.displayName,
+        isAdmin: adminIds.has(actor.supabaseUserId),
+      };
+    },
+    sendJson,
+    readJsonBody,
+  });
   const handleCommunityRequest = createCommunityApi({
     getActor: getCommunityActor,
     sendJson,
     readJsonBody,
     saveCommunityUsername,
+    requirePremiumSubscription: (deviceId, res) => requirePremiumSubscription(deviceId, res),
   });
   return (req, res) => {
     const url = new URL(req.url || '/', `http://${req.headers.host}`);
@@ -4496,6 +4515,10 @@ function createRequestHandler() {
         console.error('[Account] Account deletion failed.', error?.name || 'Unknown error');
         return sendJson(res, 500, { error: 'Unable to delete your FXSnap account.' });
       });
+    }
+
+    if (pathname.startsWith('/api/events/spaces') || pathname.startsWith('/api/admin/event-spaces')) {
+      return handleEventSpacesRequest(req, res, url);
     }
 
     if (pathname.startsWith('/api/community/')

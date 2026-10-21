@@ -1,8 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  Alert,
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
+  Image,
   ScrollView,
   StyleSheet,
   Text,
@@ -10,6 +12,7 @@ import {
   View,
 } from 'react-native';
 import { AnimatedTouchableOpacity as TouchableOpacity } from '@/components/AnimatedTouchableOpacity';
+import * as ImagePicker from 'expo-image-picker';
 import { Feather } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -31,6 +34,12 @@ const TOPICS: Array<{ id: SupportTopic; title: string; icon: React.ComponentProp
   { id: 'other', title: 'Other', icon: 'more-horizontal' },
 ];
 
+type PendingAttachment = {
+  uri: string;
+  base64: string;
+  contentType: string;
+};
+
 function formatMessageTime(value: string) {
   const date = new Date(value);
   return Number.isNaN(date.getTime())
@@ -47,8 +56,11 @@ export default function SupportChatScreen() {
   const [conversationStatus, setConversationStatus] = useState<string | null>(null);
   const [topic, setTopic] = useState<SupportTopic>('other');
   const [draft, setDraft] = useState('');
+  const [attachment, setAttachment] = useState<PendingAttachment | null>(null);
+  const [inputHeight, setInputHeight] = useState(34);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [choosingImage, setChoosingImage] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
 
@@ -95,21 +107,71 @@ export default function SupportChatScreen() {
 
   const sendMessage = async () => {
     const content = draft.trim();
-    if (!content || sending) return;
+    if ((!content && !attachment) || sending) return;
     setSending(true);
     setError('');
     try {
-      const result = await sendSupportChatMessage(content, topic, getSupportContext());
+      const result = await sendSupportChatMessage(
+        content,
+        topic,
+        getSupportContext(),
+        attachment ? { base64: attachment.base64, contentType: attachment.contentType } : undefined,
+      );
       setMessages((current) => result.duplicate || current.some((message) => message.id === result.message.id)
         ? current
         : [...current, result.message]);
       setConversationStatus('open');
       setDraft('');
+      setAttachment(null);
+      setInputHeight(34);
       await loadConversation(false);
     } catch (sendError) {
       setError(sendError instanceof Error ? sendError.message : 'Could not send your message. Please try again.');
     } finally {
       setSending(false);
+    }
+  };
+
+  const chooseImage = async (source: 'library' | 'camera') => {
+    if (choosingImage || sending) return;
+    setChoosingImage(true);
+    setError('');
+    try {
+      if (source === 'camera' && Platform.OS !== 'web') {
+        const permission = await ImagePicker.requestCameraPermissionsAsync();
+        if (!permission.granted) {
+          Alert.alert('Camera access needed', 'Allow camera access to take a support photo.');
+          return;
+        }
+      }
+      const options: ImagePicker.ImagePickerOptions = {
+        mediaTypes: ['images'],
+        allowsEditing: false,
+        quality: 0.7,
+        base64: true,
+      };
+      const result = source === 'camera'
+        ? await ImagePicker.launchCameraAsync(options)
+        : await ImagePicker.launchImageLibraryAsync(options);
+      const image = result.assets?.[0];
+      if (result.canceled || !image) return;
+      if (!image.base64 || !['image/jpeg', 'image/png', 'image/webp'].includes(image.mimeType || '')) {
+        setError('Use a JPEG, PNG, or WebP photo to attach it to support.');
+        return;
+      }
+      if (image.base64.length > 4_194_304) {
+        setError('Choose an image smaller than 3 MB.');
+        return;
+      }
+      setAttachment({
+        uri: image.uri,
+        base64: image.base64,
+        contentType: image.mimeType || 'image/jpeg',
+      });
+    } catch (imageError) {
+      setError(imageError instanceof Error ? imageError.message : 'Could not choose a support image.');
+    } finally {
+      setChoosingImage(false);
     }
   };
 
@@ -124,7 +186,7 @@ export default function SupportChatScreen() {
     <KeyboardAvoidingView
       style={[styles.screen, { backgroundColor: colors.background }]}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      keyboardVerticalOffset={insets.top}
+      keyboardVerticalOffset={0}
     >
       <View style={[styles.header, { paddingTop: insets.top + 8, borderBottomColor: colors.cardBorder }]}>
         <TouchableOpacity
@@ -157,7 +219,7 @@ export default function SupportChatScreen() {
 
       <View style={[styles.privacyBanner, { backgroundColor: `${colors.buy}10`, borderBottomColor: `${colors.buy}22` }]}>
         <Feather name="lock" size={13} color={colors.buy} />
-        <Text style={[styles.privacyText, { color: colors.textSecondary }]}>Only you and authorized FXSnap support staff can see this chat.</Text>
+        <Text style={[styles.privacyText, { color: colors.textSecondary }]}>Your messages stay in this private FXSnap conversation.</Text>
       </View>
 
       <ScrollView
@@ -232,6 +294,14 @@ export default function SupportChatScreen() {
                         : { backgroundColor: colors.card, borderColor: colors.cardBorder },
                     ]}>
                       <Text style={[styles.messageText, { color: isMember ? colors.primaryForeground : colors.text }]}>{message.body}</Text>
+                      {message.attachment ? (
+                        <Image
+                          source={{ uri: message.attachment.url }}
+                          style={styles.messageImage}
+                          resizeMode="cover"
+                          accessibilityLabel="Image attached to support message"
+                        />
+                      ) : null}
                     </View>
                     <Text style={[styles.messageTime, { color: colors.textMuted, textAlign: isMember ? 'right' : 'left' }]}>
                       {formatMessageTime(message.created_at)}
@@ -256,24 +326,66 @@ export default function SupportChatScreen() {
             Topic: {TOPICS.find((item) => item.id === topic)?.title}
           </Text>
         ) : null}
+        {attachment ? (
+          <View style={styles.attachmentPreview}>
+            <Image source={{ uri: attachment.uri }} style={styles.attachmentThumbnail} />
+            <Text style={[styles.attachmentLabel, { color: colors.textSecondary }]}>Photo attached</Text>
+            <TouchableOpacity
+              onPress={() => setAttachment(null)}
+              accessibilityRole="button"
+              accessibilityLabel="Remove attached photo"
+              style={styles.removeAttachment}
+            >
+              <Feather name="x" size={15} color={colors.textSecondary} />
+            </TouchableOpacity>
+          </View>
+        ) : null}
         <View style={[styles.composer, { backgroundColor: colors.input, borderColor: colors.cardBorder }]}>
+          <TouchableOpacity
+            onPress={() => void chooseImage('library')}
+            disabled={loading || sending || choosingImage}
+            style={styles.attachButton}
+            accessibilityRole="button"
+            accessibilityLabel="Attach photo from library"
+          >
+            {choosingImage ? <ActivityIndicator size="small" color={colors.buy} /> : <Feather name="image" size={18} color={colors.textSecondary} />}
+          </TouchableOpacity>
+          {Platform.OS !== 'web' ? (
+            <TouchableOpacity
+              onPress={() => void chooseImage('camera')}
+              disabled={loading || sending || choosingImage}
+              style={styles.attachButton}
+              accessibilityRole="button"
+              accessibilityLabel="Take a photo"
+            >
+              <Feather name="camera" size={18} color={colors.textSecondary} />
+            </TouchableOpacity>
+          ) : null}
           <TextInput
             value={draft}
-            onChangeText={setDraft}
+            onChangeText={(value) => {
+              setDraft(value);
+              if (!value) setInputHeight(34);
+            }}
             placeholder="Write a private message…"
             placeholderTextColor={colors.textMuted}
-            style={[styles.input, { color: colors.text }]}
+            style={[styles.input, { color: colors.text, height: inputHeight }]}
+            onContentSizeChange={(event) => {
+              setInputHeight(Math.max(34, Math.min(78, event.nativeEvent.contentSize.height)));
+            }}
             multiline
+            scrollEnabled
             maxLength={2000}
             editable={!loading && !sending}
             onSubmitEditing={() => void sendMessage()}
             blurOnSubmit={false}
+            textAlignVertical="top"
             accessibilityLabel="Private support message"
           />
           <TouchableOpacity
             onPress={() => void sendMessage()}
-            disabled={sending || loading || !draft.trim()}
-            style={[styles.sendButton, { backgroundColor: colors.buy, opacity: sending || loading || !draft.trim() ? 0.48 : 1 }]}
+            disabled={sending || loading || (!draft.trim() && !attachment)}
+            style={[styles.sendButton, { backgroundColor: colors.buy, opacity: sending || loading || (!draft.trim() && !attachment) ? 0.48 : 1 }]}
             accessibilityRole="button"
             accessibilityLabel="Send private support message"
           >
@@ -326,9 +438,15 @@ const styles = StyleSheet.create({
   errorBox: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, borderWidth: 1, borderRadius: 12, padding: 11, marginTop: 10 },
   errorText: { flex: 1, fontSize: 10, lineHeight: 15, fontFamily: 'Inter_400Regular' },
   topicSelectedLabel: { marginBottom: 7, fontSize: 9, fontFamily: 'Inter_500Medium' },
-  composerWrap: { paddingHorizontal: 14, paddingTop: 11, borderTopWidth: StyleSheet.hairlineWidth },
-  composer: { minHeight: 50, maxHeight: 130, flexDirection: 'row', alignItems: 'flex-end', borderWidth: 1, borderRadius: 18, padding: 5 },
-  input: { flex: 1, maxHeight: 114, minHeight: 38, paddingHorizontal: 10, paddingVertical: 9, fontSize: 12, lineHeight: 18, fontFamily: 'Inter_400Regular' },
-  sendButton: { width: 38, height: 38, borderRadius: 13, alignItems: 'center', justifyContent: 'center' },
+  attachmentPreview: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 7, padding: 5, paddingRight: 9, borderRadius: 12, backgroundColor: 'rgba(128,128,128,0.12)' },
+  attachmentThumbnail: { width: 38, height: 38, borderRadius: 8 },
+  attachmentLabel: { fontSize: 10, fontFamily: 'Inter_500Medium' },
+  removeAttachment: { width: 26, height: 26, alignItems: 'center', justifyContent: 'center', borderRadius: 13 },
+  composerWrap: { paddingHorizontal: 10, paddingTop: 7, borderTopWidth: StyleSheet.hairlineWidth },
+  composer: { minHeight: 44, maxHeight: 90, flexDirection: 'row', alignItems: 'flex-end', borderWidth: 1, borderRadius: 24, padding: 4 },
+  input: { flex: 1, maxHeight: 78, minHeight: 34, paddingHorizontal: 6, paddingVertical: 7, fontSize: 12, lineHeight: 18, fontFamily: 'Inter_400Regular', textAlignVertical: 'top' },
+  attachButton: { width: 30, height: 34, alignItems: 'center', justifyContent: 'center' },
+  messageImage: { width: 220, height: 180, marginTop: 7, borderRadius: 12, backgroundColor: '#D8DEDA' },
+  sendButton: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
   disclaimer: { marginTop: 7, textAlign: 'center', fontSize: 8, fontFamily: 'Inter_400Regular' },
 });

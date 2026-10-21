@@ -5,6 +5,7 @@ import {
   Image,
   Linking,
   PanResponder,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -13,7 +14,9 @@ import {
 } from 'react-native';
 import { AnimatedTouchableOpacity as TouchableOpacity } from '@/components/AnimatedTouchableOpacity';
 import { AmbientBackdrop } from '@/components/AmbientBackdrop';
-import Svg, { Circle, Line, Path, Rect, Text as SvgText } from 'react-native-svg';
+import { GlassView, isLiquidGlassAvailable } from 'expo-glass-effect';
+import { LinearGradient } from 'expo-linear-gradient';
+import Svg, { Circle, Defs, Line, LinearGradient as SvgLinearGradient, Path, Rect, Stop } from 'react-native-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 import { router } from 'expo-router';
@@ -56,42 +59,103 @@ function FXSnapDailyBriefCard({ brief, colors, compact, onSave, saved = false }:
   onSave?: () => void;
   saved?: boolean;
 }) {
-  return (
-    <View style={[styles.storyCard, { backgroundColor: colors.surface, borderColor: `${colors.buy}66`, padding: compact ? 16 : 18 }]}>
-      <View style={styles.storyHeader}>
-        <View style={styles.categoryRow}>
-          <View style={[styles.categoryMarker, { backgroundColor: colors.buy }]} />
-          <Text style={[styles.categoryText, { color: colors.buy }]}>{brief.category.toUpperCase()}</Text>
+  const artworkHeight = compact ? 96 : 112;
+  const artworkBase = colors.text === '#FFFFFF' ? '#073D31' : '#126448';
+  const colorScheme = colors.text === '#FFFFFF' ? 'dark' : 'light';
+
+  const cardContent = (
+    <View style={styles.storyInner}>
+      <View style={[styles.storyArtwork, { height: artworkHeight, backgroundColor: artworkBase }]}>
+        <Svg width="100%" height={artworkHeight} viewBox="0 0 360 112" preserveAspectRatio="xMidYMid slice" style={StyleSheet.absoluteFill}>
+          <Defs>
+            <SvgLinearGradient id="briefArtworkGradient" x1="0" y1="0" x2="1" y2="1">
+              <Stop offset="0" stopColor={artworkBase} />
+              <Stop offset="1" stopColor="#071F1A" />
+            </SvgLinearGradient>
+          </Defs>
+          <Rect width="360" height="112" fill="url(#briefArtworkGradient)" />
+          {[26, 52, 78].map((y) => <Line key={y} x1="0" y1={y} x2="360" y2={y} stroke="#FFFFFF" strokeOpacity="0.08" strokeWidth="1" />)}
+          <Path d="M0 90 C35 82 46 93 72 70 S116 77 145 57 S190 70 218 44 S258 53 283 29 S327 38 360 12" fill="none" stroke={colors.gold} strokeOpacity="0.85" strokeWidth="2" />
+          <Path d="M0 103 C40 96 55 106 88 87 S133 93 165 74 S211 83 245 59 S293 70 321 49 S344 51 360 42" fill="none" stroke="#FFFFFF" strokeOpacity="0.28" strokeWidth="1.5" />
+          <Circle cx="283" cy="29" r="8" fill={colors.gold} fillOpacity="0.18" />
+          <Circle cx="283" cy="29" r="3" fill={colors.gold} />
+          <Circle cx="283" cy="29" r="16" fill="none" stroke={colors.gold} strokeOpacity="0.28" />
+        </Svg>
+        <View style={styles.artworkTopRow}>
+          <View style={styles.editionPill}>
+            <Feather name="star" size={11} color={colors.gold} />
+            <Text style={styles.editionText}>FXSNAP DAILY</Text>
+          </View>
+          <View style={styles.storyCountPill}>
+            <Text style={styles.storyCountText}>INSIGHT</Text>
+          </View>
+        </View>
+        <View style={styles.artworkCategory}>
+          <View style={styles.artworkIcon}>
+            <Feather name={(VISUAL_ICONS[brief.visual] || 'book-open') as React.ComponentProps<typeof Feather>['name']} size={18} color={colors.gold} />
+          </View>
+          <Text numberOfLines={1} style={styles.artworkCategoryText}>{brief.category.toUpperCase()}</Text>
         </View>
       </View>
 
-      <Text numberOfLines={3} style={[styles.briefTitle, { color: colors.text, fontSize: compact ? 26 : 31, lineHeight: compact ? 31 : 38 }]}>
-        {brief.title}
-      </Text>
-
-      <Text numberOfLines={compact ? 4 : 5} style={[styles.briefBody, { color: colors.textSecondary, fontSize: compact ? 14 : 15, lineHeight: compact ? 20 : 22 }]}>
-        {brief.body}
-      </Text>
-
-      <View style={[styles.takeawayCard, { backgroundColor: colors.background, borderColor: `${colors.buy}66` }]}>
-        <Text style={[styles.takeawayLabel, { color: colors.buy }]}>FXSNAP TAKEAWAY</Text>
-        <Text numberOfLines={3} style={[styles.takeawayText, { color: colors.text, fontSize: compact ? 16 : 18, lineHeight: compact ? 22 : 26 }]}>
-          {brief.takeaway}
+      <View style={[styles.storyContent, { padding: compact ? 14 : 18 }]}>
+        <Text numberOfLines={3} style={[styles.briefTitle, { color: colors.text, fontSize: compact ? 22 : 27, lineHeight: compact ? 27 : 32 }]}>
+          {brief.title}
         </Text>
-      </View>
 
-      {onSave ? (
-        <View style={styles.storyCardFooter}>
-          <TouchableOpacity
-            onPress={onSave}
-            style={[styles.saveButton, { backgroundColor: saved ? `${colors.buy}18` : colors.card, borderColor: saved ? `${colors.buy}66` : colors.cardBorder }]}
-            accessibilityLabel={saved ? 'Saved insight' : 'Save insight'}
-          >
-            <Feather name="heart" size={18} color={saved ? colors.buy : colors.textSecondary} fill={saved ? colors.buy : 'transparent'} />
-          </TouchableOpacity>
-          <Text style={[styles.saveText, { color: colors.textSecondary }]}>Save insight</Text>
+        <Text numberOfLines={compact ? 4 : 5} style={[styles.briefBody, { color: colors.textSecondary, fontSize: compact ? 13 : 14, lineHeight: compact ? 18 : 20 }]}>
+          {brief.body}
+        </Text>
+
+        <View style={[styles.takeawayCard, { backgroundColor: colors.background, borderColor: `${colors.buy}66` }]}>
+          <Text style={[styles.takeawayLabel, { color: colors.buy }]}>THE TAKEAWAY</Text>
+          <Text numberOfLines={3} style={[styles.takeawayText, { color: colors.text, fontSize: compact ? 15 : 16, lineHeight: compact ? 20 : 23 }]}>
+            {brief.takeaway}
+          </Text>
         </View>
-      ) : null}
+
+        {onSave ? (
+          <View style={styles.storyCardFooter}>
+            <TouchableOpacity
+              onPress={onSave}
+              style={[styles.saveButton, { backgroundColor: saved ? `${colors.buy}18` : colors.card, borderColor: saved ? `${colors.buy}66` : colors.cardBorder }]}
+              accessibilityLabel={saved ? 'Saved insight' : 'Save insight'}
+            >
+              <Feather name="heart" size={18} color={saved ? colors.buy : colors.textSecondary} fill={saved ? colors.buy : 'transparent'} />
+            </TouchableOpacity>
+            <Text style={[styles.saveText, { color: colors.textSecondary }]}>{saved ? 'Saved to your briefs' : 'Save this insight'}</Text>
+          </View>
+        ) : null}
+      </View>
+    </View>
+  );
+
+  const cardStyle = [styles.storyCard, { borderColor: `${colors.buy}66` }];
+  if (Platform.OS === 'ios' && isLiquidGlassAvailable()) {
+    return (
+      <GlassView
+        style={cardStyle}
+        tintColor={colors.surface}
+        colorScheme={colorScheme}
+        glassEffectStyle={{ style: 'regular', animate: true, animationDuration: 0.35 }}
+      >
+        {cardContent}
+      </GlassView>
+    );
+  }
+
+  return (
+    <View style={[cardStyle, { backgroundColor: colors.surface }]}>
+      <LinearGradient
+        pointerEvents="none"
+        colors={colorScheme === 'dark'
+          ? ['rgba(255,255,255,0.16)', 'rgba(255,255,255,0.025)', 'rgba(0,0,0,0.08)']
+          : ['rgba(255,255,255,0.74)', 'rgba(255,255,255,0.26)', 'rgba(35,129,95,0.08)']}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={StyleSheet.absoluteFill}
+      />
+      {cardContent}
     </View>
   );
 }
@@ -132,8 +196,9 @@ export default function DailyBriefExperience({ previewMode = false }: { previewM
   const briefs = briefState?.briefs || [];
   const currentBrief = briefs[currentIndex];
   const compactLayout = screenHeight < 720;
-  const artworkHeight = compactLayout ? 128 : Math.max(154, Math.min(188, Math.round(screenHeight * 0.23)));
-  const deckHeight = previewMode ? 235 : Math.max(360, Math.min(440, Math.round(screenHeight * 0.54)));
+  const deckHeight = previewMode
+    ? 235
+    : Math.max(400, Math.min(500, Math.round(screenHeight * (compactLayout ? 0.62 : 0.58))));
   const dateKey = briefState?.dateKey || getBriefDateKey();
   const savedBriefId = `daily-brief-${dateKey}`;
   const currentSavedBrief = currentBrief ? savedBriefs.find((item) => item.brief_id === savedBriefId && item.card_id === currentBrief.id) : null;
@@ -282,7 +347,14 @@ export default function DailyBriefExperience({ previewMode = false }: { previewM
       ) : currentBrief && briefState ? (
         <>
           <View style={styles.deckIntro}>
-            <Text style={[styles.deckHint, { color: colors.textSecondary }]}>Swipe through today's insights.</Text>
+            <View style={styles.deckIntroTop}>
+              <View style={styles.deckIntroLabel}>
+                <Feather name="star" size={12} color={colors.buy} />
+                <Text style={[styles.deckEyebrow, { color: colors.buy }]}>TODAY'S INSIGHTS</Text>
+              </View>
+              <Text style={[styles.deckCount, { color: colors.textSecondary }]}>{String(currentIndex + 1).padStart(2, '0')} <Text style={{ color: colors.textMuted }}>/ {String(briefs.length).padStart(2, '0')}</Text></Text>
+            </View>
+            <Text style={[styles.deckHint, { color: colors.textSecondary }]}>Swipe to explore today's insights.</Text>
           </View>
           <View style={styles.progressBars}>
             {progressBars.map((bar) => (
@@ -292,6 +364,7 @@ export default function DailyBriefExperience({ previewMode = false }: { previewM
             ))}
           </View>
 
+          <View style={styles.deckSpacer} />
           <View style={[styles.deck, { height: deckHeight }]}>
             {visibleCards.filter(({ index }) => index !== currentIndex).map(({ brief, index }) => {
               const depth = index - currentIndex;
@@ -309,14 +382,9 @@ export default function DailyBriefExperience({ previewMode = false }: { previewM
             </Animated.View>
           </View>
 
-          <View style={[styles.navigation, { borderTopColor: colors.cardBorder, paddingBottom: Math.max(insets.bottom, 10) }]}>
-            <TouchableOpacity onPress={() => void moveTo('previous')} disabled={currentIndex === 0} style={[styles.navigationButton, { borderColor: colors.cardBorder, opacity: currentIndex === 0 ? 0.3 : 1 }]} accessibilityLabel="Previous brief">
-              <Feather name="arrow-left" size={18} color={colors.textSecondary} />
-            </TouchableOpacity>
+          <View style={styles.deckSpacer} />
+          <View style={[styles.navigation, { paddingBottom: Math.max(insets.bottom, 10) }]}>
             <Text style={[styles.navigationHint, { color: colors.textMuted }]}>Swipe to continue</Text>
-            <TouchableOpacity onPress={() => void moveTo('next')} style={[styles.navigationButton, styles.nextButton, { backgroundColor: colors.buy, borderColor: colors.buy }]} accessibilityLabel={currentIndex === briefs.length - 1 ? 'Complete daily brief' : 'Next brief'}>
-              <Feather name={currentIndex === briefs.length - 1 ? 'check' : 'arrow-right'} size={18} color={colors.primaryForeground} />
-            </TouchableOpacity>
           </View>
           {saveMessage ? (
             <View style={[styles.toast, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
@@ -340,31 +408,41 @@ const styles = StyleSheet.create({
   loadingState: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 },
   loadingText: { fontSize: 13, fontFamily: 'Inter_500Medium' },
   deckIntro: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 7 },
-  deckHint: { marginTop: 2, fontSize: 10, fontFamily: 'Inter_400Regular' },
+  deckIntroTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  deckIntroLabel: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  deckEyebrow: { fontSize: 10, fontFamily: 'Inter_700Bold', letterSpacing: 0.8 },
+  deckCount: { fontSize: 11, fontFamily: 'Inter_600SemiBold', fontVariant: ['tabular-nums'] },
+  deckHint: { marginTop: 4, fontSize: 10, fontFamily: 'Inter_400Regular' },
   progressBars: { flexDirection: 'row', gap: 3, paddingHorizontal: 18, paddingBottom: 8 },
   progressTrack: { height: 3, flex: 1, borderRadius: 2, overflow: 'hidden' },
   progressFill: { height: '100%', borderRadius: 2 },
   deck: { minHeight: 0, marginHorizontal: 13, marginBottom: 7, position: 'relative' },
+  deckSpacer: { flex: 1 },
   briefTouchArea: { minHeight: 0, paddingHorizontal: 0 },
   stackedCard: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, paddingBottom: 0 },
   activeCard: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, paddingBottom: 0 },
-  storyCard: { flex: 1, minHeight: 0, borderWidth: 1, borderRadius: 24, justifyContent: 'flex-start', overflow: 'hidden', shadowColor: '#000', shadowOpacity: 0.22, shadowRadius: 12, shadowOffset: { width: 0, height: 8 }, elevation: 8 },
-  storyHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
-  categoryRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 2 },
-  categoryMarker: { width: 8, height: 8, borderRadius: 999 },
-  categoryText: { fontSize: 11, fontFamily: 'Inter_700Bold', letterSpacing: 0.8 },
+  storyCard: { flex: 1, minHeight: 0, borderWidth: 1, borderRadius: 26, justifyContent: 'flex-start', overflow: 'hidden', shadowColor: '#000', shadowOpacity: 0.22, shadowRadius: 16, shadowOffset: { width: 0, height: 9 }, elevation: 8 },
+  storyInner: { flex: 1, minHeight: 0, overflow: 'hidden', borderRadius: 25 },
+  storyArtwork: { paddingHorizontal: 17, paddingTop: 13, paddingBottom: 12, justifyContent: 'space-between', overflow: 'hidden' },
+  artworkTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  editionPill: { minHeight: 24, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 9, borderRadius: 12, backgroundColor: 'rgba(4,20,16,0.62)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.16)' },
+  editionText: { color: '#FFFFFF', fontSize: 9, fontFamily: 'Inter_700Bold', letterSpacing: 0.8 },
+  storyCountPill: { minHeight: 22, justifyContent: 'center', paddingHorizontal: 8, borderRadius: 11, backgroundColor: 'rgba(4,20,16,0.45)' },
+  storyCountText: { color: '#FFFFFF', fontSize: 8, fontFamily: 'Inter_600SemiBold', letterSpacing: 0.7 },
+  artworkCategory: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  artworkIcon: { width: 31, height: 31, borderWidth: 1, borderColor: 'rgba(255,255,255,0.28)', borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(4,20,16,0.56)' },
+  artworkCategoryText: { flex: 1, color: '#FFFFFF', fontSize: 10, fontFamily: 'Inter_700Bold', letterSpacing: 0.85 },
+  storyContent: { flex: 1, minHeight: 0 },
   briefTitle: { fontFamily: 'Inter_700Bold', fontWeight: '700', marginTop: 2, fontSize: 22 },
-  briefBody: { marginTop: 10, fontFamily: 'Inter_400Regular', fontSize: 13 },
-  takeawayCard: { borderWidth: 1, borderRadius: 14, paddingHorizontal: 12, paddingVertical: 10, marginTop: 14, gap: 5 },
-  takeawayLabel: { fontSize: 10, fontFamily: 'Inter_700Bold', letterSpacing: 0.7 },
+  briefBody: { marginTop: 8, fontFamily: 'Inter_400Regular', fontSize: 13 },
+  takeawayCard: { borderWidth: 1, borderRadius: 14, paddingHorizontal: 12, paddingVertical: 10, marginTop: 12, gap: 5 },
+  takeawayLabel: { fontSize: 9, fontFamily: 'Inter_700Bold', letterSpacing: 0.85 },
   takeawayText: { fontFamily: 'Inter_700Bold', fontWeight: '700', fontSize: 14 },
-  storyCardFooter: { flexDirection: 'row', alignItems: 'center', marginTop: 14, gap: 10 },
+  storyCardFooter: { flexDirection: 'row', alignItems: 'center', marginTop: 10, gap: 10 },
   saveButton: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderRadius: 19 },
   saveText: { fontSize: 13, fontFamily: 'Inter_500Medium' },
-  navigation: { height: 58, borderTopWidth: StyleSheet.hairlineWidth, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 19, paddingTop: 7 },
-  navigationButton: { width: 42, height: 42, borderWidth: 1, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
-  nextButton: { borderWidth: 0 },
-  navigationHint: { fontSize: 10, fontFamily: 'Inter_500Medium' },
+  navigation: { minHeight: 48, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 19, paddingTop: 7 },
+  navigationHint: { fontSize: 11, fontFamily: 'Inter_600SemiBold', letterSpacing: 0.3 },
   toast: { position: 'absolute', left: 30, right: 30, bottom: 77, minHeight: 42, borderWidth: 1, borderRadius: 14, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8 },
   toastText: { fontSize: 11, fontFamily: 'Inter_500Medium' },
   completionContent: { paddingHorizontal: 19, paddingTop: 28, alignItems: 'center' },

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   Alert,
+  Image,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -55,6 +56,7 @@ export default function SupportAdminScreen() {
   const [filter, setFilter] = useState<InboxFilter>('all');
   const [search, setSearch] = useState('');
   const [draft, setDraft] = useState('');
+  const [inputHeight, setInputHeight] = useState(33);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
@@ -144,6 +146,7 @@ export default function SupportAdminScreen() {
         ? current
         : [...current, { ...result.message, sender_account_id: '' }]);
       setDraft('');
+      setInputHeight(33);
       await loadInbox(false);
     } catch (sendError) {
       setError(sendError instanceof Error ? sendError.message : 'Could not send the support reply.');
@@ -168,6 +171,7 @@ export default function SupportAdminScreen() {
       setSelected(null);
       setMessages([]);
       setDraft('');
+      setInputHeight(33);
     } else if (router.canGoBack()) router.back();
     else router.replace('/settings');
   };
@@ -175,8 +179,8 @@ export default function SupportAdminScreen() {
   return (
     <KeyboardAvoidingView
       style={[styles.screen, { backgroundColor: colors.background }]}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={insets.top}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={0}
     >
       <View style={[styles.header, { paddingTop: insets.top + 8, borderBottomColor: colors.cardBorder }]}>
         <TouchableOpacity
@@ -240,6 +244,14 @@ export default function SupportAdminScreen() {
                       : { backgroundColor: colors.card, borderColor: colors.cardBorder },
                   ]}>
                     <Text style={[styles.messageText, { color: fromAdmin ? colors.primaryForeground : colors.text }]}>{message.body}</Text>
+                    {message.attachment ? (
+                      <Image
+                        source={{ uri: message.attachment.url }}
+                        style={styles.messageImage}
+                        resizeMode="cover"
+                        accessibilityLabel="Image attached to support message"
+                      />
+                    ) : null}
                     <Text style={[styles.messageTime, { color: fromAdmin ? `${colors.primaryForeground}B0` : colors.textMuted }]}>{formatTime(message.created_at)}</Text>
                   </View>
                 </View>
@@ -269,12 +281,20 @@ export default function SupportAdminScreen() {
             <View style={[styles.composer, { backgroundColor: colors.input, borderColor: colors.cardBorder }]}>
               <TextInput
                 value={draft}
-                onChangeText={setDraft}
+                onChangeText={(value) => {
+                  setDraft(value);
+                  if (!value) setInputHeight(33);
+                }}
                 placeholder="Reply privately…"
                 placeholderTextColor={colors.textMuted}
                 maxLength={2000}
                 multiline
-                style={[styles.input, { color: colors.text }]}
+                scrollEnabled
+                textAlignVertical="top"
+                style={[styles.input, { color: colors.text, height: inputHeight }]}
+                onContentSizeChange={(event) => {
+                  setInputHeight(Math.max(33, Math.min(74, event.nativeEvent.contentSize.height)));
+                }}
                 accessibilityLabel="Private support reply"
               />
               <TouchableOpacity
@@ -423,12 +443,13 @@ const styles = StyleSheet.create({
   adminMessageRow: { justifyContent: 'flex-end' },
   messageBubble: { maxWidth: '88%', paddingHorizontal: 12, paddingVertical: 9, borderWidth: 1, borderRadius: 15 },
   messageText: { fontSize: 11, lineHeight: 17, fontFamily: 'Inter_400Regular' },
+  messageImage: { width: 220, height: 180, marginTop: 7, borderRadius: 12, backgroundColor: '#D8DEDA' },
   messageTime: { marginTop: 5, textAlign: 'right', fontSize: 7, fontFamily: 'Inter_400Regular' },
   statusBar: { flexDirection: 'row', justifyContent: 'center', gap: 7, paddingHorizontal: 12, paddingVertical: 9, borderTopWidth: StyleSheet.hairlineWidth },
   statusButton: { minHeight: 30, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 13, borderWidth: 1, borderRadius: 11 },
   statusButtonText: { fontSize: 9, textTransform: 'capitalize', fontFamily: 'Inter_600SemiBold' },
-  composerWrap: { paddingHorizontal: 13, paddingTop: 9, borderTopWidth: StyleSheet.hairlineWidth },
-  composer: { minHeight: 48, maxHeight: 118, flexDirection: 'row', alignItems: 'flex-end', padding: 5, borderWidth: 1, borderRadius: 16 },
-  input: { flex: 1, minHeight: 37, maxHeight: 104, paddingHorizontal: 9, paddingVertical: 8, fontSize: 11, lineHeight: 16, fontFamily: 'Inter_400Regular' },
-  sendButton: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: 12 },
+  composerWrap: { paddingHorizontal: 10, paddingTop: 7, borderTopWidth: StyleSheet.hairlineWidth },
+  composer: { minHeight: 42, maxHeight: 86, flexDirection: 'row', alignItems: 'flex-end', padding: 4, borderWidth: 1, borderRadius: 23 },
+  input: { flex: 1, minHeight: 33, maxHeight: 74, paddingHorizontal: 9, paddingVertical: 7, fontSize: 11, lineHeight: 16, fontFamily: 'Inter_400Regular', textAlignVertical: 'top' },
+  sendButton: { width: 33, height: 33, alignItems: 'center', justifyContent: 'center', borderRadius: 17 },
 });

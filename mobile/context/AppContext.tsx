@@ -170,12 +170,12 @@ export interface AppSettings {
   themeMode: 'light' | 'dark' | 'system';
   preferredMarket: 'crypto' | 'stocks' | 'forex' | 'futures';
   onboardingMarkets: string[];
-  onboardingExperience: 'beginner' | 'advanced' | 'expert';
+  onboardingExperience: 'beginner' | 'intermediate' | 'expert';
   onboardingChallenges: string[];
   onboardingGoals: string[];
   onboardingRiskTolerance: 'low' | 'medium' | 'high';
-  preferredTradingStyle: 'scalping' | 'day_trading' | 'swing';
-  analysisDetail: 'basic' | 'standard' | 'advanced';
+  preferredTradingStyle: 'scalping' | 'day_trading' | 'intraday_trading' | 'swing' | 'position' | 'other';
+  analysisDetail: 'beginner' | 'intermediate' | 'advanced';
   accountBalance: number;
   balanceSet: boolean;
   riskPercent: number;
@@ -206,7 +206,7 @@ interface AppContextValue {
   clearPendingFeatureRoute: () => void;
   purchasePlan: (plan: BillingPlan) => Promise<boolean>;
   restorePurchases: () => Promise<boolean>;
-  updateSettings: (s: Partial<AppSettings>) => void;
+  updateSettings: (s: Partial<AppSettings>) => Promise<void>;
   saveAnalysis: (a: AnalysisResult) => void;
   deleteAnalysis: (id: string) => void;
   setCurrentAnalysis: (a: AnalysisResult | null) => void;
@@ -234,7 +234,7 @@ const defaultSettings: AppSettings = {
   onboardingGoals: [],
   onboardingRiskTolerance: 'low',
   preferredTradingStyle: 'day_trading',
-  analysisDetail: 'basic',
+  analysisDetail: 'beginner',
   accountBalance: 1000,
   balanceSet: false,
   riskPercent: 1,
@@ -278,15 +278,16 @@ function isRiskTolerance(value: unknown): value is AppSettings['onboardingRiskTo
 }
 
 function isTradingStyle(value: unknown): value is AppSettings['preferredTradingStyle'] {
-  return value === 'scalping' || value === 'day_trading' || value === 'swing';
+  return value === 'scalping' || value === 'day_trading' || value === 'intraday_trading'
+    || value === 'swing' || value === 'position' || value === 'other';
 }
 
 function isAnalysisDetail(value: unknown): value is AppSettings['analysisDetail'] {
-  return value === 'basic' || value === 'standard' || value === 'advanced';
+  return value === 'beginner' || value === 'intermediate' || value === 'advanced';
 }
 
 function isOnboardingExperience(value: unknown): value is AppSettings['onboardingExperience'] {
-  return value === 'beginner' || value === 'advanced' || value === 'expert';
+  return value === 'beginner' || value === 'intermediate' || value === 'expert';
 }
 
 function stringArray(value: unknown, allowedValues: readonly string[]): string[] {
@@ -297,6 +298,7 @@ function stringArray(value: unknown, allowedValues: readonly string[]): string[]
 
 function migrateSettings(value: unknown): AppSettings {
   const stored = value && typeof value === 'object' ? value as Partial<AppSettings> : {};
+  const storedRecord = value && typeof value === 'object' ? value as Record<string, unknown> : {};
   const themeMode = stored.themeMode === 'light' || stored.themeMode === 'dark' || stored.themeMode === 'system'
     ? stored.themeMode
     : stored.darkMode === false
@@ -311,9 +313,11 @@ function migrateSettings(value: unknown): AppSettings {
     preferredMarket: isPreferredMarket(stored.preferredMarket)
       ? stored.preferredMarket
       : defaultSettings.preferredMarket,
-    onboardingMarkets: stringArray(stored.onboardingMarkets, ['forex', 'crypto', 'stocks', 'commodities', 'indices']),
-    onboardingExperience: isOnboardingExperience(stored.onboardingExperience)
-      ? stored.onboardingExperience
+    onboardingMarkets: stringArray(stored.onboardingMarkets, ['forex', 'crypto', 'stocks', 'commodities', 'indices', 'other']),
+    onboardingExperience: isOnboardingExperience(storedRecord.onboardingExperience)
+      ? storedRecord.onboardingExperience
+      : storedRecord.onboardingExperience === 'advanced'
+        ? 'intermediate'
       : defaultSettings.onboardingExperience,
     onboardingChallenges: stringArray(stored.onboardingChallenges, ['complexity', 'time', 'confidence', 'learning']),
     onboardingGoals: stringArray(stored.onboardingGoals, ['income', 'wealth', 'freedom', 'mastery']),
@@ -323,9 +327,13 @@ function migrateSettings(value: unknown): AppSettings {
     preferredTradingStyle: isTradingStyle(stored.preferredTradingStyle)
       ? stored.preferredTradingStyle
       : defaultSettings.preferredTradingStyle,
-    analysisDetail: isAnalysisDetail(stored.analysisDetail)
-      ? stored.analysisDetail
-      : defaultSettings.analysisDetail,
+    analysisDetail: isAnalysisDetail(storedRecord.analysisDetail)
+      ? storedRecord.analysisDetail
+      : storedRecord.analysisDetail === 'basic'
+        ? 'beginner'
+        : storedRecord.analysisDetail === 'standard'
+          ? 'intermediate'
+          : defaultSettings.analysisDetail,
     maxDailyLossPercent: Number.isFinite(Number(stored.maxDailyLossPercent)) ? Number(stored.maxDailyLossPercent) : defaultSettings.maxDailyLossPercent,
     maxOpenRiskPercent: Number.isFinite(Number(stored.maxOpenRiskPercent)) ? Number(stored.maxOpenRiskPercent) : defaultSettings.maxOpenRiskPercent,
     maxTradesPerDay: Number.isFinite(Number(stored.maxTradesPerDay)) ? Number(stored.maxTradesPerDay) : defaultSettings.maxTradesPerDay,
