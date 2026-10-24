@@ -46,6 +46,7 @@ function subscriptionPlanName(productIdentifier?: string | null) {
   if (!productIdentifier) return 'FXSnap Premium';
   const id = productIdentifier.toLowerCase();
   if (id.includes('week')) return 'FXSnap Premium · Weekly';
+  if (id.includes('year') || id.includes('annual')) return 'FXSnap Premium · Yearly';
   if (id.includes('quarter') || id.includes('3month') || id.includes('three')) return 'FXSnap Premium · 3 months';
   if (id.includes('month')) return 'FXSnap Premium · Monthly';
   return 'FXSnap Premium';

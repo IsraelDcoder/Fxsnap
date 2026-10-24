@@ -29,6 +29,53 @@ function inferArticleImpact(raw = {}) {
   return String(raw.impact || raw.level || raw.significance || getImpactFromText(`${raw.title || ''} ${raw.summary || ''}`)).toUpperCase();
 }
 
+function normalizeEconomicImpact(value) {
+  const impact = String(value || '').trim().toLowerCase();
+  if (['high', '3', 'major', 'red'].includes(impact)) return 'HIGH';
+  if (['medium', 'moderate', '2', 'yellow'].includes(impact)) return 'MEDIUM';
+  if (['low', 'minor', '1', 'green'].includes(impact)) return 'LOW';
+  return 'MEDIUM';
+}
+
+function normalizeEconomicEventDate(value) {
+  const date = String(value || '').trim();
+  if (!date) return new Date().toISOString();
+  if (/([zZ]|[+-]\d{2}:?\d{2})$/.test(date)) return date;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(date)) return `${date}T00:00:00.000Z`;
+  return `${date.replace(' ', 'T')}Z`;
+}
+
+function currencyForCountry(country) {
+  const currencies = {
+    australia: 'AUD',
+    canada: 'CAD',
+    china: 'CNY',
+    'euro area': 'EUR',
+    france: 'EUR',
+    germany: 'EUR',
+    japan: 'JPY',
+    'new zealand': 'NZD',
+    switzerland: 'CHF',
+    'united kingdom': 'GBP',
+    'united states': 'USD',
+  };
+  return currencies[String(country || '').trim().toLowerCase()] || null;
+}
+
+function normalizeEconomicEvent(item = {}) {
+  const country = String(item.country || '').trim() || null;
+  const title = String(item.event || item.name || 'Economic event').trim();
+  const date = normalizeEconomicEventDate(item.time || item.date || item.datetime);
+  return {
+    id: String(item.id || `${country || 'global'}-${title}-${date}`),
+    title,
+    date,
+    impact: normalizeEconomicImpact(item.impact || item.importance),
+    country,
+    currency: String(item.currency || '').trim().toUpperCase() || currencyForCountry(country),
+  };
+}
+
 async function fetchJson(url, headers = {}) {
   const response = await fetch(url, { headers });
   if (!response.ok) {
@@ -41,6 +88,34 @@ async function fetchJson(url, headers = {}) {
 class FinnhubNewsProvider {
   constructor(apiKey) {
     this.apiKey = apiKey;
+  }
+
+  async getEconomicCalendar() {
+    if (!this.apiKey) return [];
+    const start = new Date();
+    const end = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    const query = new URLSearchParams({
+      from: start.toISOString().slice(0, 10),
+      to: end.toISOString().slice(0, 10),
+      token: this.apiKey,
+    });
+    const payload = await fetchJson(`https://finnhub.io/api/v1/calendar/economic?${query}`);
+    if (payload?.error) throw new Error(String(payload.error));
+    const events = Array.isArray(payload?.economicCalendar) ? payload.economicCalendar : [];
+    return events.map((item) => normalizeEconomicEvent(item));
+  }
+
+  async getUpcomingEvents(symbol) {
+    const relevant = getRelatedCurrencies(symbol);
+    const events = await this.getEconomicCalendar();
+    return events
+      .filter((event) => {
+        if (!relevant.length) return true;
+        if (event.currency && relevant.includes(event.currency)) return true;
+        const haystack = `${event.title} ${event.country || ''}`.toUpperCase();
+        return /(FED|BOE|ECB|CPI|GDP|JOBS|RATE|INFLATION)/i.test(haystack);
+      })
+      .slice(0, 8);
   }
 
   async getNewsForInstrument(symbol) {
@@ -79,59 +154,6 @@ class FinnhubNewsProvider {
 class TwelveDataNewsProvider {
   constructor(apiKey) {
     this.apiKey = apiKey;
-  }
-
-  async getUpcomingEvents(symbol) {
-    if (!this.apiKey) return [];
-    try {
-      const start = new Date();
-      const end = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-      const payload = await fetchJson(`https://api.twelvedata.com/economic_calendar?apikey=${encodeURIComponent(this.apiKey)}&start_date=${encodeURIComponent(start.toISOString().slice(0, 10))}&end_date=${encodeURIComponent(end.toISOString().slice(0, 10))}`);
-      if (payload?.status === 'error' || payload?.code === 'error') throw new Error(payload.message || 'Economic calendar provider returned an error.');
-      const events = Array.isArray(payload?.events) ? payload.events : [];
-      const relevant = getRelatedCurrencies(symbol);
-      return events
-        .filter((item) => {
-          const title = `${item.event || ''} ${item.country || ''} ${item.currency || ''}`;
-          const targetCurrencies = new Set(relevant);
-          if (item.currency) targetCurrencies.add(String(item.currency).toUpperCase());
-          const matches = Array.from(targetCurrencies).some((currency) => title.toUpperCase().includes(currency));
-          return matches || /(FED|BOE|ECB|CPI|GDP|JOBS|RATE|INFLATION)/i.test(title);
-        })
-        .slice(0, 8)
-        .map((item) => ({
-          id: String(item.id || `${item.event || 'event'}-${item.date || Date.now()}`),
-          title: String(item.event || item.name || 'Economic event').trim(),
-          date: item.date || item.datetime || new Date().toISOString(),
-          impact: String(item.impact || item.importance || 'MEDIUM').toUpperCase(),
-          country: item.country || null,
-          currency: String(item.currency || '').trim().toUpperCase() || null,
-          eventType: String(item.type || 'macro').trim().toLowerCase(),
-        }));
-    } catch (error) {
-      return [];
-    }
-  }
-
-  async getEconomicCalendar() {
-    if (!this.apiKey) return [];
-    try {
-      const start = new Date();
-      const end = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-      const payload = await fetchJson(`https://api.twelvedata.com/economic_calendar?apikey=${encodeURIComponent(this.apiKey)}&start_date=${encodeURIComponent(start.toISOString().slice(0, 10))}&end_date=${encodeURIComponent(end.toISOString().slice(0, 10))}`);
-      if (payload?.status === 'error' || payload?.code === 'error') throw new Error(payload.message || 'Economic calendar provider returned an error.');
-      const events = Array.isArray(payload?.events) ? payload.events : [];
-      return events.map((item) => ({
-        id: String(item.id || `${item.event || 'event'}-${item.date || Date.now()}`),
-        title: String(item.event || item.name || 'Economic event').trim(),
-        date: item.date || item.datetime || new Date().toISOString(),
-        impact: String(item.impact || item.importance || 'MEDIUM').toUpperCase(),
-        country: item.country || null,
-        currency: String(item.currency || '').trim().toUpperCase() || null,
-      }));
-    } catch (error) {
-      throw error;
-    }
   }
 }
 

@@ -3,7 +3,7 @@ import Purchases, { LOG_LEVEL, type CustomerInfo, type PurchasesPackage } from '
 import { getDeviceId } from '@/services/apiAuth';
 import { hasRevenueCatEntitlement, REVENUECAT_ENTITLEMENT_CANDIDATES } from '@/services/revenuecatEntitlements';
 
-export type BillingPlan = 'weekly' | 'monthly' | 'quarterly';
+export type BillingPlan = 'weekly' | 'monthly' | 'yearly';
 export const PREMIUM_ENTITLEMENT_ID = process.env.EXPO_PUBLIC_RC_ENTITLEMENT_ID || 'premium';
 export const PREMIUM_ENTITLEMENT_IDS = REVENUECAT_ENTITLEMENT_CANDIDATES;
 
@@ -18,9 +18,11 @@ const PRODUCT_IDS: Record<BillingPlan, string[]> = {
     process.env.EXPO_PUBLIC_REVENUECAT_MONTHLY_PRODUCT_ID || 'fxsnap_premium_monthly',
     'fxsnap_monthly',
   ],
-  quarterly: [
-    process.env.EXPO_PUBLIC_REVENUECAT_QUARTERLY_PRODUCT_ID || 'fxsnap_premium_3months',
-    'fxsnap_quarterly',
+  yearly: [
+    process.env.EXPO_PUBLIC_REVENUECAT_YEARLY_PRODUCT_ID || 'fxsnap_premium_yearly',
+    'fxsnap_premium_annual',
+    'fxsnap_yearly',
+    'fxsnap_annual',
   ],
 };
 
@@ -102,7 +104,7 @@ export async function getSubscriptionDetails(): Promise<SubscriptionDetails | nu
 
 function formatSubscriptionPeriod(product: any, plan: BillingPlan) {
   const period = product?.subscriptionPeriod;
-  const fallbackPeriod: Record<BillingPlan, string> = { weekly: 'week', monthly: 'month', quarterly: '3 months' };
+  const fallbackPeriod: Record<BillingPlan, string> = { weekly: 'week', monthly: 'month', yearly: 'year' };
   if (!period || typeof period !== 'object') {
     return fallbackPeriod[plan];
   }
@@ -127,13 +129,10 @@ function planMatchesPackage(plan: BillingPlan, pkg: PurchasesPackage): boolean {
     const normalized = value.replace(/[^a-z0-9]/g, '');
     return normalized.includes('month') && !['3month', 'threemonth', 'quarter'].some((alias) => normalized.includes(alias));
   })) return true;
-  if (
-    plan === 'quarterly'
-    && [identifier, productIdentifier].some((value) => {
-      const normalized = value.replace(/[^a-z0-9]/g, '');
-      return ['quarter', '3month', 'threemonth'].some((alias) => normalized.includes(alias));
-    })
-  ) return true;
+  if (plan === 'yearly' && [identifier, productIdentifier].some((value) => {
+    const normalized = value.replace(/[^a-z0-9]/g, '');
+    return normalized.includes('year') || normalized.includes('annual');
+  })) return true;
   return false;
 }
 
@@ -160,7 +159,7 @@ export async function getAvailablePlans(): Promise<PlanOffering[]> {
     const product = selected?.product;
     return {
       plan,
-      title: plan === 'weekly' ? 'Weekly' : plan === 'monthly' ? 'Monthly' : '3 Months',
+      title: plan === 'weekly' ? 'Weekly' : plan === 'monthly' ? 'Monthly' : 'Yearly',
       price: product?.priceString || '—',
       priceAmount: typeof product?.price === 'number' && Number.isFinite(product.price) ? product.price : null,
       currencyCode: product?.currencyCode || null,

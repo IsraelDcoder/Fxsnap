@@ -27,6 +27,7 @@ export interface UpcomingEvent {
 export interface EconomicCalendarResponse {
   events: UpcomingEvent[];
   live: boolean;
+  updatedAt: string | null;
 }
 
 export interface DailyBriefCard {
@@ -57,17 +58,21 @@ const API_BASE = resolveApiBaseUrl();
 
 export class DefaultNewsProvider implements NewsProvider {
   async getEconomicCalendar(): Promise<EconomicCalendarResponse> {
-    try {
-      const response = await fetch(`${API_BASE}/market/calendar`);
-      if (!response.ok) return { events: [], live: false };
-      const payload = await response.json();
-      return {
-        events: Array.isArray(payload?.events) ? payload.events : [],
-        live: payload?.dataSource === 'provider',
-      };
-    } catch {
-      return { events: [], live: false };
+    const response = await fetch(`${API_BASE}/market/calendar?requestedAt=${Date.now()}`);
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null);
+      const detail = payload && typeof payload.error === 'string' ? `: ${payload.error}` : '';
+      throw new Error(`Economic calendar request failed (${response.status})${detail}`);
     }
+    const payload = await response.json();
+    if (!payload || !Array.isArray(payload.events)) {
+      throw new Error('The economic calendar returned an invalid response.');
+    }
+    return {
+      events: payload.events,
+      live: payload.dataSource === 'provider',
+      updatedAt: typeof payload.updatedAt === 'string' ? payload.updatedAt : null,
+    };
   }
 
   async getNewsForInstrument(symbol: string): Promise<NewsItem[]> {

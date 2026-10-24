@@ -17,7 +17,7 @@ Configure these exact product identifiers in Apple App Store Connect, Google Pla
 
 - `fxsnap_premium_weekly`
 - `fxsnap_premium_monthly`
-- `fxsnap_premium_3months`
+- `fxsnap_premium_yearly`
 
 Create the existing `premium` entitlement and attach all three products, then set:
 
@@ -26,10 +26,10 @@ Create the existing `premium` entitlement and attach all three products, then se
 - `EXPO_PUBLIC_REVENUECAT_ENTITLEMENT_ID`
 - `EXPO_PUBLIC_REVENUECAT_WEEKLY_PRODUCT_ID` if the weekly product uses a different identifier
 - `EXPO_PUBLIC_REVENUECAT_MONTHLY_PRODUCT_ID` if the monthly product uses a different identifier
-- `EXPO_PUBLIC_REVENUECAT_QUARTERLY_PRODUCT_ID` if the three-month product uses a different identifier
+- `EXPO_PUBLIC_REVENUECAT_YEARLY_PRODUCT_ID` if the yearly product uses a different identifier
 - `REVENUECAT_SECRET_API_KEY` on the server only
 
-Set each country’s weekly, monthly, and three-month price tiers in App Store Connect and Google Play Console. The paywall reads localized prices from RevenueCat, labels Monthly as “Most Popular,” and shows “Save 33%” on the three-month plan.
+Set each country’s weekly, monthly, and yearly price tiers in App Store Connect and Google Play Console. The paywall reads localized prices from RevenueCat and shows “Save 86%” on the yearly plan.
 Test purchases and restores in Apple Sandbox and Google Play license-test tracks. Do not use the public paywall in production until the backend entitlement endpoint returns verified active state.
 
 ## Backend secrets
