@@ -33,7 +33,8 @@ git push -u origin main
    - GEMINI_API_KEY (Google Gemini key for chart analysis)
    - GEMINI_VISION_MODEL (default `gemini-1.5-flash`)
    - ALPHA_VANTAGE_API_KEY
-   - TWELVEDATA_API_KEY (live forex quotes, candles, and economic calendar)
+   - TWELVEDATA_API_KEY (live forex quotes and candles)
+   - FINNHUB_API_KEY (forex news and the live economic calendar)
    - REVENUECAT_SECRET_API_KEY
    - REVENUECAT_ENTITLEMENT_ID
    - FXSNAP_AUTH_SECRET
@@ -46,6 +47,8 @@ git push -u origin main
 4. Deploy.
 
 The mobile app targets `https://fxsnap.vercel.app` for all API requests. Deploy the backend at that URL before releasing a mobile build.
+
+The economic calendar uses Finnhub's economic-calendar API through the backend. Add `FINNHUB_API_KEY` to the backend's production environment; the secret stays server-side. Without it, the calendar shows that its live feed is unavailable. Calendar responses are refreshed from Finnhub at most once every five minutes per running backend instance.
 
 ### Push notifications
 
@@ -166,13 +169,13 @@ Replace the placeholders in app.json and eas.json with your real Expo project ID
 
 ## 4. RevenueCat and Play Store
 
-1. Create the products `fxsnap_premium_weekly` and `fxsnap_premium_3months` in RevenueCat.
+1. Create the products `fxsnap_premium_weekly`, `fxsnap_premium_monthly`, and `fxsnap_premium_yearly` in RevenueCat.
 2. Link them to the Google Play subscription products.
-3. Attach both products to the existing Premium entitlement.
+3. Attach all three products to the existing Premium entitlement.
 4. Set the public SDK keys in the Expo app environment and the secret key on the backend.
 5. Test with Google Play internal / license-test tracks.
 
-Set `EXPO_PUBLIC_REVENUECAT_WEEKLY_PRODUCT_ID`, `EXPO_PUBLIC_REVENUECAT_MONTHLY_PRODUCT_ID`, or `EXPO_PUBLIC_REVENUECAT_QUARTERLY_PRODUCT_ID` if your store product identifiers differ. Configure all three products in App Store Connect, Google Play Console, and the RevenueCat offering. Prices and localized currencies are loaded from RevenueCat. The paywall labels Monthly as “Most Popular” and displays “Save 33%” on the three-month plan.
+Set `EXPO_PUBLIC_REVENUECAT_WEEKLY_PRODUCT_ID`, `EXPO_PUBLIC_REVENUECAT_MONTHLY_PRODUCT_ID`, or `EXPO_PUBLIC_REVENUECAT_YEARLY_PRODUCT_ID` if your store product identifiers differ. Configure all three products in App Store Connect, Google Play Console, and the RevenueCat offering. Prices and localized currencies are loaded from RevenueCat. The paywall displays “Save 86%” on the Yearly plan.
 
 ## 5. Production checklist
 

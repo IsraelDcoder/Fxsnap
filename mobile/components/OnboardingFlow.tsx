@@ -36,13 +36,17 @@ import { useApp, type AppSettings } from '@/context/AppContext';
 import { useColors } from '@/hooks/useColors';
 import { typography } from '@/constants/typography';
 import { trackEvent } from '@/services/telemetry';
+import {
+  requestAndRegisterPushNotifications,
+  saveNotificationPreferences,
+} from '@/services/notifications';
 
 type Experience = AppSettings['onboardingExperience'];
 type Market = 'forex' | 'crypto' | 'stocks' | 'commodities' | 'indices' | 'other';
 type TradingStyle = AppSettings['preferredTradingStyle'];
 type AnalysisDetail = AppSettings['analysisDetail'];
 type IntroKind = 'opening' | 'demo' | 'analysis' | 'review';
-type Phase = 'intro' | 'survey' | 'personalizing' | 'benefits';
+type Phase = 'intro' | 'survey' | 'personalizing' | 'benefits' | 'notifications';
 
 const WELCOME_HEADLINE = 'Your next winning trade starts with a photo.';
 
@@ -210,6 +214,7 @@ export default function OnboardingFlow() {
   const [personalizedResultComplete, setPersonalizedResultComplete] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [finishError, setFinishError] = useState<string | null>(null);
+  const [notificationError, setNotificationError] = useState<string | null>(null);
   const bottomPadding = Math.max(insets.bottom, Platform.OS === 'web' ? 18 : 12) + 12;
 
   useEffect(() => {
@@ -255,6 +260,8 @@ export default function OnboardingFlow() {
         setPhase('intro');
         setIntroIndex(INTRO_SLIDES.length - 1);
       }
+    } else if (phase === 'notifications') {
+      setPhase('benefits');
     } else if (phase === 'benefits') {
       setPhase('survey');
       setQuestionIndex(QUESTION_COUNT - 1);
@@ -307,18 +314,57 @@ export default function OnboardingFlow() {
     void savePersonalization();
   };
 
+  const completeOnboardingAndOpenPaywall = async () => {
+    await completeOnboarding();
+    trackEvent('onboarding_paywall_view', { source: 'onboarding' });
+    router.replace({ pathname: '/paywall', params: { source: 'onboarding' } });
+  };
+
   const continueOnboarding = async () => {
     setSaving(true);
     setFinishError(null);
     try {
-      await completeOnboarding();
-      trackEvent('onboarding_paywall_view', { source: 'onboarding' });
-      router.replace({ pathname: '/paywall', params: { source: 'onboarding' } });
+      await completeOnboardingAndOpenPaywall();
     } catch (error) {
       setFinishError(error instanceof Error ? error.message : 'Unable to continue right now. Please try again.');
     } finally {
       setSaving(false);
     }
+  };
+
+  const enableOnboardingNotifications = async () => {
+    if (saving) return;
+    setSaving(true);
+    setNotificationError(null);
+    const preferences = {
+      enabled: true,
+      dailyBrief: true,
+      inactivity: true,
+      weekly: true,
+      community: true,
+      systemAnnouncements: true,
+    };
+    try {
+      const registration = await requestAndRegisterPushNotifications(preferences, true);
+      if (registration.granted) {
+        await saveNotificationPreferences(preferences);
+        trackEvent('onboarding_push_notifications_enabled');
+      } else {
+        await saveNotificationPreferences({ ...preferences, enabled: false });
+        trackEvent('onboarding_push_notifications_skipped');
+      }
+      await completeOnboardingAndOpenPaywall();
+    } catch (error) {
+      setNotificationError(error instanceof Error ? error.message : 'Push notifications could not be enabled. You can try again in Settings.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const skipOnboardingNotifications = () => {
+    if (saving) return;
+    trackEvent('onboarding_push_notifications_skipped');
+    void continueOnboarding();
   };
 
   const selectExperience = (value: Experience) => {
@@ -355,7 +401,9 @@ export default function OnboardingFlow() {
       ? QUESTIONS[questionIndex].title
       : phase === 'personalizing'
         ? 'Putting your profile together'
-        : 'Transform your trading journey.';
+        : phase === 'notifications'
+          ? 'Stay up to date'
+          : 'Transform your trading journey.';
   const isOpeningScreen = phase === 'intro' && introIndex === 0;
   const isDemoScreen = phase === 'intro' && introIndex === 1;
   const isCompactReview = phase === 'intro' && INTRO_SLIDES[introIndex].kind === 'review' && viewportHeight < 700;
@@ -507,7 +555,7 @@ export default function OnboardingFlow() {
                 </View>
                 {saveError ? <Text style={[styles.errorText, { color: colors.destructive }]}>{saveError}</Text> : null}
               </View>
-            ) : (
+            ) : phase === 'benefits' ? (
               <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
                 <Text style={[styles.eyebrow, styles.centeredText, { color: colors.accent }]}>MADE FOR YOUR APPROACH</Text>
                 <Text style={[typography.heading, styles.title, viewportWidth < 360 && typography.compactHeading, { color: colors.text }]}>{title}</Text>
@@ -539,6 +587,17 @@ export default function OnboardingFlow() {
                 <Text style={[styles.disclaimer, { color: colors.textMuted }]}>FXSnap provides educational information, not financial advice. Trading involves risk.</Text>
                 {finishError ? <Text style={[styles.errorText, { color: colors.destructive }]}>{finishError}</Text> : null}
               </ScrollView>
+            ) : (
+              <View style={styles.notificationPrompt}>
+                <View style={[styles.notificationIcon, { backgroundColor: `${colors.accent}18` }]}>
+                  <Feather name="bell" size={32} color={colors.accent} />
+                </View>
+                <Text style={[typography.heading, styles.title, viewportWidth < 360 && typography.compactHeading, { color: colors.text }]}>{title}</Text>
+                <Text style={[typography.body, styles.subtitle, { color: colors.textSecondary }]}>
+                  Turn on push notifications for market briefings, community activity, and important FXSnap updates.
+                </Text>
+                {notificationError ? <Text style={[styles.errorText, { color: colors.destructive }]}>{notificationError}</Text> : null}
+              </View>
             )}
           </Animated.View>
 
@@ -571,10 +630,27 @@ export default function OnboardingFlow() {
               />
             ) : phase === 'personalizing' ? (
               saveError ? <PrimaryButton label="Retry saving" onPress={() => void savePersonalization()} disabled={saving} /> : null
-            ) : (
+            ) : phase === 'benefits' ? (
               personalizedResultComplete
-                ? <PrimaryButton label={saving ? 'Opening plans…' : 'Start now'} onPress={() => void continueOnboarding()} disabled={saving} />
+                ? <PrimaryButton label="Continue" onPress={() => setPhase('notifications')} disabled={saving} />
                 : null
+            ) : (
+              <>
+                <PrimaryButton
+                  label={saving ? 'Enabling notifications…' : 'Enable push notifications'}
+                  onPress={() => void enableOnboardingNotifications()}
+                  disabled={saving}
+                />
+                <TouchableOpacity
+                  onPress={skipOnboardingNotifications}
+                  disabled={saving}
+                  style={styles.skipNotifications}
+                  accessibilityRole="button"
+                >
+                  <Text style={[styles.skipNotificationsText, { color: colors.textMuted }]}>Maybe later</Text>
+                </TouchableOpacity>
+                {finishError ? <Text style={[styles.errorText, { color: colors.destructive }]}>{finishError}</Text> : null}
+              </>
             )}
           </View>
         </>
@@ -1083,6 +1159,10 @@ const styles = StyleSheet.create({
   choiceTitle: { ...typography.optionTitle, fontSize: 15 },
   choiceDetail: { ...typography.optionDescription, marginTop: 3 },
   centerContent: { flex: 1, padding: 28, justifyContent: 'center', alignItems: 'center' },
+  notificationPrompt: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 28, gap: 16 },
+  notificationIcon: { width: 76, height: 76, borderRadius: 38, alignItems: 'center', justifyContent: 'center', marginBottom: 8 },
+  skipNotifications: { alignItems: 'center', paddingVertical: 12 },
+  skipNotificationsText: { fontSize: 14, fontWeight: '600' },
   centerTitle: { textAlign: 'center', marginTop: 24 },
   centerSubtitle: { textAlign: 'center' },
   loaderWrap: { width: 104, height: 104, justifyContent: 'center', alignItems: 'center' },

@@ -44,7 +44,6 @@ export default function HomeDashboard({ previewMode = false }: { previewMode?: b
   const reduceMotion = useReducedMotion();
   const { settings, savedBriefs, saveBriefCard, deleteBriefCard, checkFeatureAccess } = useApp();
   const [sessionModalVisible, setSessionModalVisible] = useState(false);
-  const [showCommunityBanner, setShowCommunityBanner] = useState(true);
   const [toolsExpanded, setToolsExpanded] = useState(false);
   const [sessionState, setSessionState] = useState(getTradingSessionState());
   const [briefState, setBriefState] = useState<DailyBriefState | null>(null);
@@ -112,11 +111,6 @@ export default function HomeDashboard({ previewMode = false }: { previewMode?: b
 
   const showSessions = () => setSessionModalVisible(true);
   const support = () => Alert.alert('Coming soon', 'Help & Support will be available in a future update.');
-  const openCommunity = () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    router.push('/community');
-  };
-
   const activeSessionNames = sessionState.activeSessions.map((session) => session.name);
   const currentBrief = briefState?.briefs.find((brief) => !briefState.readIds.includes(brief.id)) || null;
   const currentBriefSaved = Boolean(currentBrief && savedBriefs.some((brief) => brief.brief_id === `daily-brief-${briefState?.dateKey}` && brief.card_id === currentBrief.id));
@@ -243,43 +237,6 @@ export default function HomeDashboard({ previewMode = false }: { previewMode?: b
             </LinearGradient>
           </TouchableOpacity>
         </Animated.View>
-
-        {showCommunityBanner && !previewMode && (
-          <Animated.View entering={reduceMotion ? undefined : FadeInDown.delay(150).duration(420)}>
-            <View style={[styles.communityBanner, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
-              <View style={styles.communityBannerHeader}>
-                <View style={[styles.communityBannerIcon, { backgroundColor: colors.surface }]}>
-                  <Feather name="users" size={19} color={colors.buy} />
-                </View>
-                <View style={styles.communityBannerCopy}>
-                  <Text style={[styles.communityBannerEyebrow, { color: colors.buy }]}>FXSNAP PREMIUM COMMUNITY</Text>
-                  <Text style={[styles.communityBannerTitle, { color: colors.text }]}>Join the conversation</Text>
-                  <Text style={[styles.communityBannerDescription, { color: colors.textSecondary }]}>
-                    Share ideas and learn with an active Premium subscription.
-                  </Text>
-                </View>
-                <TouchableOpacity
-                  onPress={() => setShowCommunityBanner(false)}
-                  accessibilityRole="button"
-                  accessibilityLabel="Dismiss community invitation"
-                  hitSlop={8}
-                  style={styles.communityBannerDismiss}
-                >
-                  <Feather name="x" size={17} color={colors.textSecondary} />
-                </TouchableOpacity>
-              </View>
-              <TouchableOpacity
-                onPress={openCommunity}
-                accessibilityRole="button"
-                accessibilityLabel="Unlock FXSnap Community"
-                style={[styles.communityBannerAction, { backgroundColor: colors.buy }]}
-              >
-                <Text style={[styles.communityBannerActionText, { color: colors.primaryForeground }]}>Unlock Community</Text>
-                <Feather name="arrow-right" size={15} color={colors.primaryForeground} />
-              </TouchableOpacity>
-            </View>
-          </Animated.View>
-        )}
 
         <Animated.View entering={reduceMotion ? undefined : FadeInDown.delay(180).duration(480)}>
           <LinearGradient
@@ -649,16 +606,6 @@ const styles = StyleSheet.create({
   marketStatusDot: { width: 5, height: 5, borderRadius: 3 },
   marketStatusText: { color: '#E4FFF5', fontSize: 7, letterSpacing: 0.4, fontFamily: 'Inter_700Bold' },
   marketBannerText: { color: '#C6EEE3', fontSize: 11, fontFamily: 'Inter_500Medium' },
-  communityBanner: { marginTop: 12, marginHorizontal: 18, padding: 13, borderRadius: 18, borderWidth: 1 },
-  communityBannerHeader: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  communityBannerIcon: { width: 42, height: 42, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
-  communityBannerCopy: { flex: 1, minWidth: 0 },
-  communityBannerEyebrow: { fontSize: 8, letterSpacing: 0.8, fontFamily: 'Inter_700Bold' },
-  communityBannerTitle: { marginTop: 2, fontSize: 14, fontFamily: 'Inter_700Bold' },
-  communityBannerDescription: { marginTop: 3, fontSize: 10, lineHeight: 14, fontFamily: 'Inter_400Regular' },
-  communityBannerDismiss: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
-  communityBannerAction: { minHeight: 38, alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 11, paddingHorizontal: 13, borderRadius: 12 },
-  communityBannerActionText: { fontSize: 11, fontFamily: 'Inter_600SemiBold' },
   toolsPanel: { marginTop: 17, marginHorizontal: 16, paddingHorizontal: 12, paddingTop: 17, paddingBottom: 9, borderRadius: 25, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,255,255,0.12)' },
   panelGlowTop: { position: 'absolute', width: 190, height: 190, borderRadius: 95, right: -66, top: -112, backgroundColor: 'rgba(113,239,206,0.13)' },
   panelGlowBottom: { position: 'absolute', width: 150, height: 150, borderRadius: 75, left: -94, bottom: -82, backgroundColor: 'rgba(4,52,65,0.18)' },

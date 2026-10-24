@@ -58,7 +58,7 @@ Market-data coverage depends on configured provider access and supported instrum
 
 ## Plans and access
 
-FXSnap uses RevenueCat for subscription purchases, restore flows, and entitlement checks. The app is designed for weekly, monthly, and quarterly Premium products; the exact available offers depend on the store, RevenueCat offering, and production configuration. Premium access is verified through the backend and should not be considered production-ready until store products, entitlements, and server verification have been tested on real devices.
+FXSnap uses RevenueCat for subscription purchases, restore flows, and entitlement checks. The app is designed for weekly, monthly, and yearly Premium products; the exact available offers depend on the store, RevenueCat offering, and production configuration. Premium access is verified through the backend and should not be considered production-ready until store products, entitlements, and server verification have been tested on real devices.
 
 ## Technology
 

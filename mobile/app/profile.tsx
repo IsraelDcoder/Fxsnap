@@ -31,6 +31,7 @@ import {
 import { notifyAccountDataChanged } from '@/services/accountDataEvents';
 import {
   checkCommunityUsername,
+  getCommunityMember,
   updateCommunityUsername,
 } from '@/services/community';
 import {
@@ -81,6 +82,8 @@ export default function ProfileScreen() {
   const [cachedProfile, setCachedProfile] = useState<CachedFxsnapProfile | null>(null);
   const [accountLoading, setAccountLoading] = useState(Platform.OS !== 'web');
   const [profileError, setProfileError] = useState('');
+  const [communityCounts, setCommunityCounts] = useState<{ followers: number; following: number } | null>(null);
+  const [communityStatsError, setCommunityStatsError] = useState('');
   const [photo, setPhoto] = useState<string | null>(null);
   const [photoFailed, setPhotoFailed] = useState(false);
   const [traderProfile, setTraderProfile] = useState<TraderProfile>(EMPTY_TRADER_PROFILE);
@@ -117,6 +120,23 @@ export default function ProfileScreen() {
         }
         const currentAccount = await getAuthenticatedAccount();
         setAccount(currentAccount);
+        const communityUsername = currentAccount?.communityUsername || cachedAccountProfile?.communityUsername || '';
+        if (communityUsername) {
+          try {
+            const result = await getCommunityMember(communityUsername);
+            setCommunityCounts({
+              followers: result.member.followerCount,
+              following: result.member.followingCount,
+            });
+            setCommunityStatsError('');
+          } catch (error) {
+            setCommunityCounts(null);
+            setCommunityStatsError(error instanceof Error ? error.message : 'Community counts could not be loaded.');
+          }
+        } else {
+          setCommunityCounts({ followers: 0, following: 0 });
+          setCommunityStatsError('');
+        }
       }
     } catch (error) {
       setProfileError(error instanceof Error ? error.message : 'Unable to load your profile.');
@@ -144,6 +164,7 @@ export default function ProfileScreen() {
   });
   const completion = profileCompletion.percentage;
   const nextField: CompletionField = profileCompletion.nextField;
+  const showCompletionCard = !accountLoading && !account && !cachedProfile && completion < 100;
   const animatedCompletion = useSharedValue(0);
   const reduceMotion = useReducedMotion();
   const animatedProgressStyle = useAnimatedStyle(() => ({
@@ -380,6 +401,26 @@ export default function ProfileScreen() {
               </Text>
             </View>
           </View>
+          <View style={[styles.profileStats, { borderTopColor: colors.cardBorder }]}>
+            <View style={styles.profileStat}>
+              <Text style={[styles.profileStatCount, { color: colors.text }]}>
+                {communityCounts?.followers ?? (username ? '—' : 0)}
+              </Text>
+              <Text style={[styles.profileStatLabel, { color: colors.textMuted }]}>Followers</Text>
+            </View>
+            <View style={[styles.profileStatDivider, { backgroundColor: colors.cardBorder }]} />
+            <View style={styles.profileStat}>
+              <Text style={[styles.profileStatCount, { color: colors.text }]}>
+                {communityCounts?.following ?? (username ? '—' : 0)}
+              </Text>
+              <Text style={[styles.profileStatLabel, { color: colors.textMuted }]}>Following</Text>
+            </View>
+          </View>
+          {communityStatsError ? (
+            <Text style={[styles.helperText, { color: colors.textMuted }]} accessibilityLiveRegion="polite">
+              {communityStatsError}
+            </Text>
+          ) : null}
           <TouchableOpacity
             onPress={() => openEditor()}
             style={[styles.secondaryAction, { backgroundColor: colors.surface, borderColor: colors.cardBorder }]}
@@ -408,6 +449,7 @@ export default function ProfileScreen() {
           ) : null}
         </View>
 
+        {showCompletionCard ? (
         <View style={[styles.card, styles.completionCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
           <View style={styles.completionTop}>
             <View style={styles.completionTitleBlock}>
@@ -440,6 +482,7 @@ export default function ProfileScreen() {
           ) : null}
           <Text style={[styles.helperText, { color: colors.textMuted }]}>Based on your name, photo, community username, and bio.</Text>
         </View>
+        ) : null}
 
         <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
           <View style={styles.sectionHeading}>
@@ -463,6 +506,7 @@ export default function ProfileScreen() {
           ) : null}
         </View>
 
+        {username ? (
         <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
           <View style={styles.sectionHeading}>
             <View style={[styles.sectionIcon, { backgroundColor: `${colors.buy}18` }]}>
@@ -494,18 +538,9 @@ export default function ProfileScreen() {
                 <Text style={[styles.helperText, { color: colors.textSecondary }]}>Share username</Text>
               </TouchableOpacity>
             </>
-          ) : (
-            <>
-              <Text style={[styles.helperText, { color: colors.textSecondary }]}>
-                Join Community to reserve a unique username. Public profile discovery is not available yet.
-              </Text>
-              <TouchableOpacity onPress={() => router.push('/community')} style={styles.communityLink} accessibilityRole="button">
-                <Text style={[styles.completionButtonText, { color: colors.buy }]}>Set username in Community</Text>
-                <Feather name="arrow-right" size={15} color={colors.buy} />
-              </TouchableOpacity>
-            </>
-          )}
+          ) : null}
         </View>
+        ) : null}
 
       </ScrollView>
 
@@ -783,6 +818,11 @@ const styles = StyleSheet.create({
   bio: { fontSize: 12, lineHeight: 17, fontFamily: 'Inter_400Regular' },
   secondaryAction: { minHeight: 42, borderRadius: 12, borderWidth: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
   secondaryActionText: { fontSize: 13, fontFamily: 'Inter_600SemiBold' },
+  profileStats: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 10 },
+  profileStat: { flex: 1, alignItems: 'center', gap: 2 },
+  profileStatCount: { fontSize: 16, lineHeight: 20, fontFamily: 'Inter_700Bold' },
+  profileStatLabel: { fontSize: 11, fontFamily: 'Inter_500Medium' },
+  profileStatDivider: { width: StyleSheet.hairlineWidth, height: 30 },
   signInPrompt: { minHeight: 42, flexDirection: 'row', alignItems: 'center', gap: 8 },
   signInPromptText: { flex: 1, fontSize: 11, lineHeight: 16, fontFamily: 'Inter_400Regular' },
   loadingLine: { flexDirection: 'row', alignItems: 'center', gap: 8 },
