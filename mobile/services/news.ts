@@ -22,11 +22,15 @@ export interface UpcomingEvent {
   impact: NewsImpact;
   country?: string | null;
   currency?: string | null;
+  actual?: string | null;
+  forecast?: string | null;
+  previous?: string | null;
 }
 
 export interface EconomicCalendarResponse {
   events: UpcomingEvent[];
   live: boolean;
+  source: string | null;
   updatedAt: string | null;
 }
 
@@ -57,8 +61,9 @@ export interface NewsProvider {
 const API_BASE = resolveApiBaseUrl();
 
 export class DefaultNewsProvider implements NewsProvider {
-  async getEconomicCalendar(): Promise<EconomicCalendarResponse> {
-    const response = await fetch(`${API_BASE}/market/calendar?requestedAt=${Date.now()}`);
+  async getEconomicCalendar(forceRefresh = false): Promise<EconomicCalendarResponse> {
+    const refreshQuery = forceRefresh ? `?refresh=${Date.now()}` : '';
+    const response = await fetch(`${API_BASE}/market/calendar${refreshQuery}`);
     if (!response.ok) {
       const payload = await response.json().catch(() => null);
       const detail = payload && typeof payload.error === 'string' ? `: ${payload.error}` : '';
@@ -70,7 +75,8 @@ export class DefaultNewsProvider implements NewsProvider {
     }
     return {
       events: payload.events,
-      live: payload.dataSource === 'provider',
+      live: payload.dataSource === 'forex_factory_weekly' || payload.dataSource === 'finnhub',
+      source: typeof payload.dataSource === 'string' ? payload.dataSource : null,
       updatedAt: typeof payload.updatedAt === 'string' ? payload.updatedAt : null,
     };
   }

@@ -55,18 +55,67 @@ function impactColor(impact: UpcomingEvent['impact'], colors: ReturnType<typeof 
   return colors.textMuted;
 }
 
+function currencyFlag(currency?: string | null) {
+  const flags: Record<string, string> = {
+    AUD: '🇦🇺',
+    CAD: '🇨🇦',
+    CHF: '🇨🇭',
+    CNY: '🇨🇳',
+    EUR: '🇪🇺',
+    GBP: '🇬🇧',
+    JPY: '🇯🇵',
+    NZD: '🇳🇿',
+    USD: '🇺🇸',
+  };
+  return currency ? flags[currency.toUpperCase()] ?? null : null;
+}
+
+function eventCategoryIcon(title: string): React.ComponentProps<typeof Feather>['name'] {
+  if (/rate|interest|central bank|monetary|policy/i.test(title)) return 'percent';
+  if (/cpi|inflation|price/i.test(title)) return 'trending-up';
+  if (/employment|job|unemployment|payroll|claimant/i.test(title)) return 'users';
+  if (/gdp|growth|production|sales/i.test(title)) return 'bar-chart-2';
+  if (/speech|speaks|testimony|meeting|conference/i.test(title)) return 'mic';
+  if (/auction|bond|yield|debt/i.test(title)) return 'layers';
+  if (/time|saving|clock/i.test(title)) return 'clock';
+  return 'calendar';
+}
+
 function CalendarEventCard({ event }: { event: UpcomingEvent }) {
   const colors = useColors();
   const date = eventDate(event.date);
   const severity = impactColor(event.impact, colors);
+  const flag = currencyFlag(event.currency);
+  const categoryIcon = eventCategoryIcon(event.title);
+  const resultValues = [
+    event.actual ? { label: 'Actual', value: event.actual } : null,
+    event.forecast ? { label: 'Forecast', value: event.forecast } : null,
+    event.previous ? { label: 'Previous', value: event.previous } : null,
+  ].filter((item): item is { label: string; value: string } => item !== null);
   return (
-    <View style={[styles.eventCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+    <View style={[styles.eventCard, { backgroundColor: colors.card, borderColor: colors.cardBorder, borderLeftColor: severity }]}>
       <View style={styles.eventMain}>
+        <View style={[styles.eventVisual, { backgroundColor: `${severity}14` }]}>
+          {flag ? (
+            <Text style={styles.currencyFlag} accessibilityLabel={`${event.currency} flag`}>{flag}</Text>
+          ) : (
+            <Feather name={categoryIcon} size={19} color={severity} />
+          )}
+          <View style={[styles.categoryIconBadge, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+            <Feather name={categoryIcon} size={10} color={colors.textSecondary} />
+          </View>
+        </View>
         <View style={styles.eventCopy}>
           <Text style={[styles.eventTitle, { color: colors.text }]}>{event.title}</Text>
-          <Text style={[styles.eventMeta, { color: colors.textSecondary }]}>
-            {[event.currency, event.country].filter(Boolean).join(' · ') || 'Global event'}
-          </Text>
+          <View style={styles.eventMetaRow}>
+            {event.currency ? (
+              <View style={[styles.currencyBadge, { backgroundColor: colors.surface }]}>
+                <Text style={[styles.eventMeta, { color: colors.textSecondary }]}>{event.currency}</Text>
+              </View>
+            ) : null}
+            {event.country ? <Text style={[styles.eventMeta, { color: colors.textSecondary }]} numberOfLines={1}>{event.country}</Text> : null}
+            {!event.currency && !event.country ? <Text style={[styles.eventMeta, { color: colors.textSecondary }]}>Global event</Text> : null}
+          </View>
         </View>
         <View style={styles.eventTiming}>
           {date ? <Text style={[styles.eventTime, { color: colors.text }]}>{eventTimeLabel(date)}</Text> : null}
@@ -76,6 +125,16 @@ function CalendarEventCard({ event }: { event: UpcomingEvent }) {
           </View>
         </View>
       </View>
+      {resultValues.length > 0 ? (
+        <View style={[styles.resultValues, { borderTopColor: colors.cardBorder }]}>
+          {resultValues.map((item) => (
+            <View key={item.label} style={styles.resultValue}>
+              <Text style={[styles.resultLabel, { color: colors.textMuted }]}>{item.label}</Text>
+              <Text style={[styles.resultText, { color: colors.text }]}>{item.value}</Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -85,6 +144,7 @@ export default function EconomicCalendarScreen() {
   const insets = useSafeAreaInsets();
   const [events, setEvents] = useState<UpcomingEvent[]>([]);
   const [live, setLive] = useState(false);
+  const [source, setSource] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const [impactFilter, setImpactFilter] = useState<ImpactFilter>('all');
   const [loading, setLoading] = useState(true);
@@ -95,7 +155,7 @@ export default function EconomicCalendarScreen() {
     if (manual) setRefreshing(true);
     setError('');
     try {
-      const result = await newsProvider.getEconomicCalendar();
+      const result = await newsProvider.getEconomicCalendar(manual);
       const now = Date.now();
       const upcoming = result.events
         .filter((event) => typeof event.id === 'string' && typeof event.title === 'string' && typeof event.date === 'string')
@@ -106,6 +166,7 @@ export default function EconomicCalendarScreen() {
         .sort((first, second) => (eventDate(first.date)?.getTime() ?? 0) - (eventDate(second.date)?.getTime() ?? 0));
       setEvents(upcoming);
       setLive(result.live);
+      setSource(result.source);
       setUpdatedAt(result.updatedAt);
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : 'The economic calendar could not be loaded.');
@@ -131,7 +192,7 @@ export default function EconomicCalendarScreen() {
     () => impactFilter === 'high' ? events.filter((event) => event.impact === 'HIGH') : events,
     [events, impactFilter],
   );
-  const liveLabel = live ? 'LIVE FEED' : 'FEED UNAVAILABLE';
+  const liveLabel = source === 'forex_factory_weekly' ? 'WEEKLY FEED' : live ? 'LIVE FEED' : 'FEED UNAVAILABLE';
 
   return (
     <View style={[styles.screen, { backgroundColor: colors.background }]}>
@@ -172,6 +233,26 @@ export default function EconomicCalendarScreen() {
           </View>
           <Text style={[styles.updatedText, { color: colors.textMuted }]}>{updatedLabel(updatedAt)}</Text>
         </View>
+        {live ? (
+          <View style={[styles.calendarSummary, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+            <View style={[styles.summaryIcon, { backgroundColor: `${colors.buy}18` }]}>
+              <Feather name="calendar" size={18} color={colors.buy} />
+            </View>
+            <View style={styles.summaryCopy}>
+              <Text style={[styles.summaryTitle, { color: colors.text }]}>The week ahead</Text>
+              <Text style={[styles.summarySubtitle, { color: colors.textSecondary }]}>Track the releases that can move markets.</Text>
+            </View>
+            <View style={[styles.eventCountBadge, { backgroundColor: `${colors.buy}15` }]}>
+              <Text style={[styles.eventCount, { color: colors.buy }]}>{events.length}</Text>
+              <Text style={[styles.eventCountLabel, { color: colors.buy }]}>EVENTS</Text>
+            </View>
+          </View>
+        ) : null}
+        {source === 'forex_factory_weekly' ? (
+          <Text style={[styles.sourceNote, { color: colors.textMuted }]}>
+            Public Forex Factory weekly feed · prototype only; verify redistribution permission before release.
+          </Text>
+        ) : null}
 
         <View style={styles.filterRow}>
           {([
@@ -272,15 +353,33 @@ const styles = StyleSheet.create({
   liveDot: { width: 7, height: 7, borderRadius: 4 },
   liveText: { fontSize: 10, letterSpacing: 0.8, fontFamily: 'Inter_700Bold' },
   updatedText: { fontSize: 11, fontFamily: 'Inter_400Regular' },
+  sourceNote: { fontSize: 10, lineHeight: 15, marginTop: -10, marginBottom: 14 },
   filterRow: { flexDirection: 'row', gap: 8, marginBottom: 12 },
   filterButton: { borderWidth: 1, paddingHorizontal: 13, paddingVertical: 9, borderRadius: 14 },
   filterText: { fontSize: 12, fontFamily: 'Inter_600SemiBold' },
   dayHeading: { fontSize: 11, letterSpacing: 1, fontFamily: 'Inter_700Bold', marginTop: 19, marginBottom: 9 },
-  eventCard: { borderWidth: 1, borderRadius: 16, padding: 14, marginBottom: 9 },
+  calendarSummary: { flexDirection: 'row', alignItems: 'center', gap: 12, borderWidth: 1, borderRadius: 18, padding: 13, marginBottom: 14 },
+  summaryIcon: { width: 40, height: 40, borderRadius: 13, alignItems: 'center', justifyContent: 'center' },
+  summaryCopy: { flex: 1 },
+  summaryTitle: { fontSize: 13, fontFamily: 'Inter_700Bold' },
+  summarySubtitle: { fontSize: 10, lineHeight: 15, marginTop: 3, fontFamily: 'Inter_400Regular' },
+  eventCountBadge: { minWidth: 45, alignItems: 'center', paddingHorizontal: 7, paddingVertical: 6, borderRadius: 11 },
+  eventCount: { fontSize: 14, fontFamily: 'Inter_700Bold' },
+  eventCountLabel: { fontSize: 7, letterSpacing: 0.5, fontFamily: 'Inter_700Bold', marginTop: 1 },
+  eventCard: { borderWidth: 1, borderLeftWidth: 3, borderRadius: 16, padding: 12, marginBottom: 9 },
   eventMain: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  eventVisual: { width: 46, height: 46, borderRadius: 15, justifyContent: 'center', alignItems: 'center', position: 'relative' },
+  currencyFlag: { fontSize: 23, lineHeight: 28 },
+  categoryIconBadge: { position: 'absolute', width: 18, height: 18, right: -4, bottom: -4, borderWidth: 1, borderRadius: 9, justifyContent: 'center', alignItems: 'center' },
   eventCopy: { flex: 1 },
   eventTitle: { fontSize: 14, lineHeight: 20, fontFamily: 'Inter_600SemiBold' },
-  eventMeta: { marginTop: 5, fontSize: 11, fontFamily: 'Inter_400Regular' },
+  eventMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 5 },
+  currencyBadge: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
+  eventMeta: { fontSize: 10, fontFamily: 'Inter_500Medium' },
+  resultValues: { flexDirection: 'row', gap: 24, borderTopWidth: StyleSheet.hairlineWidth, marginTop: 12, paddingTop: 10 },
+  resultValue: { gap: 3 },
+  resultLabel: { fontSize: 10, fontFamily: 'Inter_400Regular' },
+  resultText: { fontSize: 11, fontFamily: 'Inter_600SemiBold' },
   eventTiming: { alignItems: 'flex-end', gap: 8 },
   eventTime: { fontSize: 11, fontFamily: 'Inter_600SemiBold' },
   impactBadge: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 8, paddingVertical: 5, borderRadius: 12 },

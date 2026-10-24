@@ -76,6 +76,24 @@ function normalizeEconomicEvent(item = {}) {
   };
 }
 
+function normalizeForexFactoryEvent(item = {}) {
+  const title = String(item.title || '').trim();
+  const date = String(item.date || '').trim();
+  if (!title || !date || !Number.isFinite(Date.parse(date))) return null;
+  const currency = String(item.country || '').trim().toUpperCase() || null;
+  return {
+    id: `${currency || 'ALL'}-${title}-${date}`,
+    title,
+    date,
+    impact: normalizeEconomicImpact(item.impact),
+    country: null,
+    currency: currency && currency !== 'ALL' ? currency : null,
+    actual: typeof item.actual === 'string' ? item.actual : null,
+    forecast: typeof item.forecast === 'string' ? item.forecast : null,
+    previous: typeof item.previous === 'string' ? item.previous : null,
+  };
+}
+
 async function fetchJson(url, headers = {}) {
   const response = await fetch(url, { headers });
   if (!response.ok) {
@@ -85,9 +103,24 @@ async function fetchJson(url, headers = {}) {
   return response.json();
 }
 
+class ForexFactoryCalendarProvider {
+  constructor() {
+    this.calendarSource = 'forex_factory_weekly';
+  }
+
+  async getEconomicCalendar() {
+    const payload = await fetchJson('https://nfs.faireconomy.media/ff_calendar_thisweek.json');
+    if (!Array.isArray(payload)) throw new Error('The public weekly calendar feed returned an invalid response.');
+    return payload
+      .map(normalizeForexFactoryEvent)
+      .filter((event) => event !== null);
+  }
+}
+
 class FinnhubNewsProvider {
   constructor(apiKey) {
     this.apiKey = apiKey;
+    this.calendarSource = 'finnhub';
   }
 
   async getEconomicCalendar() {
@@ -159,7 +192,7 @@ class TwelveDataNewsProvider {
 
 class MarketNewsProvider {
   constructor({ finnhubApiKey, twelvedataApiKey } = {}) {
-    this.providers = [];
+    this.providers = [new ForexFactoryCalendarProvider()];
     if (finnhubApiKey) this.providers.push(new FinnhubNewsProvider(finnhubApiKey));
     if (twelvedataApiKey) this.providers.push(new TwelveDataNewsProvider(twelvedataApiKey));
   }
@@ -213,19 +246,27 @@ class MarketNewsProvider {
 
   async getEconomicCalendar() {
     const calendarProviders = this.providers.filter((provider) => typeof provider.getEconomicCalendar === 'function');
-    if (!calendarProviders.length) return [];
-    const collections = await Promise.all(calendarProviders.map((provider) => provider.getEconomicCalendar()));
-    const deduped = new Map();
-    for (const event of collections.flat()) {
-      const key = `${event.title}|${event.date}|${event.currency || 'unknown'}`;
-      if (!deduped.has(key)) deduped.set(key, event);
+    let lastError = null;
+    for (const provider of calendarProviders) {
+      try {
+        const events = await provider.getEconomicCalendar();
+        return {
+          events,
+          source: provider.calendarSource || 'provider',
+        };
+      } catch (error) {
+        lastError = error;
+        console.warn(`[news] ${provider.calendarSource || 'Calendar'} feed failed.`, error instanceof Error ? error.message : error);
+      }
     }
-    return Array.from(deduped.values());
+    if (lastError) throw lastError;
+    throw new Error('No economic calendar providers are available.');
   }
 }
 
 module.exports = {
   MarketNewsProvider,
+  ForexFactoryCalendarProvider,
   FinnhubNewsProvider,
   TwelveDataNewsProvider,
   getRelatedCurrencies,

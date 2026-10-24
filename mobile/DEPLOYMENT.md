@@ -34,7 +34,7 @@ git push -u origin main
    - GEMINI_VISION_MODEL (default `gemini-1.5-flash`)
    - ALPHA_VANTAGE_API_KEY
    - TWELVEDATA_API_KEY (live forex quotes and candles)
-   - FINNHUB_API_KEY (forex news and the live economic calendar)
+   - FINNHUB_API_KEY (forex news; optional paid economic-calendar fallback)
    - REVENUECAT_SECRET_API_KEY
    - REVENUECAT_ENTITLEMENT_ID
    - FXSNAP_AUTH_SECRET
@@ -48,7 +48,7 @@ git push -u origin main
 
 The mobile app targets `https://fxsnap.vercel.app` for all API requests. Deploy the backend at that URL before releasing a mobile build.
 
-The economic calendar uses Finnhub's economic-calendar API through the backend. Add `FINNHUB_API_KEY` to the backend's production environment; the secret stays server-side. Without it, the calendar shows that its live feed is unavailable. Calendar responses are refreshed from Finnhub at most once every five minutes per running backend instance.
+The calendar prototype uses the public weekly JSON feed at `https://nfs.faireconomy.media/ff_calendar_thisweek.json`, cached for up to five minutes by the backend/CDN. This is an unofficial feed with no documented API service level; verify Forex Factory's data redistribution terms before including it in a public release. The app labels the source as a prototype. If the public feed is unavailable, the backend can fall back to Finnhub when a `FINNHUB_API_KEY` with calendar access is configured. Finnhub's calendar endpoint may require a paid plan.
 
 ### Push notifications
 

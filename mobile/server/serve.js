@@ -73,10 +73,8 @@ const ECONOMIC_CALENDAR_CACHE_TTL_MS = 5 * 60 * 1000;
 try {
   const finnhubApiKey = process.env.FINNHUB_API_KEY || null;
   const twelvedataApiKey = process.env.TWELVEDATA_API_KEY || null;
-  if (finnhubApiKey || twelvedataApiKey) {
-    newsProvider = new MarketNewsProvider({ finnhubApiKey, twelvedataApiKey });
-    console.log('[news] Using configured news providers');
-  }
+  newsProvider = new MarketNewsProvider({ finnhubApiKey, twelvedataApiKey });
+  console.log('[news] Initialized calendar and configured news providers');
 } catch (error) {
   console.warn('[news] Failed to initialize news providers:', error && error.message ? error.message : error);
 }
@@ -4590,20 +4588,21 @@ function createRequestHandler() {
       return Promise.resolve(source.getQuotes(symbols)).then((quotes) => sendJson(res, 200, { quotes, dataSource: marketProvider ? 'provider' : 'simulated' })).catch((err) => sendJson(res, 500, { error: err.message }));
     }
     if (pathname === '/market/calendar' && req.method === 'GET') {
-      res.setHeader('cache-control', 'no-store');
+      const forceRefresh = url.searchParams.has('refresh');
+      res.setHeader('cache-control', forceRefresh ? 'no-store' : 'public, s-maxage=300, stale-while-revalidate=300');
       const calendarAvailable = Boolean(newsProvider?.providers?.some((provider) => typeof provider.getEconomicCalendar === 'function'));
       if (!calendarAvailable) return sendJson(res, 200, { events: [], dataSource: 'unavailable', updatedAt: null });
-      if (economicCalendarCache && Date.now() - economicCalendarCache.fetchedAt < ECONOMIC_CALENDAR_CACHE_TTL_MS) {
+      if (!forceRefresh && economicCalendarCache && Date.now() - economicCalendarCache.fetchedAt < ECONOMIC_CALENDAR_CACHE_TTL_MS) {
         return sendJson(res, 200, {
           events: economicCalendarCache.events,
-          dataSource: 'provider',
+          dataSource: economicCalendarCache.source,
           updatedAt: new Date(economicCalendarCache.fetchedAt).toISOString(),
         });
       }
       if (!economicCalendarFetchPromise) {
         economicCalendarFetchPromise = newsProvider.getEconomicCalendar()
-          .then((events) => {
-            economicCalendarCache = { events, fetchedAt: Date.now() };
+          .then((calendar) => {
+            economicCalendarCache = { ...calendar, fetchedAt: Date.now() };
             return economicCalendarCache;
           });
       }
@@ -4611,7 +4610,7 @@ function createRequestHandler() {
       return pendingCalendarFetch
         .then((calendar) => sendJson(res, 200, {
           events: calendar.events,
-          dataSource: 'provider',
+          dataSource: calendar.source,
           updatedAt: new Date(calendar.fetchedAt).toISOString(),
         }))
         .catch((error) => sendJson(res, 502, { error: error.message || 'Unable to load economic calendar.' }))
