@@ -142,7 +142,7 @@ function Toast({ visible, message }: { visible: boolean; message: string }) {
 function TradeLevelRow({
   label,
   value,
-  color = '#F5F5F5',
+  color,
   locked = false,
   onPress,
 }: {
@@ -163,7 +163,7 @@ function TradeLevelRow({
         accessibilityRole={locked ? 'button' : undefined}
         accessibilityLabel={locked ? `Unlock ${label}` : undefined}
       >
-        <Text style={[styles.levelTableValue, { color }, locked && styles.lockedValue]}>{value}</Text>
+        <Text style={[styles.levelTableValue, { color: color ?? colors.text }, locked && styles.lockedValue]}>{value}</Text>
         {locked ? <BlurView intensity={18} tint="dark" style={StyleSheet.absoluteFill} /> : null}
       </TouchableOpacity>
     </View>
@@ -309,12 +309,13 @@ export default function AnalysisResultScreen() {
       currentAnalysis?.tradeSetup?.riskReward,
     );
   const directionalCallLabel = getDirectionalCallLabel(readinessText);
-  const isHoldPlan = hasTradePlan && !isValidatedActionable;
-  const isBuySignal = readinessText.startsWith('BUY');
-  const isSellSignal = readinessText.startsWith('SELL');
-  const signalColor = isHoldPlan ? '#FFC857' : isBuySignal ? '#00E676'
-    : isSellSignal ? '#FF5252' : '#FFC857';
-  const directionLabel = isHoldPlan ? 'HOLD' : directionalCallLabel;
+  const directionLabel = isAnalysisUnavailable
+    ? 'HOLD'
+    : hasDirectionalCandidate && tradeDirection
+      ? getDirectionalCallLabel(tradeDirection)
+      : directionalCallLabel;
+  const signalColor = directionLabel === 'BUY' ? '#00E676'
+    : directionLabel === 'SELL' ? '#FF5252' : '#FFC857';
   const currentPrice = currentAnalysis?.latestVisiblePrice;
   const marketEntryText = currentPrice != null
     ? formatInstrumentPriceText(currentPrice, pair)
@@ -653,7 +654,7 @@ export default function AnalysisResultScreen() {
             <Text style={[styles.entryCaption, { color: colors.textSecondary }]}>{currentPrice != null ? 'LATEST VISIBLE PRICE' : hasTradePlan ? 'PLANNED ENTRY' : 'PRICE UNREADABLE'}</Text>
             <Text numberOfLines={1} adjustsFontSizeToFit style={[styles.entryPrice, { color: colors.text }]}>{marketEntryText}</Text>
             <View style={[styles.directionPill, { backgroundColor: `${signalColor}20` }]}>
-              <Feather name={isSellSignal ? 'trending-down' : isBuySignal ? 'trending-up' : 'clock'} size={13} color={signalColor} />
+              <Feather name={directionLabel === 'SELL' ? 'trending-down' : directionLabel === 'BUY' ? 'trending-up' : 'clock'} size={13} color={signalColor} />
               <Text style={[styles.directionPillText, { color: signalColor }]}>{directionLabel}</Text>
             </View>
           </View>
@@ -763,7 +764,7 @@ export default function AnalysisResultScreen() {
                     : `${tradeDirection} direction identified, but a complete entry, stop and target could not all be verified from the chart.`}
                 </Text>
               ) : null}
-              {hasDirectionalBiasOnly ? <Text style={[styles.bodyMuted, { color: colors.textSecondary }]}>{`Directional call: ${directionalCallLabel}. Entry, stop-loss, and take-profit levels are not validated. Hold until a complete plan is available.`}</Text> : null}
+              {hasDirectionalBiasOnly ? <Text style={[styles.bodyMuted, { color: colors.textSecondary }]}>{`Directional call: ${directionalCallLabel}. Entry, stop-loss, and take-profit levels are not validated; this is not an entry signal.`}</Text> : null}
               {currentPrice != null ? <View style={styles.confidenceLine}><Text style={[styles.bodyMuted, { color: colors.textSecondary }]}>Latest visible price (screenshot)</Text><Text style={[styles.confidenceText, { color: colors.text }]}>{marketEntryText}</Text></View> : null}
             </Animated.View>
             {hasTradePlan && currentAnalysis?.tradePlan ? (
@@ -771,7 +772,7 @@ export default function AnalysisResultScreen() {
                 <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>{currentAnalysis.conviction === 'LOW' ? 'TRADE PLAN · LOW CONVICTION' : 'TRADE PLAN'}</Text>
                 <TradeLevelRow label="Direction" value={tradeDirection || '—'} color={tradeDirection === 'SELL' ? colors.sell : colors.buy} />
                 <View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
-                <TradeLevelRow label="Entry" value={entryLevel} color="#39E58C" />
+                <TradeLevelRow label="Entry" value={entryLevel} color={colors.buy} />
                 <View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
                 <TradeLevelRow label="Stop Loss" value={stopLevel} color={colors.sell} />
                 <View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
@@ -782,8 +783,8 @@ export default function AnalysisResultScreen() {
                   {currentAnalysis.conviction === 'LOW'
                   ? (currentAnalysis.verdictReason || 'LOW QUALITY — RECOMMENDED: SKIP.')
                     : currentAnalysis.tradePlan.entryType === 'trigger'
-                      ? `HOLD — Enter only after ${(currentAnalysis.tradePlan.triggerEvent || 'retest_hold').replace(/_/g, ' ')} at ${entryLevel}.`
-                      : 'HOLD — Verify the planned levels against current market conditions before entering.'}
+                      ? `${tradeDirection} setup — Entry is conditional on ${(currentAnalysis.tradePlan.triggerEvent || 'retest_hold').replace(/_/g, ' ')} at ${entryLevel}.`
+                      : `${tradeDirection} setup — Verify the planned levels against current market conditions before entry.`}
                 </Text>
               </View>
             ) : hasDirectionalCandidate ? (

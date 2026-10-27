@@ -155,7 +155,7 @@ export function getTradeReadinessLabel(
     && isValidPrice(takeProfit)
     && getRiskRewardRatio(riskReward) != null;
   if (normalizedDirection !== 'BUY' && normalizedDirection !== 'SELL') {
-    return 'HOLD';
+    return 'WAIT FOR CONFIRMATION';
   }
   if (tradeStatus === 'actionable' && hasCompleteSetup) return normalizedDirection;
   if (tradeStatus && tradeStatus.startsWith('waiting_')) {

@@ -3,12 +3,12 @@ import { router } from 'expo-router';
 import { useApp } from '@/context/AppContext';
 
 export default function StartupRoute() {
-  const { onboardingComplete, isLoading } = useApp();
+  const { onboardingComplete, isLoading, isSubscribed, billingAvailable, billingStatusReady } = useApp();
 
   useEffect(() => {
-    if (isLoading) return;
-    router.replace(onboardingComplete ? '/home' : '/onboarding');
-  }, [isLoading, onboardingComplete]);
+    if (isLoading || (billingAvailable && !billingStatusReady)) return;
+    router.replace(onboardingComplete || isSubscribed ? '/home' : '/onboarding');
+  }, [billingAvailable, billingStatusReady, isLoading, isSubscribed, onboardingComplete]);
 
   return null;
 }

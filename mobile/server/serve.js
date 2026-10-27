@@ -1103,16 +1103,18 @@ function normalizeVerdictFields(raw, normalized) {
   const legacy = normalized.trade_setup || {};
   const suppliedPlanDirection = canonicalizeEnumOr(sourcePlan.direction ?? legacy.type, {
     buy: 'BUY', long: 'BUY', bullish: 'BUY', sell: 'SELL', short: 'SELL', bearish: 'SELL',
-  }, ['BUY', 'SELL'], 'BUY');
+  }, ['BUY', 'SELL'], undefined);
 
-  const planDirection = suppliedPlanDirection;
+  const biasDirection = bias === 'bullish' ? 'BUY' : bias === 'bearish' ? 'SELL' : null;
+  const planDirection = suppliedPlanDirection || biasDirection;
+  const explicitNoTrade = String(raw.verdict ?? raw.trade_setup?.verdict ?? '').toUpperCase() === 'NO_TRADE';
   const entry = numericPrice(sourcePlan.entry) ?? numericPrice(legacy.entry_zone) ?? (support[0] ?? 0);
-  const stop = numericPrice(sourcePlan.stop_loss) ?? numericPrice(legacy.stop_loss) ?? (planDirection === 'BUY' ? (support[0] ?? entry) - 0.01 : (resistance[0] ?? entry) + 0.01);
-  const target = numericPrice(sourcePlan.take_profit_1) ?? numericPrice(legacy.take_profit) ?? (planDirection === 'BUY' ? (resistance[0] ?? entry + 0.01) : (support[0] ?? entry - 0.01));
+  const stop = numericPrice(sourcePlan.stop_loss) ?? numericPrice(legacy.stop_loss) ?? (planDirection === 'BUY' ? (support[0] ?? entry) - 0.01 : planDirection === 'SELL' ? (resistance[0] ?? entry) + 0.01 : NaN);
+  const target = numericPrice(sourcePlan.take_profit_1) ?? numericPrice(legacy.take_profit) ?? (planDirection === 'BUY' ? (resistance[0] ?? entry + 0.01) : planDirection === 'SELL' ? (support[0] ?? entry - 0.01) : NaN);
   const target2 = numericPrice(sourcePlan.take_profit_2) ?? null;
   const riskReward = typeof sourcePlan.risk_reward === 'number' ? sourcePlan.risk_reward : (Number.isFinite(target) && Number.isFinite(entry) && Number.isFinite(stop) && entry !== stop ? Math.round((Math.abs(target - entry) / Math.abs(entry - stop)) * 100) / 100 : null);
 
-  const plan = support.length > 0 && resistance.length > 0 && Number.isFinite(entry) && Number.isFinite(stop) && Number.isFinite(target)
+  const plan = !explicitNoTrade && planDirection && support.length > 0 && resistance.length > 0 && Number.isFinite(entry) && Number.isFinite(stop) && Number.isFinite(target)
     ? {
       direction: planDirection,
       entry_type: sourcePlan.entry_type === 'trigger' ? 'trigger' : 'market',
@@ -1144,9 +1146,14 @@ function normalizeVerdictFields(raw, normalized) {
   })();
   const verdictReason = typeof raw.verdict_reason === 'string' && raw.verdict_reason.trim()
     ? raw.verdict_reason.trim()
-    : `${planDirection} plan anchored to support ${support.join(', ') || 'unidentified'} and resistance ${resistance.join(', ') || 'unidentified'}; price_position ${pricePosition}, setup ${setup}.`;
+    : plan
+      ? `${planDirection} plan anchored to support ${support.join(', ')} and resistance ${resistance.join(', ')}; price_position ${pricePosition}, setup ${setup}.`
+      : String(raw.no_trade_reason || 'The chart does not support a defensible directional setup.');
+  const noTradeReason = String(raw.no_trade_reason ?? raw.trade_setup?.no_trade_reason ?? '').trim()
+    || (explicitNoTrade ? 'The chart does not support a defensible trade setup.' : 'The chart does not provide enough evidence for a defensible BUY or SELL setup.');
 
   return {
+    status: plan ? normalized.status : 'no_trade',
     ...(verdictOnlyPayload ? {
       status: plan ? 'success' : 'no_trade',
       trade_setup: {
@@ -1170,7 +1177,7 @@ function normalizeVerdictFields(raw, normalized) {
     conviction,
     verdict_reason: verdictReason,
     trade_plan: plan,
-    no_trade_reason: plan ? null : 'A chart screenshot must return a full trade plan; only non-chart uploads are rejected.',
+    no_trade_reason: plan ? null : noTradeReason,
   };
 }
 
@@ -2212,7 +2219,7 @@ function applyMentorStrategy(normalized) {
 }
 
 function getTraderSystemPrompt() {
-  return `You are FXSnap's chart analyst. You receive ONE screenshot of a trading chart. Your only job is to read it and return a complete trade analysis. Always return valid JSON only. Do not wrap it in markdown fences, labels, commentary, or prose. Do not emit a plain string, array, or empty object. The top-level response must be a single JSON object that parses with JSON.parse and matches the app's existing schema. If the chart is valid, include bias, levels, price_position, setup, verdict, conviction, verdict_reason, trade_plan, and no_trade_reason (null). If the chart is unreadable, return a valid no_trade object with trade_plan: null and a plain no_trade_reason. Never invent missing chart data. Never return the literal words 'wait for confirmation', 'not readable', 'cannot determine', or 'unable to analyze' for a real chart image. If a chart is weak or incomplete, still return the best supported trade plan with honest conviction instead of an empty response.
+  return `You are FXSnap's chart analyst. You receive ONE screenshot of a trading chart. Return valid JSON only, with no markdown or prose. For a readable chart with a supported directional setup, return bias, levels, price_position, setup, verdict: "TRADE_PLAN", conviction, verdict_reason, a complete trade_plan, and no_trade_reason: null. Select BUY or SELL from the visible evidence; never default to BUY, invent a side, or reverse direction just to make a plan fit the levels. If the chart is blurred, the current price is unreadable, the evidence is genuinely mixed, or no defensible setup exists, return verdict: "NO_TRADE", trade_plan: null, and a clear no_trade_reason. Never invent missing chart data. Do not claim a screenshot price is live. Use the rightmost/current price marker or candle, never a historical candle as the current price.
 
 Return only one parseable JSON object. For non-chart images, return the existing invalid_image response only.`;
 }
@@ -2255,8 +2262,14 @@ function normalizeCompleteChartAnalysis(raw, input = {}) {
     : raw.trade_setup?.trade_plan && typeof raw.trade_setup.trade_plan === 'object'
       ? raw.trade_setup.trade_plan : {};
   const legacyPlan = raw.trade_setup && typeof raw.trade_setup === 'object' ? raw.trade_setup : {};
-  const biasText = String(raw.bias ?? raw.marketBias ?? analysisRaw.structure_bias ?? analysisRaw.trend ?? suppliedPlan.direction ?? legacyPlan.type ?? '').toLowerCase();
-  let direction = /^(sell|bearish|short)$/.test(biasText) ? 'SELL' : 'BUY';
+  const biasText = String(raw.bias ?? raw.marketBias ?? analysisRaw.structure_bias ?? analysisRaw.trend ?? '').trim().toLowerCase();
+  const planDirectionText = String(suppliedPlan.direction ?? legacyPlan.type ?? '').trim().toLowerCase();
+  const normalizeDirection = (value) => {
+    if (/^(buy|bullish|long)$/.test(value)) return 'BUY';
+    if (/^(sell|bearish|short)$/.test(value)) return 'SELL';
+    return null;
+  };
+  let direction = normalizeDirection(planDirectionText) || normalizeDirection(biasText);
   let position = ['at_support', 'at_resistance', 'mid_range', 'breaking_up', 'breaking_down', 'extended'].includes(raw.price_position)
     ? raw.price_position
     : latest == null ? 'mid_range'
@@ -2314,8 +2327,8 @@ function normalizeCompleteChartAnalysis(raw, input = {}) {
       .sort((a, b) => side === 'BUY' ? a - b : b - a)[0] ?? null;
     return {
       direction: side,
-      entry_type: 'market',
-      trigger_event: null,
+      entry_type: suppliedPlan.entry_type === 'trigger' ? 'trigger' : 'market',
+      trigger_event: typeof suppliedPlan.trigger_event === 'string' ? suppliedPlan.trigger_event : null,
       entry,
       stop_loss: stop,
       take_profit_1: target,
@@ -2324,26 +2337,83 @@ function normalizeCompleteChartAnalysis(raw, input = {}) {
     };
   };
 
-  let plan = buildPlan(direction);
-  if (!plan) {
-    direction = direction === 'BUY' ? 'SELL' : 'BUY';
-    plan = buildPlan(direction);
-  }
-  if (!plan) return null;
-
   const pair = chartRaw.pair || raw.detectedPair || input.pair || null;
   const timeframe = chartRaw.timeframe || raw.timeframe || input.timeframe || null;
-  const trend = direction === 'BUY' ? 'bullish' : 'bearish';
   const supportText = support.map(String);
   const resistanceText = resistance.map(String);
+  const explicitNoTrade = String(raw.verdict ?? '').toUpperCase() === 'NO_TRADE'
+    || String(raw.status ?? '').toLowerCase() === 'no_trade';
+  let plan = !explicitNoTrade && direction ? buildPlan(direction) : null;
+  const rawBias = normalizeDirection(biasText);
+  const trend = rawBias === 'BUY' ? 'bullish' : rawBias === 'SELL' ? 'bearish' : 'neutral';
+  const noTradeReason = String(raw.no_trade_reason || raw.verdict_reason || '').trim()
+    || (explicitNoTrade ? 'The chart does not support a defensible trade setup.' : 'The chart does not provide enough evidence for a defensible BUY or SELL setup.');
+  if (!plan) {
+    const chart = {
+      ...DEFAULT_CHART,
+      ...chartRaw,
+      is_chart: true,
+      pair: pair || DEFAULT_CHART.pair,
+      timeframe: timeframe || DEFAULT_CHART.timeframe,
+      latest_visible_price: latest == null ? null : String(latest),
+      current_price_source: ['visible_price_marker', 'latest_candle_scale_read', 'unreadable'].includes(chartRaw.current_price_source)
+        ? chartRaw.current_price_source : latest == null ? 'unreadable' : 'latest_candle_scale_read',
+    };
+    return {
+      status: 'no_trade',
+      detectedPair: pair,
+      timeframe,
+      chart,
+      analysis: {
+        ...DEFAULT_ANALYSIS,
+        ...analysisRaw,
+        trend,
+        structure_bias: trend,
+        sentiment: trend,
+        notes: noTradeReason,
+      },
+      zones: {
+        ...DEFAULT_ZONES,
+        ...(raw.zones || {}),
+        support: supportText[0] || '',
+        resistance: resistanceText[0] || '',
+      },
+      strategy: DEFAULT_STRATEGY,
+      trade_setup: { ...DEFAULT_TRADE_SETUP, type: 'none' },
+      confidence: 0,
+      reasons: [noTradeReason],
+      reasoning: Array.isArray(raw.reasoning) ? raw.reasoning.slice(0, 5) : [noTradeReason],
+      support_resistance: { support: supportText, resistance: resistanceText },
+      bias: rawBias || 'NEUTRAL',
+      marketBias: trend,
+      levels: { support, resistance },
+      price_position: position,
+      setup,
+      verdict: 'NO_TRADE',
+      conviction: null,
+      verdict_reason: noTradeReason,
+      trade_plan: null,
+      no_trade_reason: noTradeReason,
+      tradeDecision: 'NONE',
+      tradeType: 'none',
+      tradeTrigger: noTradeReason,
+      setupDirection: null,
+      setupStatus: 'NO_SETUP',
+    };
+  }
+
+  const planDirection = direction;
   const positionText = position.replace(/_/g, ' ');
   const setupText = setup.replace(/_/g, ' ');
   const structure = String(analysisRaw.market_structure || analysisRaw.structure || 'Visible swing structure frames the listed support and resistance levels.').trim();
-  const description = `Price is ${positionText} in a ${setupText} structure, with a ${direction} bias. Support at ${support.join(', ')} and resistance at ${resistance.join(', ')} frame the setup. ${structure}`;
+  const description = `Price is ${positionText} in a ${setupText} structure, with a ${planDirection} setup. Support at ${support.join(', ')} and resistance at ${resistance.join(', ')} frame the setup. ${structure}`;
   const suppliedConfidence = Number(raw.confidence);
   const confidence = Number.isFinite(suppliedConfidence) ? Math.min(100, Math.max(0, suppliedConfidence)) : 65;
-  const conviction = raw.conviction === 'HIGH' ? 'HIGH' : 'MEDIUM';
-  const verdictReason = `${direction} plan from support ${support.join(', ')} and resistance ${resistance.join(', ')}; price is ${positionText} with a ${setupText} structure.`;
+  const conviction = ['HIGH', 'MEDIUM', 'LOW'].includes(raw.conviction) ? raw.conviction : 'MEDIUM';
+  const verdict = raw.verdict === 'CONDITIONAL_PLAN' || plan.entry_type === 'trigger'
+    ? 'CONDITIONAL_PLAN'
+    : 'TRADE_PLAN';
+  const verdictReason = String(raw.verdict_reason || `${planDirection} plan from support ${support.join(', ')} and resistance ${resistance.join(', ')}; price is ${positionText} with a ${setupText} structure.`);
   const chart = {
     ...DEFAULT_CHART,
     ...chartRaw,
@@ -2357,15 +2427,15 @@ function normalizeCompleteChartAnalysis(raw, input = {}) {
   };
   const tradeSetup = {
     ...DEFAULT_TRADE_SETUP,
-    type: direction.toLowerCase(),
+    type: planDirection.toLowerCase(),
     entry_zone: String(plan.entry),
     stop_loss: String(plan.stop_loss),
     take_profit: String(plan.take_profit_1),
     take_profit_levels: [plan.take_profit_1, plan.take_profit_2].filter((price) => price != null).map(String),
     risk_reward: plan.risk_reward,
     setup_status: 'valid',
-    entry_status: 'trigger_observed',
-    entry_trigger: null,
+    entry_status: plan.entry_type === 'trigger' ? 'waiting_for_trigger' : 'trigger_observed',
+    entry_trigger: plan.trigger_event,
   };
 
   return {
@@ -2395,20 +2465,20 @@ function normalizeCompleteChartAnalysis(raw, input = {}) {
     reasons: [verdictReason],
     reasoning: Array.isArray(raw.reasoning) ? raw.reasoning.slice(0, 5) : [description],
     support_resistance: { support: supportText, resistance: resistanceText },
-    bias: direction,
+    bias: planDirection,
     marketBias: trend,
     levels: { support, resistance },
     price_position: position,
     setup,
-    verdict: 'TRADE_PLAN',
+    verdict,
     conviction,
     verdict_reason: verdictReason,
     trade_plan: plan,
     no_trade_reason: null,
-    tradeDecision: direction,
-    tradeType: direction,
+    tradeDecision: planDirection,
+    tradeType: planDirection,
     tradeTrigger: verdictReason,
-    setupDirection: direction.toLowerCase(),
+    setupDirection: planDirection.toLowerCase(),
     setupStatus: 'ACTIVE',
   };
 }
@@ -4159,24 +4229,26 @@ async function analyzeChart(req, res) {
     }
     if (result.status === 'invalid_image') return sendJson(res, 200, result);
 
-    try {
-      const id = crypto.randomBytes(10).toString('hex');
-      await persistentStore.setJson(`fxsnap:generatedSignal:${deviceId}:${id}`, {
-        deviceId,
-        pair: result.detectedPair || input.pair || '',
-        timeframe: result.timeframe || '',
-        direction: result.trade_plan.direction,
-        entry: result.trade_plan.entry,
-        sl: result.trade_plan.stop_loss,
-        tp: result.trade_plan.take_profit_1,
-        rr: result.trade_plan.risk_reward,
-        confidence: result.confidence,
-        strategyVersion: 'chart-level-plan-v1',
-        provider: raw.provider || 'openrouter',
-        generatedAt: new Date().toISOString(),
-      }, 60 * 60 * 24 * 365);
-    } catch (error) {
-      console.error('[Chart AI] Failed to persist generated signal:', error);
+    if (result.status === 'success' && result.trade_plan) {
+      try {
+        const id = crypto.randomBytes(10).toString('hex');
+        await persistentStore.setJson(`fxsnap:generatedSignal:${deviceId}:${id}`, {
+          deviceId,
+          pair: result.detectedPair || input.pair || '',
+          timeframe: result.timeframe || '',
+          direction: result.trade_plan.direction,
+          entry: result.trade_plan.entry,
+          sl: result.trade_plan.stop_loss,
+          tp: result.trade_plan.take_profit_1,
+          rr: result.trade_plan.risk_reward,
+          confidence: result.confidence,
+          strategyVersion: 'chart-level-plan-v1',
+          provider: raw.provider || 'openrouter',
+          generatedAt: new Date().toISOString(),
+        }, 60 * 60 * 24 * 365);
+      } catch (error) {
+        console.error('[Chart AI] Failed to persist generated signal:', error);
+      }
     }
 
     return sendJson(res, 200, result);
@@ -4379,7 +4451,7 @@ async function getAnalysisAccess(req, res) {
 }
 
 function getPaywallRemoteConfig(req, res) {
-  const configuredCount = Number(process.env.FXSNAP_TRADER_COUNT || 6000);
+  const configuredCount = Number(process.env.FXSNAP_TRADER_COUNT);
   const configuredRating = Number(process.env.FXSNAP_GOOGLE_PLAY_RATING);
   const configuredRatingCount = Number(process.env.FXSNAP_GOOGLE_PLAY_RATING_COUNT);
   let testimonials = [];
@@ -4533,33 +4605,37 @@ function createRequestHandler() {
       const deviceId = requireAuth(req, res);
       if (!deviceId) return;
       if (!persistentStore.supabaseEnabled) return sendJson(res, 503, { error: 'Push notifications require Supabase storage.' });
-      const accountSession = accountSessionFromRequest(req, res, deviceId);
-      if (!accountSession) return;
-      return persistentStore.getJson(accountStorageKey(accountSession.sub)).then((account) => {
-        if (!account || account.status !== 'active'
+      const hasAccountToken = typeof req.headers['x-fxsnap-account-token'] === 'string';
+      const accountSession = hasAccountToken ? accountSessionFromRequest(req, res, deviceId) : null;
+      if (hasAccountToken && !accountSession) return;
+      const notifications = require('./notificationService');
+      const removeRegistration = () => notifications.unregisterPushToken(deviceId, accountSession?.sub || null)
+        .then(() => sendJson(res, 200, { registered: false }))
+        .catch((error) => sendJson(res, 500, { error: error.message }));
+      if (req.method === 'DELETE') return removeRegistration();
+      const register = async (account = null) => {
+        if (accountSession && (!account || account.status !== 'active'
           || !account.linkedDeviceIds?.includes(deviceId)
           || !account.sessionIds?.includes(accountSession.sid)
-          || !account.supabaseUserId) {
-          return sendJson(res, 401, { error: 'A valid signed-in FXSnap account is required to register notifications.' });
+          || !account.supabaseUserId)) {
+          return sendJson(res, 401, { error: 'A valid signed-in FXSnap account is required to register these notifications.' });
         }
-        const notifications = require('./notificationService');
-        if (req.method === 'DELETE') {
-          return notifications.unregisterPushToken(deviceId, accountSession.sub)
-            .then(() => sendJson(res, 200, { registered: false }))
-            .catch((error) => sendJson(res, 500, { error: error.message }));
+        const body = await readJsonBody(req);
+        if (typeof body.token !== 'string' || typeof body.platform !== 'string') {
+          return sendJson(res, 400, { error: 'A push token and platform are required.' });
         }
-        return readJsonBody(req).then(async (body) => {
-          if (typeof body.token !== 'string' || typeof body.platform !== 'string') {
-            return sendJson(res, 400, { error: 'A push token and platform are required.' });
-          }
-          await notifications.registerPushToken(deviceId, {
-            ...body,
-            accountId: accountSession.sub,
-            supabaseUserId: account.supabaseUserId,
-          });
-          return sendJson(res, 200, { registered: true });
-        }).catch((error) => sendJson(res, 400, { error: error.message }));
-      }).catch((error) => sendJson(res, 500, { error: error.message }));
+        await notifications.registerPushToken(deviceId, {
+          ...body,
+          accountId: accountSession?.sub || null,
+          supabaseUserId: account?.supabaseUserId || null,
+        });
+        return sendJson(res, 200, { registered: true });
+      };
+      const accountPromise = accountSession
+        ? persistentStore.getJson(accountStorageKey(accountSession.sub))
+        : Promise.resolve(null);
+      return accountPromise.then((account) => register(account))
+        .catch((error) => sendJson(res, 400, { error: error.message }));
     }
     if (pathname === '/api/notifications/dispatch' && req.method === 'POST') {
       if (!persistentStore.supabaseEnabled) return sendJson(res, 503, { error: 'Push notifications require Supabase storage.' });

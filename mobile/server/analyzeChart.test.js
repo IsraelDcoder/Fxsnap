@@ -907,12 +907,11 @@ test('recognizable low-quality charts are analyzed conservatively instead of rej
 test('chart prompt requires a complete level-based plan for every chart image', () => {
   const prompt = getTraderSystemPrompt();
   assert.ok(prompt.length < 6000, `Expected a compact prompt, got ${prompt.length} characters`);
-  assert.match(prompt, /State market bias as BUY or SELL/i);
-  assert.match(prompt, /Read numeric support and resistance levels/i);
-  assert.match(prompt, /Build entry, stop loss, take profit 1, take profit 2, and risk-to-reward from the identified levels/i);
-  assert.match(prompt, /Set status to success for a chart and verdict to TRADE_PLAN/i);
-  assert.match(prompt, /Only return status invalid_image when the image contains no chart/i);
-  assert.doesNotMatch(prompt, /CONDITIONAL_PLAN|NO_TRADE|LOW QUALITY|wait for confirmation|unreadable/i);
+  assert.match(prompt, /Select BUY or SELL from the visible evidence/i);
+  assert.match(prompt, /never default to BUY, invent a side, or reverse direction/i);
+  assert.match(prompt, /verdict: "NO_TRADE", trade_plan: null/i);
+  assert.match(prompt, /rightmost\/current price marker or candle/i);
+  assert.match(prompt, /Do not claim a screenshot price is live/i);
 });
 
 test('mid-range charts produce a nearest-level plan with recomputed RR', () => {
@@ -934,9 +933,9 @@ test('mid-range charts produce a nearest-level plan with recomputed RR', () => {
   }, { pair: 'XAUUSD' });
 
   assert.equal(result.status, 'success');
-  assert.equal(result.verdict, 'TRADE_PLAN');
+  assert.equal(result.verdict, 'CONDITIONAL_PLAN');
   assert.equal(result.trade_plan.direction, 'BUY');
-  assert.equal(result.trade_plan.entry_type, 'market');
+  assert.equal(result.trade_plan.entry_type, 'trigger');
   assert.equal(result.trade_plan.entry, 4164.171);
   assert.ok(result.trade_plan.stop_loss < 4164.171);
   assert.equal(result.trade_plan.take_profit_1, 4178.461);
@@ -977,7 +976,7 @@ test('low-resolution chart quality does not prevent a complete plan', () => {
   assert.ok(result.trade_plan.take_profit_1 < result.trade_plan.entry);
 });
 
-test('uncertain direction is normalized into a committed, complete setup', () => {
+test('uncertain direction without an explicit trade plan remains no-trade', () => {
   const result = normalizeCompleteChartAnalysis({
     chart: { is_chart: true, latest_visible_price: 1.105 },
     analysis: { trend: 'neutral' },
@@ -986,9 +985,39 @@ test('uncertain direction is normalized into a committed, complete setup', () =>
     setup: 'range_middle',
   });
 
-  assert.ok(['BUY', 'SELL'].includes(result.bias));
-  assert.ok(result.trade_plan);
+  assert.equal(result.status, 'no_trade');
+  assert.equal(result.bias, 'NEUTRAL');
+  assert.equal(result.trade_plan, null);
+  assert.equal(result.verdict, 'NO_TRADE');
   assert.ok(result.levels.support.length && result.levels.resistance.length);
+});
+
+test('explicit NO_TRADE is preserved even when support and resistance are available', () => {
+  const result = normalizeCompleteChartAnalysis({
+    chart: { is_chart: true, latest_visible_price: 1.105 },
+    levels: { support: [1.1], resistance: [1.11] },
+    bias: 'neutral',
+    verdict: 'NO_TRADE',
+    trade_plan: null,
+    no_trade_reason: 'The chart structure is mixed.',
+  });
+
+  assert.equal(result.status, 'no_trade');
+  assert.equal(result.trade_setup.type, 'none');
+  assert.equal(result.trade_plan, null);
+  assert.equal(result.no_trade_reason, 'The chart structure is mixed.');
+});
+
+test('normalization does not reverse a directional bias to force a plan', () => {
+  const result = normalizeCompleteChartAnalysis({
+    chart: { is_chart: true, latest_visible_price: 105 },
+    levels: { support: [95, 105], resistance: [100] },
+    bias: 'bullish',
+  });
+
+  assert.equal(result.status, 'no_trade');
+  assert.equal(result.marketBias, 'bullish');
+  assert.equal(result.trade_plan, null);
 });
 
 test('only an explicitly non-chart image returns invalid_image without a plan', () => {
@@ -1200,16 +1229,12 @@ test('verdict-shaped provider responses normalize when legacy analysis details a
   assert.equal(firstPass.setup, 'range_middle');
   const firstPassParsed = TradeAnalysisSchema.safeParse(firstPass);
   assert.equal(firstPassParsed.success, true, JSON.stringify(firstPassParsed.error?.flatten()));
-  const fallbackPlan = normalizeAnalysis(firstPassParsed.data).trade_plan;
-  assert.equal(fallbackPlan.direction, 'BUY');
-  assert.equal(fallbackPlan.entry_type, 'trigger');
-  assert.equal(fallbackPlan.entry, 1.1);
-  assert.equal(fallbackPlan.take_profit_1, 1.11);
-  assert.equal(fallbackPlan.stop_loss, 1.09999);
-  assert.equal(fallbackPlan.risk_reward, 1000);
+  const firstPassResult = normalizeAnalysis(firstPassParsed.data);
+  assert.equal(firstPassResult.status, 'no_trade');
+  assert.equal(firstPassResult.trade_plan, null);
 });
 
-test('verdict-only provider response without legacy status or chart fields normalizes to a complete plan', () => {
+test('explicit NO_TRADE verdict without legacy fields is not converted into a plan', () => {
   const raw = {
     pair: 'XAUUSD',
     levels: { support: [4164.171], resistance: [4178.461] },
@@ -1235,20 +1260,12 @@ test('verdict-only provider response without legacy status or chart fields norma
   assert.equal(parsed.success, true, JSON.stringify(parsed.error?.flatten()));
 
   const normalized = normalizeAnalysis(parsed.data);
-  assert.equal(normalized.status, 'success');
-  assert.equal(normalized.verdict, 'CONDITIONAL_PLAN');
-  assert.equal(normalized.conviction, 'LOW');
-  assert.equal(normalized.trade_plan.direction, 'BUY');
-  assert.equal(normalized.trade_plan.entry_type, 'trigger');
-  assert.equal(normalized.trade_plan.entry, 4164.171);
-  assert.equal(normalized.trade_plan.stop_loss, 4164.16);
-  assert.equal(normalized.trade_plan.take_profit_1, 4178.461);
-  assert.equal(
-    normalized.trade_plan.risk_reward,
-    Math.round((Math.abs(4178.461 - 4164.171) / Math.abs(4164.171 - 4164.16)) * 100) / 100,
-  );
-  assert.equal(normalized.trade_setup.type, 'buy');
-  assert.equal(normalized.trade_setup.entry_zone, '4164.171');
+  assert.equal(normalized.status, 'no_trade');
+  assert.equal(normalized.verdict, 'NO_TRADE');
+  assert.equal(normalized.conviction, null);
+  assert.equal(normalized.trade_setup.type, 'none');
+  assert.equal(normalized.trade_plan, null);
+  assert.equal(normalized.no_trade_reason, 'The chart levels are unclear; no trade.');
 });
 
 test('vision provider failures and malformed JSON remain distinct errors', async () => {
@@ -1640,9 +1657,9 @@ test('authenticated chart upload returns a complete plan and reserves invalid_im
       setup: 'range_middle',
     };
     const lowResolution = await postAnalysis();
-    assert.equal(lowResolution.body.status, 'success');
-    assert.ok(lowResolution.body.trade_plan);
-    assert.ok(['BUY', 'SELL'].includes(lowResolution.body.bias));
+    assert.equal(lowResolution.body.status, 'no_trade');
+    assert.equal(lowResolution.body.trade_plan, null);
+    assert.equal(lowResolution.body.bias, 'NEUTRAL');
     assert.equal(providerCalls, 2);
 
     providerResponse = { status: 'invalid_image', chart: { is_chart: false } };

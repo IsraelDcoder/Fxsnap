@@ -26,6 +26,7 @@ import Animated, {
   useReducedMotion,
   useSharedValue,
   withRepeat,
+  withSequence,
   withTiming,
 } from 'react-native-reanimated';
 import * as Haptics from '@/services/haptics';
@@ -47,10 +48,14 @@ export default function HomeDashboard({ previewMode = false }: { previewMode?: b
   const [toolsExpanded, setToolsExpanded] = useState(false);
   const [sessionState, setSessionState] = useState(getTradingSessionState());
   const [briefState, setBriefState] = useState<DailyBriefState | null>(null);
+  const [briefLoading, setBriefLoading] = useState(true);
+  const [briefLoadError, setBriefLoadError] = useState('');
+  const [homeFocused, setHomeFocused] = useState(false);
   const [briefSaveMessage, setBriefSaveMessage] = useState('');
   const [briefSaveError, setBriefSaveError] = useState('');
   const [savingBrief, setSavingBrief] = useState(false);
   const saveInFlight = useRef(false);
+  const briefRequestId = useRef(0);
 
   const firstName = settings.displayName.trim().split(/\s+/)[0] || 'Trader';
   const greeting = getTimeGreeting();
@@ -67,15 +72,31 @@ export default function HomeDashboard({ previewMode = false }: { previewMode?: b
     };
   }, []);
 
-  useFocusEffect(useCallback(() => {
-    let active = true;
-    void getDailyBriefState().then((briefState) => {
-      if (active) {
-        setBriefState(briefState);
+  const loadDailyBrief = useCallback(async () => {
+    const requestId = ++briefRequestId.current;
+    setBriefLoading(true);
+    setBriefLoadError('');
+    try {
+      const state = await getDailyBriefState();
+      if (requestId === briefRequestId.current) setBriefState(state);
+    } catch (error) {
+      console.error('[Home] Daily Brief load failed.', error);
+      if (requestId === briefRequestId.current) {
+        setBriefLoadError('Your brief could not be loaded. Check your connection and try again.');
       }
-    });
-    return () => { active = false; };
-  }, []));
+    } finally {
+      if (requestId === briefRequestId.current) setBriefLoading(false);
+    }
+  }, []);
+
+  useFocusEffect(useCallback(() => {
+    setHomeFocused(true);
+    void loadDailyBrief();
+    return () => {
+      setHomeFocused(false);
+      briefRequestId.current += 1;
+    };
+  }, [loadDailyBrief]));
 
   useEffect(() => {
     if (!briefSaveMessage && !briefSaveError) return;
@@ -86,7 +107,7 @@ export default function HomeDashboard({ previewMode = false }: { previewMode?: b
     return () => clearTimeout(timer);
   }, [briefSaveError, briefSaveMessage]);
 
-  const navigate = (path: '/analysis' | '/strategy' | '/settings' | '/daily-brief' | '/community-notifications' | '/economic-calendar' | '/lot-size-calculator' | '/risk-management' | '/saved' | '/my-strategies' | '/learning-hub') => {
+  const navigate = (path: '/analysis' | '/strategy' | '/settings' | '/daily-brief' | '/community-notifications' | '/economic-calendar' | '/lot-size-calculator' | '/risk-management' | '/saved' | '/my-strategies' | '/learning-hub' | '/support-chat') => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     router.push(path);
   };
@@ -110,11 +131,8 @@ export default function HomeDashboard({ previewMode = false }: { previewMode?: b
   const openStrategy = () => openProtectedFeature('STRATEGY_GENERATOR', '/strategy');
 
   const showSessions = () => setSessionModalVisible(true);
-  const support = () => Alert.alert('Coming soon', 'Help & Support will be available in a future update.');
+  const support = () => navigate('/support-chat');
   const activeSessionNames = sessionState.activeSessions.map((session) => session.name);
-  const currentBrief = briefState?.briefs.find((brief) => !briefState.readIds.includes(brief.id)) || null;
-  const currentBriefSaved = Boolean(currentBrief && savedBriefs.some((brief) => brief.brief_id === `daily-brief-${briefState?.dateKey}` && brief.card_id === currentBrief.id));
-
   const toggleBriefSave = async (brief: DailyBriefItem, event: GestureResponderEvent) => {
     event.stopPropagation?.();
     if (saveInFlight.current) return;
@@ -122,8 +140,9 @@ export default function HomeDashboard({ previewMode = false }: { previewMode?: b
     setSavingBrief(true);
     setBriefSaveError('');
     const briefId = `daily-brief-${briefState?.dateKey || 'today'}`;
+    const isSaved = savedBriefs.some((saved) => saved.brief_id === briefId && saved.card_id === brief.id);
     try {
-      if (currentBriefSaved) {
+      if (isSaved) {
         await deleteBriefCard(briefId, brief.id);
         setBriefSaveMessage('Removed from saved briefs');
         return;
@@ -238,6 +257,25 @@ export default function HomeDashboard({ previewMode = false }: { previewMode?: b
           </TouchableOpacity>
         </Animated.View>
 
+        <MarketBriefCard
+          briefState={briefState}
+          loading={briefLoading}
+          error={briefLoadError}
+          focused={homeFocused}
+          reduceMotion={reduceMotion}
+          savedBriefIds={new Set(
+            savedBriefs
+              .filter((brief) => brief.brief_id === `daily-brief-${briefState?.dateKey}`)
+              .map((brief) => brief.card_id),
+          )}
+          saving={savingBrief}
+          saveMessage={briefSaveMessage}
+          saveError={briefSaveError}
+          onOpen={() => navigate('/daily-brief')}
+          onRetry={() => void loadDailyBrief()}
+          onSave={toggleBriefSave}
+        />
+
         <Animated.View entering={reduceMotion ? undefined : FadeInDown.delay(180).duration(480)}>
           <LinearGradient
             colors={['#0A6258', '#0D776B', '#118778']}
@@ -260,11 +298,19 @@ export default function HomeDashboard({ previewMode = false }: { previewMode?: b
               </View>
             </View>
             <View style={styles.toolsGrid}>
-              <FeatureShortcut icon="book-open" label="Daily Brief" onPress={() => navigate('/daily-brief')} />
+              <FeatureShortcut icon="grid" label="Lot Calculator" onPress={() => navigate('/lot-size-calculator')} />
               <FeatureShortcut icon="calendar" label="Economic Calendar" onPress={() => navigate('/economic-calendar')} />
               <FeatureShortcut icon="bookmark" label="Saved Setups" onPress={() => navigate('/saved')} />
-              <FeatureShortcut icon="grid" label="Lot Calculator" onPress={() => navigate('/lot-size-calculator')} />
-              <FeatureShortcut icon="trending-up" label="Trade Setup" onPress={() => void openProtectedFeature('TRADE_SETUP', '/analysis')} />
+              <FeatureShortcut
+                icon="book-open"
+                label="Learning Hub"
+                badge="🔥"
+                animated
+                animationActive={homeFocused}
+                reduceMotion={reduceMotion}
+                onPress={() => router.push('/learning-hub')}
+              />
+              <FeatureShortcut icon="headphones" label="Help & Support" onPress={() => navigate('/support-chat')} />
               <FeatureShortcut icon="sliders" label="Strategies" onPress={() => void openStrategy()} />
               {toolsExpanded ? (
                 <Animated.View
@@ -273,8 +319,8 @@ export default function HomeDashboard({ previewMode = false }: { previewMode?: b
                   style={styles.toolsLastRow}
                 >
                   <FeatureShortcut icon="shield" label="Risk Management" onPress={() => navigate('/risk-management')} />
-                  <FeatureShortcut icon="book-open" label="Learning Hub" onPress={() => navigate('/learning-hub')} />
-                  <FeatureShortcut icon="headphones" label="Help & Support" onPress={support} />
+                  <FeatureShortcut icon="book-open" label="Daily Brief" onPress={() => navigate('/daily-brief')} />
+                  <FeatureShortcut icon="trending-up" label="Trade Setup" onPress={() => void openProtectedFeature('TRADE_SETUP', '/analysis')} />
                 </Animated.View>
               ) : null}
             </View>
@@ -295,53 +341,6 @@ export default function HomeDashboard({ previewMode = false }: { previewMode?: b
         </Animated.View>
 
         <Animated.View entering={reduceMotion ? undefined : FadeInDown.delay(280).duration(480)} style={styles.dashboardCards}>
-          <View style={[styles.dashboardCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
-            <View style={styles.dashboardCardHeader}>
-              <View style={styles.cardEyebrow}>
-                <Feather name="book-open" size={13} color={colors.buy} />
-                <Text style={[styles.cardEyebrowText, { color: colors.buy }]}>DAILY BRIEF</Text>
-              </View>
-              <TouchableOpacity onPress={() => navigate('/daily-brief')} accessibilityLabel="Open Daily Brief">
-                <Feather name="arrow-up-right" size={17} color={colors.textSecondary} />
-              </TouchableOpacity>
-            </View>
-            {currentBrief ? (
-              <>
-                <Text numberOfLines={2} style={[styles.dashboardCardTitle, { color: colors.text }]}>{currentBrief.title}</Text>
-                <Text numberOfLines={2} style={[styles.dashboardCardBody, { color: colors.textSecondary }]}>{currentBrief.body}</Text>
-                <TouchableOpacity
-                  onPress={(event) => void toggleBriefSave(currentBrief, event)}
-                  disabled={savingBrief}
-                  style={[styles.saveInsight, { backgroundColor: currentBriefSaved ? `${colors.buy}20` : colors.surface, opacity: savingBrief ? 0.65 : 1 }]}
-                  accessibilityRole="button"
-                  accessibilityLabel={currentBriefSaved ? 'Remove saved insight' : 'Save insight'}
-                  accessibilityState={{ disabled: savingBrief, selected: currentBriefSaved }}
-                >
-                  <Feather
-                    name="bookmark"
-                    size={14}
-                    color={currentBriefSaved ? colors.buy : colors.textSecondary}
-                    fill={currentBriefSaved ? colors.buy : 'transparent'}
-                  />
-                  <Text style={[styles.saveInsightText, { color: currentBriefSaved ? colors.buy : colors.textSecondary }]}>
-                    {savingBrief ? 'Saving…' : currentBriefSaved ? 'Saved' : 'Save insight'}
-                  </Text>
-                </TouchableOpacity>
-              </>
-            ) : (
-              <>
-                <Text style={[styles.dashboardCardTitle, { color: colors.text }]}>
-                  {briefState ? "You're all caught up" : 'Preparing your insight…'}
-                </Text>
-                <Text style={[styles.dashboardCardBody, { color: colors.textSecondary }]}>
-                  {briefState ? 'Come back tomorrow for a new trading insight.' : 'Your latest learning brief will appear here.'}
-                </Text>
-              </>
-            )}
-            {briefSaveMessage ? <Text style={[styles.dashboardToast, { color: colors.buy }]}>{briefSaveMessage}</Text> : null}
-            {briefSaveError ? <Text accessibilityRole="alert" style={[styles.dashboardToast, { color: colors.sell }]}>{briefSaveError}</Text> : null}
-          </View>
-
           <View style={[styles.dashboardCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
             <View style={styles.dashboardCardHeader}>
               <View style={styles.cardEyebrow}>
@@ -423,21 +422,366 @@ export default function HomeDashboard({ previewMode = false }: { previewMode?: b
 function FeatureShortcut({
   icon,
   label,
+  badge,
+  animated = false,
+  animationActive = false,
+  reduceMotion = false,
   onPress,
 }: {
   icon: React.ComponentProps<typeof Feather>['name'];
   label: string;
+  badge?: string;
+  animated?: boolean;
+  animationActive?: boolean;
+  reduceMotion?: boolean;
   onPress: () => void;
 }) {
+  const breathing = useSharedValue(0);
+  const iconBreathingStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: 1 + breathing.value * 0.045 }],
+  }));
+  const flameMotion = useSharedValue(0);
+  const flameStyle = useAnimatedStyle(() => ({
+    opacity: 0.82 + flameMotion.value * 0.18,
+    textShadowRadius: 2 + flameMotion.value * 3,
+    transform: [
+      { rotate: `${-5 + flameMotion.value * 10}deg` },
+      { scale: 0.96 + flameMotion.value * 0.08 },
+    ],
+  }));
+  const orbit = useSharedValue(0);
+  const orbitStyle = useAnimatedStyle(() => ({
+    transform: [{ rotate: `${orbit.value * 360}deg` }],
+  }));
+  const learningLine = useSharedValue(0);
+  const lineStyle = useAnimatedStyle(() => ({
+    width: 40 * learningLine.value,
+  }));
+  const lineSparkleStyle = useAnimatedStyle(() => ({
+    opacity: Math.max(0, (learningLine.value - 0.82) / 0.18),
+  }));
+  const pressScale = useSharedValue(1);
+  const pressStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: pressScale.value }],
+  }));
+  const delayedPress = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    cancelAnimation(breathing);
+    cancelAnimation(flameMotion);
+    cancelAnimation(orbit);
+    cancelAnimation(learningLine);
+    if (!animated || !animationActive || reduceMotion) {
+      breathing.value = 0;
+      flameMotion.value = 0;
+      orbit.value = 0;
+      learningLine.value = 1;
+      return;
+    }
+    breathing.value = withRepeat(
+      withTiming(1, { duration: 1700, easing: Easing.inOut(Easing.ease) }),
+      -1,
+      true,
+    );
+    flameMotion.value = withRepeat(
+      withTiming(1, { duration: 1300, easing: Easing.inOut(Easing.ease) }),
+      -1,
+      true,
+    );
+    orbit.value = withRepeat(withTiming(1, { duration: 5200, easing: Easing.linear }), -1, false);
+    learningLine.value = withRepeat(
+      withSequence(
+        withTiming(1, { duration: 800, easing: Easing.out(Easing.quad) }),
+        withTiming(0, { duration: 200, easing: Easing.linear }),
+        withTiming(0, { duration: 6000 }),
+      ),
+      -1,
+      false,
+    );
+    return () => {
+      cancelAnimation(breathing);
+      cancelAnimation(flameMotion);
+      cancelAnimation(orbit);
+      cancelAnimation(learningLine);
+    };
+  }, [animated, animationActive, breathing, flameMotion, learningLine, orbit, reduceMotion]);
+
+  useEffect(() => () => {
+    if (delayedPress.current) clearTimeout(delayedPress.current);
+  }, []);
+
+  const handlePress = () => {
+    if (!animated) {
+      onPress();
+      return;
+    }
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    if (!reduceMotion) {
+      pressScale.value = withSequence(
+        withTiming(0.88, { duration: 75, easing: Easing.out(Easing.quad) }),
+        withTiming(1, { duration: 180, easing: Easing.out(Easing.back(1.5)) }),
+      );
+      learningLine.value = withSequence(
+        withTiming(1, { duration: 360, easing: Easing.out(Easing.quad) }),
+        withTiming(0, { duration: 180 }),
+      );
+      delayedPress.current = setTimeout(onPress, 100);
+      return;
+    }
+    onPress();
+  };
+
   return (
-    <TouchableOpacity onPress={onPress} style={styles.featureShortcut} activeOpacity={0.8} accessibilityRole="button">
+    <TouchableOpacity onPress={handlePress} style={styles.featureShortcut} activeOpacity={0.8} accessibilityRole="button">
       <View style={styles.featureIconOuter}>
-        <View style={styles.featureIcon}>
+        {animated ? (
+          <>
+            <Animated.View pointerEvents="none" style={[styles.learningHubOrbit, orbitStyle]}>
+              <View style={styles.learningHubOrbitLight} />
+            </Animated.View>
+            <Animated.View pointerEvents="none" style={[styles.learningHubLine, lineStyle]} />
+            <Animated.Text pointerEvents="none" style={[styles.learningHubLineSparkle, lineSparkleStyle]}>✦</Animated.Text>
+            <Sparkle active={animationActive && !reduceMotion} style={styles.learningSparkleOne} driftX={-5} driftY={-8} />
+            <Sparkle active={animationActive && !reduceMotion} style={styles.learningSparkleTwo} driftX={5} driftY={-7} />
+            <Sparkle active={animationActive && !reduceMotion} style={styles.learningSparkleThree} driftX={-7} driftY={-3} />
+          </>
+        ) : null}
+        <Animated.View style={[styles.featureIcon, animated && iconBreathingStyle, animated && pressStyle]}>
           <Feather name={icon} size={20} color="#075D50" />
-        </View>
+        </Animated.View>
+        {badge ? (
+          <View style={styles.featureBadge} accessibilityLabel={badge}>
+            <Animated.Text style={[styles.featureBadgeText, animated && flameStyle]}>{badge}</Animated.Text>
+          </View>
+        ) : null}
       </View>
       <Text numberOfLines={2} style={styles.featureLabel}>{label}</Text>
     </TouchableOpacity>
+  );
+}
+
+function Sparkle({
+  active,
+  style,
+  driftX,
+  driftY,
+}: {
+  active: boolean;
+  style: React.ComponentProps<typeof Animated.Text>['style'];
+  driftX: number;
+  driftY: number;
+}) {
+  const progress = useSharedValue(0);
+  const sparkleStyle = useAnimatedStyle(() => ({
+    opacity: progress.value < 0.12
+      ? progress.value / 0.12
+      : Math.max(0, 1 - (progress.value - 0.12) / 0.88),
+    transform: [
+      { translateX: driftX * progress.value },
+      { translateY: driftY * progress.value },
+      { scale: 0.65 + 0.35 * Math.sin(progress.value * Math.PI) },
+    ],
+  }));
+
+  useEffect(() => {
+    cancelAnimation(progress);
+    if (!active) {
+      progress.value = 0;
+      return;
+    }
+    let timer: ReturnType<typeof setTimeout>;
+    const scheduleSparkle = () => {
+      timer = setTimeout(() => {
+        progress.value = 0;
+        progress.value = withTiming(1, { duration: 680, easing: Easing.out(Easing.quad) });
+        scheduleSparkle();
+      }, 5000 + Math.random() * 3000);
+    };
+    scheduleSparkle();
+    return () => {
+      clearTimeout(timer);
+      cancelAnimation(progress);
+    };
+  }, [active, progress]);
+
+  return (
+    <Animated.Text pointerEvents="none" style={[styles.learningSparkle, style, sparkleStyle]}>
+      ✦
+    </Animated.Text>
+  );
+}
+
+function MarketBriefCard({
+  briefState,
+  loading,
+  error,
+  focused,
+  reduceMotion,
+  savedBriefIds,
+  saving,
+  saveMessage,
+  saveError,
+  onOpen,
+  onRetry,
+  onSave,
+}: {
+  briefState: DailyBriefState | null;
+  loading: boolean;
+  error: string;
+  focused: boolean;
+  reduceMotion: boolean;
+  savedBriefIds: Set<string>;
+  saving: boolean;
+  saveMessage: string;
+  saveError: string;
+  onOpen: () => void;
+  onRetry: () => void;
+  onSave: (brief: DailyBriefItem, event: GestureResponderEvent) => void;
+}) {
+  const { width } = useWindowDimensions();
+  const unreadBriefs = briefState?.briefs.filter((brief) => !briefState.readIds.includes(brief.id)) || [];
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const sweepPosition = useSharedValue(-100);
+  const sweepStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: sweepPosition.value }],
+  }));
+  const currentBrief = unreadBriefs[currentIndex] || null;
+  const currentSaved = Boolean(currentBrief && savedBriefIds.has(currentBrief.id));
+
+  useEffect(() => {
+    setCurrentIndex((index) => index < unreadBriefs.length ? index : 0);
+  }, [briefState?.dateKey, unreadBriefs.length]);
+
+  useEffect(() => {
+    if (!focused || reduceMotion || unreadBriefs.length < 2) return;
+    const timer = setInterval(() => {
+      setCurrentIndex((index) => (index + 1) % unreadBriefs.length);
+    }, 7000);
+    return () => clearInterval(timer);
+  }, [focused, reduceMotion, unreadBriefs.length]);
+
+  useEffect(() => {
+    cancelAnimation(sweepPosition);
+    if (!focused || reduceMotion) {
+      sweepPosition.value = -100;
+      return;
+    }
+    sweepPosition.value = -100;
+    sweepPosition.value = withRepeat(
+      withTiming(width + 100, { duration: 7600, easing: Easing.linear }),
+      -1,
+      false,
+    );
+    return () => cancelAnimation(sweepPosition);
+  }, [focused, reduceMotion, sweepPosition, width]);
+
+  return (
+    <Animated.View
+      entering={reduceMotion ? undefined : FadeInDown.delay(145).duration(420)}
+      style={styles.marketBriefWrap}
+    >
+      <TouchableOpacity
+        onPress={onOpen}
+        activeOpacity={0.92}
+        accessibilityRole="button"
+        accessibilityLabel={currentBrief ? `Open Market Brief: ${currentBrief.title}` : 'Open Market Brief'}
+        style={styles.marketBriefCard}
+      >
+        <View pointerEvents="none" style={styles.marketBriefTopLine}>
+          <Animated.View style={[styles.marketBriefSweep, sweepStyle]} />
+        </View>
+        <View style={styles.marketBriefHeader}>
+          <View style={styles.marketBriefHeaderLeft}>
+            <Feather name="book-open" size={15} color="#E8B96A" />
+            <Text style={styles.marketBriefEyebrow}>MARKET BRIEF</Text>
+          </View>
+          {briefState && briefState.unreadCount > 0 ? (
+            <View style={styles.marketBriefUnread}>
+              <Text style={styles.marketBriefUnreadText}>
+                {briefState.unreadCount} UNREAD
+              </Text>
+            </View>
+          ) : null}
+          {currentBrief ? (
+            <TouchableOpacity
+              onPress={(event) => onSave(currentBrief, event)}
+              disabled={saving}
+              style={styles.marketBriefSave}
+              accessibilityRole="button"
+              accessibilityLabel={currentSaved ? 'Remove insight from saved briefs' : 'Save this insight'}
+              accessibilityState={{ disabled: saving, selected: currentSaved }}
+            >
+              <Feather
+                name="bookmark"
+                size={16}
+                color={currentSaved ? '#E8B96A' : '#C7C4C0'}
+                fill={currentSaved ? '#E8B96A' : 'transparent'}
+              />
+            </TouchableOpacity>
+          ) : null}
+        </View>
+
+        {loading ? (
+          <View style={styles.marketBriefMessage}>
+            <Text style={styles.marketBriefTitle}>Preparing your daily insight…</Text>
+          </View>
+        ) : error ? (
+          <View style={styles.marketBriefMessage}>
+            <Text style={styles.marketBriefTitle}>Brief temporarily unavailable</Text>
+            <View style={styles.marketBriefMessageFooter}>
+              <Text numberOfLines={1} style={styles.marketBriefBody}>{error}</Text>
+              <TouchableOpacity
+                onPress={onRetry}
+                style={styles.marketBriefRetry}
+                accessibilityRole="button"
+                accessibilityLabel="Retry loading Market Brief"
+              >
+                <Feather name="refresh-cw" size={14} color="#E8B96A" />
+              </TouchableOpacity>
+            </View>
+          </View>
+        ) : currentBrief ? (
+          <Animated.View
+            key={currentBrief.id}
+            entering={reduceMotion ? undefined : FadeInDown.duration(230)}
+            style={styles.marketBriefStory}
+          >
+            <Text numberOfLines={2} style={styles.marketBriefTitle}>{currentBrief.title}</Text>
+            <Text numberOfLines={1} style={styles.marketBriefBody}>{currentBrief.body}</Text>
+          </Animated.View>
+        ) : (
+          <View style={styles.marketBriefMessage}>
+            <Text style={styles.marketBriefTitle}>You’re all caught up</Text>
+            <Text style={styles.marketBriefBody}>Come back tomorrow for your next trading insight.</Text>
+          </View>
+        )}
+
+        <View style={styles.marketBriefFooter}>
+          <Text numberOfLines={1} style={styles.marketBriefCategory}>
+            {currentBrief?.category.toUpperCase() || 'DAILY TRADING INSIGHT'}
+          </Text>
+          {unreadBriefs.length > 1 ? (
+            <View
+              style={styles.marketBriefProgressTrack}
+              accessibilityLabel={`Insight ${currentIndex + 1} of ${unreadBriefs.length}`}
+            >
+              <View
+                style={[
+                  styles.marketBriefProgressFill,
+                  { width: `${((currentIndex + 1) / unreadBriefs.length) * 100}%` },
+                ]}
+              />
+            </View>
+          ) : null}
+          <View style={styles.marketBriefReadMore}>
+            <Text style={styles.marketBriefReadMoreText}>READ BRIEF</Text>
+            <Feather name="arrow-up-right" size={13} color="#E8B96A" />
+          </View>
+        </View>
+        {saveMessage ? <Text style={styles.marketBriefFeedback}>{saveMessage}</Text> : null}
+        {saveError ? <Text accessibilityRole="alert" style={styles.marketBriefFeedback}>{saveError}</Text> : null}
+      </TouchableOpacity>
+    </Animated.View>
   );
 }
 
@@ -621,14 +965,47 @@ const styles = StyleSheet.create({
   toolsCountText: { color: '#D9FFF2', fontSize: 8, letterSpacing: 0.4, fontFamily: 'Inter_700Bold' },
   toolsGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-around' },
   featureShortcut: { width: '33.333%', minHeight: 92, alignItems: 'center', justifyContent: 'flex-start', gap: 6, paddingTop: 4, paddingHorizontal: 2 },
-  featureIconOuter: { width: 60, height: 60, borderRadius: 21, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.12)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
+  featureIconOuter: { position: 'relative', width: 60, height: 60, borderRadius: 21, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.12)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
+  learningHubOrbit: { position: 'absolute', width: 60, height: 60, alignItems: 'center' },
+  learningHubOrbitLight: { position: 'absolute', top: -2, width: 6, height: 6, borderRadius: 3, backgroundColor: '#FFD18A', shadowColor: '#FFBD62', shadowOpacity: 0.8, shadowRadius: 4, elevation: 3 },
+  learningHubLine: { position: 'absolute', bottom: 3, left: 10, height: 2, borderRadius: 1, backgroundColor: '#E8B96A', shadowColor: '#FFD18A', shadowOpacity: 0.8, shadowRadius: 3 },
+  learningHubLineSparkle: { position: 'absolute', right: 7, bottom: -3, color: '#FFE0A6', fontSize: 10 },
+  learningSparkle: { position: 'absolute', zIndex: 4, color: '#FFD18A', fontSize: 11 },
+  learningSparkleOne: { top: -8, right: 14 },
+  learningSparkleTwo: { top: 0, right: -7, fontSize: 9 },
+  learningSparkleThree: { top: 10, right: 14, fontSize: 8 },
+  featureBadge: { position: 'absolute', top: -3, right: -3, width: 23, height: 23, alignItems: 'center', justifyContent: 'center', borderRadius: 12, borderWidth: 2, borderColor: '#0A6258', backgroundColor: '#FFF8EA' },
+  featureBadgeText: { fontSize: 13, lineHeight: 17, textShadowColor: 'rgba(255,177,71,0.8)' },
   featureIcon: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F7F8F3', elevation: 3, shadowColor: '#042D29', shadowOpacity: 0.18, shadowRadius: 5, shadowOffset: { width: 0, height: 2 } },
   featureLabel: { minHeight: 28, color: '#FFFFFF', fontSize: 10, lineHeight: 13, textAlign: 'center', fontFamily: 'Inter_600SemiBold' },
   toolsLastRow: { width: '100%', flexDirection: 'row', justifyContent: 'space-around' },
   toolsPanelFooter: { minWidth: 112, height: 32, alignSelf: 'center', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, marginTop: 1, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.12)', paddingHorizontal: 12 },
   toolsFooterLabel: { color: '#C7F4E7', fontSize: 9, fontFamily: 'Inter_600SemiBold' },
-  dashboardCards: { flexDirection: 'row', gap: 10, marginTop: 13, marginHorizontal: 16 },
-  dashboardCard: { flex: 1, minWidth: 0, minHeight: 180, borderWidth: 1, borderRadius: 20, padding: 13, elevation: 2, shadowColor: '#252D2A', shadowOpacity: 0.06, shadowRadius: 7, shadowOffset: { width: 0, height: 3 } },
+  marketBriefWrap: { marginTop: 13, marginHorizontal: 16 },
+  marketBriefCard: { minHeight: 126, overflow: 'hidden', borderRadius: 18, borderWidth: 1, borderColor: 'rgba(232,185,106,0.28)', backgroundColor: '#111A29', paddingHorizontal: 14, paddingTop: 10, paddingBottom: 8, elevation: 3, shadowColor: '#101827', shadowOpacity: 0.14, shadowRadius: 9, shadowOffset: { width: 0, height: 4 } },
+  marketBriefTopLine: { position: 'absolute', top: 0, left: 0, right: 0, height: 1, overflow: 'hidden', backgroundColor: 'rgba(232,185,106,0.18)' },
+  marketBriefSweep: { width: 62, height: 1, backgroundColor: '#E8B96A', opacity: 0.75 },
+  marketBriefHeader: { minHeight: 19, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  marketBriefHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: 7, flex: 1 },
+  marketBriefEyebrow: { color: '#E8B96A', fontSize: 9, letterSpacing: 1.15, fontFamily: 'Inter_700Bold' },
+  marketBriefUnread: { paddingHorizontal: 7, paddingVertical: 4, borderRadius: 8, backgroundColor: 'rgba(232,185,106,0.12)' },
+  marketBriefUnreadText: { color: '#E8B96A', fontSize: 7, letterSpacing: 0.45, fontFamily: 'Inter_700Bold' },
+  marketBriefSave: { width: 28, height: 28, marginLeft: 1, alignItems: 'center', justifyContent: 'center', borderRadius: 9, backgroundColor: 'rgba(255,255,255,0.06)' },
+  marketBriefStory: { marginTop: 4 },
+  marketBriefMessage: { flex: 1, justifyContent: 'center', minHeight: 58, paddingTop: 4 },
+  marketBriefMessageFooter: { flexDirection: 'row', alignItems: 'center' },
+  marketBriefRetry: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },
+  marketBriefTitle: { color: '#F7F4EE', fontSize: 14, lineHeight: 17, fontFamily: 'Inter_700Bold' },
+  marketBriefBody: { flex: 1, marginTop: 3, color: '#C4C7CE', fontSize: 10, lineHeight: 14, fontFamily: 'Inter_400Regular' },
+  marketBriefFooter: { minHeight: 17, flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 },
+  marketBriefCategory: { flexShrink: 1, color: '#AEB6C2', fontSize: 7, letterSpacing: 0.55, fontFamily: 'Inter_600SemiBold' },
+  marketBriefProgressTrack: { width: 38, height: 2, overflow: 'hidden', borderRadius: 1, backgroundColor: 'rgba(255,255,255,0.16)' },
+  marketBriefProgressFill: { height: '100%', borderRadius: 1, backgroundColor: '#E8B96A' },
+  marketBriefReadMore: { flexDirection: 'row', alignItems: 'center', gap: 3, marginLeft: 'auto' },
+  marketBriefReadMoreText: { color: '#E8B96A', fontSize: 7, letterSpacing: 0.45, fontFamily: 'Inter_700Bold' },
+  marketBriefFeedback: { marginTop: 3, color: '#E8B96A', fontSize: 9, fontFamily: 'Inter_500Medium' },
+  dashboardCards: { flexDirection: 'column', gap: 10, marginTop: 13, marginHorizontal: 16 },
+  dashboardCard: { width: '100%', minWidth: 0, minHeight: 150, borderWidth: 1, borderRadius: 20, padding: 13, elevation: 2, shadowColor: '#252D2A', shadowOpacity: 0.06, shadowRadius: 7, shadowOffset: { width: 0, height: 3 } },
   dashboardCardHeader: { minHeight: 22, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 9 },
   cardEyebrow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   cardEyebrowText: { fontSize: 8, letterSpacing: 0.45, fontFamily: 'Inter_700Bold' },

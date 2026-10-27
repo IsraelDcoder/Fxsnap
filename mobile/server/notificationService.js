@@ -27,13 +27,11 @@ async function registerPushToken(deviceId, payload) {
   const { Expo } = await getExpoClient();
   if (!Expo.isExpoPushToken(payload.token)) throw new Error('Invalid Expo push token.');
   if (!['ios', 'android'].includes(payload.platform)) throw new Error('Unsupported push platform.');
-  if (typeof payload.accountId !== 'string' || !payload.accountId
-    || typeof payload.supabaseUserId !== 'string'
-    || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(payload.supabaseUserId)) {
-    throw new Error('A valid signed-in account is required to register a push token.');
-  }
   const preferences = payload.preferences;
   if (!preferences || preferences.enabled !== true) throw new Error('Push notifications are not enabled.');
+  const isSignedIn = typeof payload.accountId === 'string' && Boolean(payload.accountId)
+    && typeof payload.supabaseUserId === 'string'
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(payload.supabaseUserId);
   const normalizedPreferences = {
     dailyBrief: preferences.dailyBrief !== false,
     inactivity: preferences.inactivity !== false,
@@ -46,8 +44,8 @@ async function registerPushToken(deviceId, payload) {
     payload.token,
     payload.platform,
     normalizedPreferences,
-    payload.accountId,
-    payload.supabaseUserId,
+    isSignedIn ? payload.accountId : null,
+    isSignedIn ? payload.supabaseUserId : null,
   );
   return true;
 }
@@ -110,7 +108,7 @@ async function sendCampaign({ type, title, body, route, token, deviceId }) {
 
 async function sendScheduledCampaigns(now = new Date(), isPremium = async () => false) {
   if (!process.env.EXPO_ACCESS_TOKEN) return { sent: 0, skipped: 'EXPO_ACCESS_TOKEN is not configured.' };
-  const entries = await getRegisteredTokens();
+  const entries = (await getRegisteredTokens()).filter((entry) => entry.accountId && entry.supabaseUserId);
   const events = await persistentStore.getJson('fxsnap:events') || [];
   const results = [];
   for (const entry of entries) {

@@ -571,7 +571,9 @@ export default function SettingsScreen() {
           <NotificationToggle
             icon="bell"
             label="Push notifications"
-            description={Platform.OS === 'web' ? 'Push notifications are available in the installed app.' : 'Allow FXSnap updates on this device.'}
+            description={Platform.OS === 'web'
+              ? 'Push notifications are available in the installed app.'
+              : 'Enable FXSnap app updates on this device.'}
             value={notificationPreferences.enabled}
             disabled={notificationsLoading || notificationsBusy || Platform.OS === 'web'}
             colors={colors}
@@ -622,7 +624,7 @@ export default function SettingsScreen() {
             disabled={notificationsLoading || notificationsBusy || !notificationPreferences.enabled}
             colors={colors}
             onValueChange={(systemAnnouncements) => void changeNotificationPreferences({ systemAnnouncements })}
-            last={!systemAnnouncementAdmin && !supportInboxAdmin}
+            last={false}
           />
           {notificationsLoading ? (
             <Text style={[styles.inlineMessage, { color: colors.textSecondary }]}>Loading notification preferences…</Text>

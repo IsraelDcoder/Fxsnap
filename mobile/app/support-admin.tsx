@@ -1,9 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Animated,
   Alert,
   Image,
   KeyboardAvoidingView,
+  PanResponder,
   Platform,
   ScrollView,
   StyleSheet,
@@ -47,6 +49,72 @@ function topicLabel(topic: string | null) {
   return topic ? topic.replace('_', ' ') : 'not specified';
 }
 
+function AdminSupportMessage({
+  message,
+  fromAdmin,
+  colors,
+  onReply,
+}: {
+  message: AdminMessage;
+  fromAdmin: boolean;
+  colors: ReturnType<typeof useColors>;
+  onReply: () => void;
+}) {
+  const translateX = useRef(new Animated.Value(0)).current;
+  const panResponder = useMemo(() => PanResponder.create({
+    onMoveShouldSetPanResponder: (_event, gesture) => (
+      gesture.dx > 18 && gesture.dx > Math.abs(gesture.dy) * 1.25
+    ),
+    onPanResponderMove: (_event, gesture) => {
+      translateX.setValue(Math.min(68, Math.max(0, gesture.dx)));
+    },
+    onPanResponderRelease: (_event, gesture) => {
+      if (gesture.dx >= 64) onReply();
+      Animated.spring(translateX, { toValue: 0, useNativeDriver: true, speed: 22, bounciness: 4 }).start();
+    },
+    onPanResponderTerminate: () => {
+      Animated.spring(translateX, { toValue: 0, useNativeDriver: true, speed: 22, bounciness: 4 }).start();
+    },
+  }), [onReply, translateX]);
+  const indicatorStyle = {
+    opacity: translateX.interpolate({ inputRange: [0, 32, 64], outputRange: [0, 0.6, 1], extrapolate: 'clamp' as const }),
+  };
+
+  return (
+    <View style={styles.messageGestureContainer}>
+      <Animated.View pointerEvents="none" style={[styles.replyGestureIndicator, indicatorStyle]}>
+        <Feather name="corner-up-left" size={17} color={colors.buy} />
+      </Animated.View>
+      <Animated.View
+        {...panResponder.panHandlers}
+        style={[
+          styles.messageRow,
+          fromAdmin && styles.adminMessageRow,
+          { transform: [{ translateX }] },
+        ]}
+      >
+        <View style={[
+          styles.messageBubble,
+          fromAdmin
+            ? { backgroundColor: colors.buy }
+            : { backgroundColor: colors.card, borderColor: colors.cardBorder },
+        ]}>
+          <Text style={[styles.messageText, { color: fromAdmin ? colors.primaryForeground : colors.text }]}>{message.body}</Text>
+          {message.attachment ? (
+            <Image
+              source={{ uri: message.attachment.url }}
+              style={styles.messageImage}
+              resizeMode="cover"
+              accessibilityLabel="Image attached to support message"
+            />
+          ) : null}
+          <Text style={[styles.messageTime, { color: fromAdmin ? `${colors.primaryForeground}B0` : colors.textMuted }]}>{formatTime(message.created_at)}</Text>
+        </View>
+      </Animated.View>
+    </View>
+  );
+}
+
 export default function SupportAdminScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
@@ -56,6 +124,7 @@ export default function SupportAdminScreen() {
   const [filter, setFilter] = useState<InboxFilter>('all');
   const [search, setSearch] = useState('');
   const [draft, setDraft] = useState('');
+  const [replyTarget, setReplyTarget] = useState<AdminMessage | null>(null);
   const [inputHeight, setInputHeight] = useState(33);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
@@ -92,6 +161,7 @@ export default function SupportAdminScreen() {
 
   const loadConversation = useCallback(async (conversation: SupportAdminConversation) => {
     setSelected(conversation);
+    setReplyTarget(null);
     try {
       const result = await getSupportAdminConversation(conversation.id);
       setSelected({ ...conversation, ...result.conversation, unread_count: 0 });
@@ -141,11 +211,18 @@ export default function SupportAdminScreen() {
     setSending(true);
     setError('');
     try {
-      const result = await sendSupportAdminReply(selected.id, draft.trim());
+      const quotedText = replyTarget
+        ? (replyTarget.body.trim() || (replyTarget.attachment ? 'Photo attachment' : 'Message')).replace(/\s+/g, ' ').slice(0, 240)
+        : '';
+      const replyBody = replyTarget
+        ? `Replying to ${replyTarget.sender_kind === 'admin' ? 'FXSnap Support' : selected.display_name || 'user'}:\n> ${quotedText}\n\n${draft.trim()}`
+        : draft.trim();
+      const result = await sendSupportAdminReply(selected.id, replyBody.slice(0, 2000));
       setMessages((current) => result.duplicate || current.some((message) => message.id === result.message.id)
         ? current
         : [...current, { ...result.message, sender_account_id: '' }]);
       setDraft('');
+      setReplyTarget(null);
       setInputHeight(33);
       await loadInbox(false);
     } catch (sendError) {
@@ -171,6 +248,7 @@ export default function SupportAdminScreen() {
       setSelected(null);
       setMessages([]);
       setDraft('');
+      setReplyTarget(null);
       setInputHeight(33);
     } else if (router.canGoBack()) router.back();
     else router.replace('/settings');
@@ -236,25 +314,13 @@ export default function SupportAdminScreen() {
             {messages.map((message) => {
               const fromAdmin = message.sender_kind === 'admin';
               return (
-                <View key={message.id} style={[styles.messageRow, fromAdmin && styles.adminMessageRow]}>
-                  <View style={[
-                    styles.messageBubble,
-                    fromAdmin
-                      ? { backgroundColor: colors.buy }
-                      : { backgroundColor: colors.card, borderColor: colors.cardBorder },
-                  ]}>
-                    <Text style={[styles.messageText, { color: fromAdmin ? colors.primaryForeground : colors.text }]}>{message.body}</Text>
-                    {message.attachment ? (
-                      <Image
-                        source={{ uri: message.attachment.url }}
-                        style={styles.messageImage}
-                        resizeMode="cover"
-                        accessibilityLabel="Image attached to support message"
-                      />
-                    ) : null}
-                    <Text style={[styles.messageTime, { color: fromAdmin ? `${colors.primaryForeground}B0` : colors.textMuted }]}>{formatTime(message.created_at)}</Text>
-                  </View>
-                </View>
+                <AdminSupportMessage
+                  key={message.id}
+                  message={message}
+                  fromAdmin={fromAdmin}
+                  colors={colors}
+                  onReply={() => setReplyTarget(message)}
+                />
               );
             })}
           </ScrollView>
@@ -278,6 +344,27 @@ export default function SupportAdminScreen() {
             ))}
           </View>
           <View style={[styles.composerWrap, { paddingBottom: Math.max(insets.bottom, 12), borderTopColor: colors.cardBorder }]}>
+            {replyTarget ? (
+              <View style={[styles.replyPreview, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+                <View style={[styles.replyAccent, { backgroundColor: colors.buy }]} />
+                <View style={styles.replyPreviewCopy}>
+                  <Text style={[styles.replyPreviewTitle, { color: colors.buy }]}>
+                    Replying to {replyTarget.sender_kind === 'admin' ? 'FXSnap Support' : selected.display_name || 'user'}
+                  </Text>
+                  <Text numberOfLines={1} style={[styles.replyPreviewBody, { color: colors.textSecondary }]}>
+                    {replyTarget.body.trim() || (replyTarget.attachment ? 'Photo attachment' : 'Message')}
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  onPress={() => setReplyTarget(null)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Cancel quoted reply"
+                  style={styles.cancelReply}
+                >
+                  <Feather name="x" size={16} color={colors.textSecondary} />
+                </TouchableOpacity>
+              </View>
+            ) : null}
             <View style={[styles.composer, { backgroundColor: colors.input, borderColor: colors.cardBorder }]}>
               <TextInput
                 value={draft}
@@ -287,7 +374,7 @@ export default function SupportAdminScreen() {
                 }}
                 placeholder="Reply privately…"
                 placeholderTextColor={colors.textMuted}
-                maxLength={2000}
+                maxLength={replyTarget ? 1700 : 2000}
                 multiline
                 scrollEnabled
                 textAlignVertical="top"
@@ -439,6 +526,8 @@ const styles = StyleSheet.create({
   contextItem: { width: '46%' },
   contextLabel: { fontSize: 7, letterSpacing: 0.5, fontFamily: 'Inter_700Bold' },
   contextValue: { marginTop: 3, fontSize: 9, textTransform: 'capitalize', fontFamily: 'Inter_600SemiBold' },
+  messageGestureContainer: { position: 'relative', justifyContent: 'center' },
+  replyGestureIndicator: { position: 'absolute', left: 10, width: 25, height: 25, alignItems: 'center', justifyContent: 'center', borderRadius: 13, backgroundColor: 'rgba(255,255,255,0.08)' },
   messageRow: { flexDirection: 'row', justifyContent: 'flex-start' },
   adminMessageRow: { justifyContent: 'flex-end' },
   messageBubble: { maxWidth: '88%', paddingHorizontal: 12, paddingVertical: 9, borderWidth: 1, borderRadius: 15 },
@@ -449,6 +538,12 @@ const styles = StyleSheet.create({
   statusButton: { minHeight: 30, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 13, borderWidth: 1, borderRadius: 11 },
   statusButtonText: { fontSize: 9, textTransform: 'capitalize', fontFamily: 'Inter_600SemiBold' },
   composerWrap: { paddingHorizontal: 10, paddingTop: 7, borderTopWidth: StyleSheet.hairlineWidth },
+  replyPreview: { minHeight: 48, flexDirection: 'row', alignItems: 'center', marginBottom: 7, borderWidth: 1, borderRadius: 13, overflow: 'hidden' },
+  replyAccent: { width: 3, alignSelf: 'stretch' },
+  replyPreviewCopy: { flex: 1, paddingHorizontal: 10, paddingVertical: 7 },
+  replyPreviewTitle: { fontSize: 9, fontFamily: 'Inter_700Bold' },
+  replyPreviewBody: { marginTop: 3, fontSize: 9, fontFamily: 'Inter_400Regular' },
+  cancelReply: { width: 36, height: 40, alignItems: 'center', justifyContent: 'center' },
   composer: { minHeight: 42, maxHeight: 86, flexDirection: 'row', alignItems: 'flex-end', padding: 4, borderWidth: 1, borderRadius: 23 },
   input: { flex: 1, minHeight: 33, maxHeight: 74, paddingHorizontal: 9, paddingVertical: 7, fontSize: 11, lineHeight: 16, fontFamily: 'Inter_400Regular', textAlignVertical: 'top' },
   sendButton: { width: 33, height: 33, alignItems: 'center', justifyContent: 'center', borderRadius: 17 },

@@ -368,7 +368,7 @@ test('neutral chart results always include a clear market-development plan', () 
 
 test('developing analysis notes replace blocked-trade language with confirmation guidance', () => {
   const note = formatDevelopingNote('No trade: the stop was not established and RR is not calculable.');
-  assert.equal(note, 'hold for now: the stop was awaiting confirmation and RR is calculated when levels are confirmed.');
+  assert.equal(note, 'hold for now: the stop was not available from the chart and RR is not available from the chart.');
   assert.equal(formatDevelopingNote('Setup not identified.'), 'setup is still developing.');
 });
 

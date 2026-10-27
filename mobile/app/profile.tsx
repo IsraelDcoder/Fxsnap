@@ -45,6 +45,8 @@ import {
 } from '@/services/traderProfile';
 import { getFavoriteInstrumentError, getProfileCompletion } from '@/services/traderProfileModel';
 import Animated, { useAnimatedStyle, useReducedMotion, useSharedValue, withTiming } from 'react-native-reanimated';
+import { getLearningAchievements } from '@/services/learningAchievements';
+import { getLearningProgress, type LearningProgress } from '@/services/learningProgress';
 
 const PROFILE_PHOTO_KEY = 'fxsnap:profilePhoto:v1';
 const EXPERIENCE_OPTIONS: Array<{ value: TradingExperience; label: string }> = [
@@ -87,6 +89,9 @@ export default function ProfileScreen() {
   const [photo, setPhoto] = useState<string | null>(null);
   const [photoFailed, setPhotoFailed] = useState(false);
   const [traderProfile, setTraderProfile] = useState<TraderProfile>(EMPTY_TRADER_PROFILE);
+  const [learningProgress, setLearningProgress] = useState<LearningProgress | null>(null);
+  const [learningProgressLoading, setLearningProgressLoading] = useState(true);
+  const [learningProgressError, setLearningProgressError] = useState('');
   const [editVisible, setEditVisible] = useState(false);
   const [saving, setSaving] = useState(false);
   const [draftName, setDraftName] = useState('');
@@ -152,6 +157,26 @@ export default function ProfileScreen() {
     });
     return () => { active = false; };
   }, [refreshProfile]));
+
+  useFocusEffect(useCallback(() => {
+    let active = true;
+    setLearningProgressLoading(true);
+    setLearningProgressError('');
+    void getLearningProgress()
+      .then((progress) => {
+        if (active) setLearningProgress(progress);
+      })
+      .catch((error: unknown) => {
+        console.error('[Profile] Learning progress could not be loaded.', error);
+        if (active) {
+          setLearningProgressError(error instanceof Error ? error.message : 'Learning progress could not be loaded.');
+        }
+      })
+      .finally(() => {
+        if (active) setLearningProgressLoading(false);
+      });
+    return () => { active = false; };
+  }, []));
 
   const displayName = settings.displayName.trim() || account?.displayName.trim() || cachedProfile?.displayName.trim() || '';
   const username = account?.communityUsername || cachedProfile?.communityUsername || '';
@@ -337,6 +362,9 @@ export default function ProfileScreen() {
     () => traderProfile.markets.map((market) => MARKET_OPTIONS.find((option) => option.value === market)?.label || market),
     [traderProfile.markets],
   );
+  const learningAchievements = learningProgress
+    ? getLearningAchievements(learningProgress)
+    : null;
 
   return (
     <View style={[styles.screen, { backgroundColor: colors.background }]}>
@@ -483,6 +511,92 @@ export default function ProfileScreen() {
           <Text style={[styles.helperText, { color: colors.textMuted }]}>Based on your name, photo, community username, and bio.</Text>
         </View>
         ) : null}
+
+        <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+          <View style={styles.sectionHeading}>
+            <View style={[styles.sectionIcon, { backgroundColor: '#E8B96A20' }]}>
+              <Feather name="award" size={16} color="#C78B31" />
+            </View>
+            <View style={styles.sectionCopy}>
+              <Text style={[styles.sectionTitle, { color: colors.text }]}>Learning progress</Text>
+              <Text style={[styles.helperText, { color: colors.textMuted }]}>Private to you · achievements are earned from completed lessons</Text>
+            </View>
+          </View>
+          {learningProgressLoading ? (
+            <View style={styles.learningLoading}>
+              <ActivityIndicator size="small" color={colors.buy} />
+              <Text style={[styles.helperText, { color: colors.textSecondary }]}>Loading learning progress…</Text>
+            </View>
+          ) : learningProgressError ? (
+            <View style={styles.learningError}>
+              <Text style={[styles.helperText, { color: colors.sell }]} accessibilityRole="alert">{learningProgressError}</Text>
+              <TouchableOpacity
+                onPress={() => {
+                  setLearningProgressLoading(true);
+                  setLearningProgressError('');
+                  void getLearningProgress()
+                    .then(setLearningProgress)
+                    .catch((error: unknown) => {
+                      console.error('[Profile] Learning progress retry failed.', error);
+                      setLearningProgressError(error instanceof Error ? error.message : 'Learning progress could not be loaded.');
+                    })
+                    .finally(() => setLearningProgressLoading(false));
+                }}
+                accessibilityRole="button"
+                accessibilityLabel="Retry loading learning progress"
+              >
+                <Text style={[styles.completionButtonText, { color: colors.buy }]}>Retry</Text>
+              </TouchableOpacity>
+            </View>
+          ) : learningAchievements ? (
+            <>
+              <View style={styles.learningStats}>
+                <View style={[styles.learningStat, { backgroundColor: colors.surface }]}>
+                  <Feather name="zap" size={16} color="#C78B31" />
+                  <Text style={[styles.learningStatValue, { color: colors.text }]}>
+                    {learningAchievements.currentStreak} {learningAchievements.currentStreak === 1 ? 'day' : 'days'}
+                  </Text>
+                  <Text style={[styles.learningStatLabel, { color: colors.textMuted }]}>Current streak</Text>
+                </View>
+                <View style={[styles.learningStat, { backgroundColor: colors.surface }]}>
+                  <Feather name="book-open" size={16} color={colors.buy} />
+                  <Text style={[styles.learningStatValue, { color: colors.text }]}>{learningAchievements.completedCount}</Text>
+                  <Text style={[styles.learningStatLabel, { color: colors.textMuted }]}>Lessons completed</Text>
+                </View>
+              </View>
+              {learningAchievements.earned.length ? (
+                <View style={styles.achievementList}>
+                  <Text style={[styles.learningSectionLabel, { color: colors.textSecondary }]}>EARNED ACHIEVEMENTS</Text>
+                  {learningAchievements.earned.map((achievement) => (
+                    <View key={achievement.id} style={[styles.achievementRow, { borderColor: colors.cardBorder }]}>
+                      <View style={[styles.achievementIcon, { backgroundColor: '#E8B96A20' }]}>
+                        <Feather name={achievement.icon} size={15} color="#C78B31" />
+                      </View>
+                      <View style={styles.achievementCopy}>
+                        <Text style={[styles.achievementTitle, { color: colors.text }]}>{achievement.title}</Text>
+                        <Text style={[styles.helperText, { color: colors.textMuted }]}>{achievement.description}</Text>
+                      </View>
+                      <Feather name="check-circle" size={15} color={colors.buy} />
+                    </View>
+                  ))}
+                </View>
+              ) : (
+                <Text style={[styles.emptyHint, { color: colors.textSecondary }]}>
+                  Complete your first lesson to earn an achievement. Your streak starts when you finish a lesson.
+                </Text>
+              )}
+              <TouchableOpacity
+                onPress={() => router.push('/learning-hub')}
+                style={[styles.communityLink, { marginTop: 1 }]}
+                accessibilityRole="button"
+                accessibilityLabel="Open Learning Hub"
+              >
+                <Text style={[styles.completionButtonText, { color: colors.buy }]}>Open Learning Hub</Text>
+                <Feather name="arrow-up-right" size={15} color={colors.buy} />
+              </TouchableOpacity>
+            </>
+          ) : null}
+        </View>
 
         <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
           <View style={styles.sectionHeading}>
@@ -842,6 +956,18 @@ const styles = StyleSheet.create({
   sectionIcon: { width: 34, height: 34, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
   sectionCopy: { flex: 1, gap: 2 },
   sectionTitle: { fontSize: 14, fontFamily: 'Inter_700Bold' },
+  learningLoading: { minHeight: 55, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9 },
+  learningError: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  learningStats: { flexDirection: 'row', gap: 9 },
+  learningStat: { minHeight: 74, flex: 1, alignItems: 'center', justifyContent: 'center', gap: 3, borderRadius: 13, paddingVertical: 8 },
+  learningStatValue: { fontSize: 16, fontFamily: 'Inter_700Bold' },
+  learningStatLabel: { fontSize: 9, fontFamily: 'Inter_500Medium' },
+  achievementList: { gap: 7 },
+  learningSectionLabel: { marginTop: 2, fontSize: 8, letterSpacing: 0.7, fontFamily: 'Inter_700Bold' },
+  achievementRow: { minHeight: 52, flexDirection: 'row', alignItems: 'center', gap: 9, paddingVertical: 6, borderBottomWidth: StyleSheet.hairlineWidth },
+  achievementIcon: { width: 31, height: 31, alignItems: 'center', justifyContent: 'center', borderRadius: 10 },
+  achievementCopy: { flex: 1, gap: 2 },
+  achievementTitle: { fontSize: 11, fontFamily: 'Inter_600SemiBold' },
   detailRow: { minHeight: 35, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
   detailLabel: { fontSize: 11, fontFamily: 'Inter_500Medium' },
   detailValue: { flex: 1, textAlign: 'right', fontSize: 11, fontFamily: 'Inter_600SemiBold' },

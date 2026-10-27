@@ -3,9 +3,9 @@ import * as SecureStore from 'expo-secure-store';
 import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
-import { API_BASE_URL, getDeviceId } from './apiAuth';
+import { API_BASE_URL, getApiHeaders, getDeviceId } from './apiAuth';
 import { notifyAccountDataChanged } from './accountDataEvents';
-import { getFxsnapAccountApiHeaders } from './account';
+import { getFxsnapAccountApiHeaders, getOptionalFxsnapAccountApiHeaders } from './account';
 import { formatExpoPushTokenError } from './notificationErrors';
 import type { EventSubscription, NotificationResponse } from 'expo-notifications';
 
@@ -20,6 +20,7 @@ export type NotificationRoute =
   | '/support-admin'
   | '/support-chat'
   | '/system-announcement'
+  | '/paywall'
   | '/';
 export type NotificationTarget = NotificationRoute | {
   pathname: '/system-announcement';
@@ -143,7 +144,7 @@ export async function requestAndRegisterPushNotifications(preferences?: Notifica
   try {
     response = await fetch(`${API_BASE_URL}/api/push-token`, {
       method: 'POST',
-      headers: { ...(await getFxsnapAccountApiHeaders()), 'content-type': 'application/json' },
+      headers: { ...(await getOptionalFxsnapAccountApiHeaders()), 'content-type': 'application/json' },
       body: JSON.stringify({
         token,
         platform: Platform.OS,
@@ -211,7 +212,7 @@ export function getNotificationRoute(data: Record<string, unknown> | undefined):
   if (route === '/daily-brief' || route === '/analysis' || route === '/saved' || route === '/community'
     || route === '/events' || route === '/profile' || route === '/community-notifications' || route === '/support-admin'
     || route === '/support-chat'
-    || route === '/system-announcement' || route === '/') return route;
+    || route === '/system-announcement' || route === '/paywall' || route === '/') return route;
   return null;
 }
 
@@ -227,7 +228,7 @@ export async function registerPushToken(cluster: { token: string; platform: stri
 export async function unregisterPushToken() {
   const response = await fetch(`${API_BASE_URL}/api/push-token`, {
     method: 'DELETE',
-    headers: await getFxsnapAccountApiHeaders(),
+    headers: await getOptionalFxsnapAccountApiHeaders(),
   });
   if (!response.ok) throw new Error('Unable to unregister push token');
   await SecureStore.deleteItemAsync(PUSH_TOKEN_KEY);

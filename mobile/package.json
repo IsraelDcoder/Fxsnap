@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node server/serve.js",
     "dev": "expo start --host lan",
+    "dev:go": "expo start --go --host lan",
     "dev:lan": "expo start --host lan",
     "build": "expo export --platform web",
     "build:ios": "npx eas build --platform ios --profile production",

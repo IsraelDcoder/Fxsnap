@@ -152,11 +152,6 @@ test('push-token registration rejects unapproved or malformed registrations', as
     supabaseUserId: '00000000-0000-4000-8000-000000000010',
     preferences: { enabled: false },
   }));
-  await assert.rejects(registerPushToken('device-push-test-123456', {
-    token: 'ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]',
-    platform: 'android',
-    preferences: { enabled: true },
-  }), /signed-in account/i);
 });
 
 test('Community dispatch invokes the Supabase Edge Function with the queued object selector', async () => {

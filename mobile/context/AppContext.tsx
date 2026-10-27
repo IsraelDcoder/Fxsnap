@@ -189,6 +189,7 @@ export interface AppSettings {
 
 interface AppContextValue {
   onboardingComplete: boolean;
+  paywallDismissed: boolean;
   isSubscribed: boolean;
   settings: AppSettings;
   savedAnalyses: AnalysisResult[];
@@ -197,7 +198,9 @@ interface AppContextValue {
   riskActivity: DailyRiskActivity;
   currentAnalysis: AnalysisResult | null;
   isLoading: boolean;
-  completeOnboarding: () => void;
+  billingStatusReady: boolean;
+  completeOnboarding: () => Promise<void>;
+  markPaywallDismissed: () => Promise<void>;
   billingAvailable: boolean;
   pendingFeatureRoute: string | null;
   checkFeatureAccess: (feature: ProtectedFeature, route: string, grantAnalysisRoute?: boolean) => Promise<FeatureAccessDecision & { error?: string }>;
@@ -411,6 +414,7 @@ const AppContext = createContext<AppContextValue>({} as AppContextValue);
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [onboardingComplete, setOnboardingComplete] = useState(false);
+  const [paywallDismissed, setPaywallDismissed] = useState(false);
   const [isSubscribed, setIsSubscribed] = useState(false);
   const [settings, setSettings] = useState<AppSettings>(defaultSettings);
   const [savedAnalyses, setSavedAnalyses] = useState<AnalysisResult[]>([]);
@@ -431,8 +435,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const load = async () => {
       try {
-        const [ob, sett, saved, strats, briefData, riskData, versionValue] = await Promise.all([
+        const [ob, dismissed, sett, saved, strats, briefData, riskData, versionValue] = await Promise.all([
           AsyncStorage.getItem('onboardingComplete'),
+          AsyncStorage.getItem('paywallDismissed'),
           AsyncStorage.getItem('settings'),
           AsyncStorage.getItem('savedAnalyses'),
           AsyncStorage.getItem('savedStrategies'),
@@ -455,6 +460,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         );
 
         setOnboardingComplete(ob === 'true');
+        setPaywallDismissed(dismissed === 'true');
         setSettings(storedSettings);
         setHapticsEnabled(storedSettings.hapticsEnabled);
         setSavedAnalyses(storedAnalyses);
@@ -481,10 +487,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     load();
   }, []);
 
-  const completeOnboarding = async () => {
+  const completeOnboarding = useCallback(async () => {
     setOnboardingComplete(true);
     await AsyncStorage.setItem('onboardingComplete', 'true');
-  };
+  }, []);
+
+  const markPaywallDismissed = useCallback(async () => {
+    await AsyncStorage.multiSet([
+      ['onboardingComplete', 'true'],
+      ['paywallDismissed', 'true'],
+    ]);
+    setOnboardingComplete(true);
+    setPaywallDismissed(true);
+  }, []);
 
   const billingAvailable = billingIsConfigured();
 
@@ -771,6 +786,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setAccountSyncStatus('signed_out');
     await AsyncStorage.multiRemove([
       'onboardingComplete',
+      'paywallDismissed',
       'settings',
       'savedAnalyses',
       'savedStrategies',
@@ -782,6 +798,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       DATA_VERSION_KEY,
     ]);
     setOnboardingComplete(false);
+    setPaywallDismissed(false);
     setIsSubscribed(false);
     setSettings(defaultSettings);
     setHapticsEnabled(defaultSettings.hapticsEnabled);
@@ -796,6 +813,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     <AppContext.Provider
       value={{
         onboardingComplete,
+        paywallDismissed,
         isSubscribed,
         settings,
         savedAnalyses,
@@ -804,7 +822,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         riskActivity,
         currentAnalysis,
         isLoading,
+        billingStatusReady,
         completeOnboarding,
+        markPaywallDismissed,
         billingAvailable,
         pendingFeatureRoute,
         checkFeatureAccess,

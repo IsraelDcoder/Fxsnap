@@ -49,7 +49,10 @@ async function register(deviceId, token, platform, preferences, accountId, supab
 }
 
 async function remove(deviceId, accountId) {
-  await request(`${TABLE}?device_id=eq.${encodeURIComponent(deviceId)}&account_id=eq.${encodeURIComponent(accountId)}`, { method: 'DELETE' });
+  const accountFilter = accountId
+    ? `&account_id=eq.${encodeURIComponent(accountId)}`
+    : '&account_id=is.null';
+  await request(`${TABLE}?device_id=eq.${encodeURIComponent(deviceId)}${accountFilter}`, { method: 'DELETE' });
 }
 
 async function list() {
@@ -57,7 +60,7 @@ async function list() {
   const pageSize = 1000;
   for (let offset = 0; ; offset += pageSize) {
     const rows = await request(
-      `${TABLE}?select=device_id,account_id,supabase_user_id,expo_token,platform,preferences,registered_at,last_notification_at&account_id=not.is.null&supabase_user_id=not.is.null&order=device_id.asc`,
+      `${TABLE}?select=device_id,account_id,supabase_user_id,expo_token,platform,preferences,registered_at,last_notification_at&order=device_id.asc`,
       { headers: { range: `${offset}-${offset + pageSize - 1}` } },
     );
     entries.push(...(rows || []).map((row) => ({
@@ -130,4 +133,13 @@ async function finishCommunityEvent(id, error = null) {
   });
 }
 
-module.exports = { register, remove, list, listBySupabaseUserIds, listByAccountIds, markNotified, claimCommunityEvents, finishCommunityEvent };
+module.exports = {
+  register,
+  remove,
+  list,
+  listBySupabaseUserIds,
+  listByAccountIds,
+  markNotified,
+  claimCommunityEvents,
+  finishCommunityEvent,
+};

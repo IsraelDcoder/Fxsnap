@@ -88,6 +88,15 @@ export async function getFxsnapAccountApiHeaders() {
   return accountTokenHeaders(token, await getApiHeaders());
 }
 
+export async function getOptionalFxsnapAccountApiHeaders() {
+  ensureNativeSecureStorage();
+  const [token, apiHeaders] = await Promise.all([
+    SecureStore.getItemAsync(ACCOUNT_TOKEN_KEY),
+    getApiHeaders(),
+  ]);
+  return token ? accountTokenHeaders(token, apiHeaders) : apiHeaders;
+}
+
 async function getCurrentSupabaseAccessToken() {
   const auth = getSupabaseClient().auth;
   let { data, error } = await auth.getSession();

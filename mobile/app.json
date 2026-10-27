@@ -5,12 +5,16 @@
     "version": "1.0.0",
     "icon": "./assets/images/icon.png",
     "scheme": "mobile",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "splash": {
       "image": "./assets/images/icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#E3E1DB"
+      "backgroundColor": "#E3E1DB",
+      "dark": {
+        "image": "./assets/images/icon.png",
+        "backgroundColor": "#000000"
+      }
     },
     "ios": {
       "supportsTablet": false,
