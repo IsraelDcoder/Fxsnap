@@ -323,6 +323,7 @@ export default function CommunityMemberScreen() {
               pollBusy={pollBusyIds.has(item.id)}
               onReact={(reaction) => void toggleReaction(item, reaction)}
               onComment={() => router.push({ pathname: '/community', params: { postId: item.id } })}
+              onOpenPost={() => router.push({ pathname: '/community', params: { postId: item.id } })}
               onShare={(cardView) => { void sharePost(item, cardView); }}
               onMore={() => router.push({ pathname: '/community', params: { postId: item.id } })}
               onFollow={() => void toggleFollow()}

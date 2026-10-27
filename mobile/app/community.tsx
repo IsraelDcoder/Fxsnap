@@ -95,9 +95,17 @@ import {
 } from '@/services/communityEngagement';
 import CommunityPostCard from '@/components/CommunityPostCard';
 import CommunityPreviewNotice from '@/components/CommunityPreviewNotice';
+import { getCommunityPostImages } from '@/services/communityMediaPresentation';
 
 type ComposerKind = 'text' | 'signal' | 'analysis' | 'poll';
 type ComposerIntent = 'post' | 'question' | 'trade' | 'poll' | 'image';
+type CommunityComposerImage = {
+  uri: string;
+  asset?: ImagePicker.ImagePickerAsset;
+  imageUrl?: string;
+  imageWidth?: number;
+  imageHeight?: number;
+};
 type CommunityFeedTab = 'For You' | 'Following' | 'Trending' | 'Latest' | 'Saved';
 const COMMUNITY_CREATE_ACTIONS: Array<{
   label: string;
@@ -304,8 +312,7 @@ export default function CommunityScreen() {
   const [composerKind, setComposerKind] = useState<ComposerKind>('text');
   const [composerCategory, setComposerCategory] = useState<CommunityCategory>('market_discussion');
   const [composerBody, setComposerBody] = useState('');
-  const [composerImage, setComposerImage] = useState<ImagePicker.ImagePickerAsset | null>(null);
-  const [composerImageUrl, setComposerImageUrl] = useState<string | null>(null);
+  const [composerImages, setComposerImages] = useState<CommunityComposerImage[]>([]);
   const [uploadingImage, setUploadingImage] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [composerError, setComposerError] = useState('');
@@ -714,8 +721,7 @@ export default function CommunityScreen() {
     setComposerIntent(intent);
     setComposerCategory(initialCategory || (kind === 'analysis' ? 'chart_analysis' : 'market_discussion'));
     setComposerBody('');
-    setComposerImage(null);
-    setComposerImageUrl(null);
+    setComposerImages([]);
     setComposerError('');
     publishId.current = null;
     setSignalInstrument('');
@@ -736,8 +742,12 @@ export default function CommunityScreen() {
     setComposerIntent('post');
     setComposerCategory(post.category || 'market_discussion');
     setComposerBody(post.body);
-    setComposerImage(null);
-    setComposerImageUrl(typeof post.payload.imageUrl === 'string' ? post.payload.imageUrl : null);
+    setComposerImages(getCommunityPostImages(post.payload).map((image) => ({
+      uri: image.url,
+      imageUrl: image.url,
+      imageWidth: image.imageWidth ?? undefined,
+      imageHeight: image.imageHeight ?? undefined,
+    })));
     setComposerError('');
     publishId.current = null;
     setComposerVisible(true);
@@ -816,7 +826,7 @@ export default function CommunityScreen() {
     }
   };
 
-  const chooseImage = async () => {
+  const chooseImage = async (startNewPost = false) => {
     setComposerError('');
     try {
       const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -836,8 +846,16 @@ export default function CommunityScreen() {
         setComposerError('Choose an image under 3 MB.');
         return;
       }
-      setComposerImageUrl(null);
-      setComposerImage(asset);
+      if (!startNewPost && composerImages.length >= 4) {
+        setComposerError('Community posts can include up to four images.');
+        return;
+      }
+      setComposerImages((images) => [...images, {
+        uri: asset.uri,
+        asset,
+        imageWidth: asset.width,
+        imageHeight: asset.height,
+      }]);
     } catch (error) {
       setComposerError(apiErrorMessage(error));
     }
@@ -845,13 +863,13 @@ export default function CommunityScreen() {
 
   const openImagePost = () => {
     openComposer('text', 'chart_analysis', 'image');
-    void chooseImage();
+    void chooseImage(true);
   };
 
   const submitPost = async () => {
     if (publishSubmissionPending.current || publishing || uploadingImage) return;
     const body = composerBody.trim();
-    if (composerKind === 'text' && !body && !composerImage && !composerImageUrl) {
+    if (composerKind === 'text' && !body && !composerImages.length) {
       setComposerError('Add some trading discussion or attach a chart.');
       return;
     }
@@ -899,19 +917,35 @@ export default function CommunityScreen() {
     setPublishing(true);
     setComposerError('');
     try {
-      let imageUrl = composerImageUrl;
-      if (composerImage && !imageUrl) {
+      const uploadedImages: CommunityComposerImage[] = [];
+      if (composerImages.some((image) => image.asset && !image.imageUrl)) {
         setUploadingImage(true);
-        const upload = await uploadCommunityImage(composerImage);
-        imageUrl = upload.imageUrl;
-        setComposerImageUrl(imageUrl);
+        for (const image of composerImages) {
+          if (image.imageUrl || !image.asset) {
+            uploadedImages.push(image);
+            continue;
+          }
+          const upload = await uploadCommunityImage(image.asset);
+          uploadedImages.push({ ...image, imageUrl: upload.imageUrl });
+          setComposerImages([...uploadedImages, ...composerImages.slice(uploadedImages.length)]);
+        }
         setUploadingImage(false);
       }
-      const imageWidth = composerImage?.width
+      if (!uploadedImages.length) uploadedImages.push(...composerImages);
+      const imageUrls = uploadedImages.flatMap((image) => image.imageUrl ? [image.imageUrl] : []);
+      const imageUrl = imageUrls[0];
+      const imageSizes = uploadedImages
+        .filter((image) => image.imageUrl)
+        .map((image) => ({ width: image.imageWidth || 1, height: image.imageHeight || 1 }));
+      const firstImage = uploadedImages[0];
+      const imageWidth = firstImage?.imageWidth
         ?? (typeof editingPost?.payload.imageWidth === 'number' ? editingPost.payload.imageWidth : undefined);
-      const imageHeight = composerImage?.height
+      const imageHeight = firstImage?.imageHeight
         ?? (typeof editingPost?.payload.imageHeight === 'number' ? editingPost.payload.imageHeight : undefined);
       const imageDimensions = imageWidth && imageHeight ? { imageWidth, imageHeight } : {};
+      const imagePayload = imageUrls.length
+        ? { imageUrl, imageUrls, imageSizes, ...imageDimensions }
+        : {};
       const payload = composerKind === 'signal'
         ? {
           instrument: signalInstrument.trim().toUpperCase(),
@@ -921,8 +955,7 @@ export default function CommunityScreen() {
           takeProfits: signalTargets.split(',').map((target) => target.trim()).filter(Boolean),
           timeframe: signalTimeframe.trim(),
           reasoning: body,
-          imageUrl,
-          ...imageDimensions,
+          ...imagePayload,
         }
         : composerKind === 'poll'
           ? {
@@ -931,17 +964,18 @@ export default function CommunityScreen() {
               options: normalizedPollOptions.map((text, index) => ({ id: `option-${index + 1}`, text })),
               endsAt: new Date(Date.now() + pollDurationDays * 86_400_000).toISOString(),
             },
-            imageUrl,
-            ...imageDimensions,
+            ...imagePayload,
           }
         : composerKind === 'analysis'
-          ? { ...pendingAnalysis, imageUrl, ...imageDimensions }
-          : { imageUrl, ...imageDimensions };
+          ? { ...pendingAnalysis, ...imagePayload }
+          : imagePayload;
       const message = editingPost
         ? (await updateCommunityMessage(editingPost.id, {
           body,
           category: composerCategory,
-          imageUrl,
+          imageUrl: imageUrl || null,
+          imageUrls,
+          imageSizes,
           ...imageDimensions,
         })).message
         : (await publishCommunityMessage({
@@ -959,7 +993,7 @@ export default function CommunityScreen() {
       setEditingPost(null);
       setPendingAnalysis(null);
       setComposerBody('');
-      setComposerImage(null);
+      setComposerImages([]);
       setPollQuestion('');
       setPollOptions(['', '']);
       publishId.current = null;
@@ -1464,6 +1498,7 @@ export default function CommunityScreen() {
         ownAccount={item.authorUsername === profile?.username}
         onReact={(reaction) => void handleReaction(item, reaction)}
         onComment={() => void openComments(item)}
+        onOpenPost={() => void openComments(item)}
         onRepost={item.authorAccountId === profile?.accountId ? undefined : () => void handleRepost(item)}
         repostBusy={repostBusyIds.has(item.id)}
         onSave={() => void handleSave(item)}
@@ -2068,19 +2103,34 @@ export default function CommunityScreen() {
                 style={[styles.composerInput, { color: colors.text, backgroundColor: colors.card, borderColor: colors.cardBorder }]}
               />
             )}
-            {composerImage || composerImageUrl ? (
-              <View style={styles.attachmentPreview}>
-                <Image source={{ uri: composerImage?.uri || composerImageUrl || undefined }} style={styles.previewImage} />
-                <TouchableOpacity onPress={() => { setComposerImage(null); setComposerImageUrl(null); }} style={[styles.removeAttachment, { backgroundColor: colors.card }]}>
-                  <Feather name="x" size={16} color={colors.text} />
-                </TouchableOpacity>
-                {uploadingImage ? <ActivityIndicator style={StyleSheet.absoluteFill} color={colors.buy} /> : null}
-              </View>
+            {composerImages.length ? (
+              <ScrollView horizontal contentContainerStyle={styles.attachmentGallery} showsHorizontalScrollIndicator={false}>
+                {composerImages.map((image, index) => (
+                  <View key={`${image.uri}-${index}`} style={styles.attachmentPreview}>
+                    <Image source={{ uri: image.uri }} style={styles.previewImage} />
+                    <TouchableOpacity
+                      onPress={() => setComposerImages((images) => images.filter((_, imageIndex) => imageIndex !== index))}
+                      style={[styles.removeAttachment, { backgroundColor: colors.card }]}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Remove image ${index + 1}`}
+                    >
+                      <Feather name="x" size={16} color={colors.text} />
+                    </TouchableOpacity>
+                    {uploadingImage && !image.imageUrl ? <ActivityIndicator style={StyleSheet.absoluteFill} color={colors.buy} /> : null}
+                  </View>
+                ))}
+              </ScrollView>
             ) : null}
             {composerKind !== 'analysis' ? (
-              <TouchableOpacity onPress={() => void chooseImage()} style={[styles.attachButton, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+              <TouchableOpacity
+                onPress={() => void chooseImage()}
+                disabled={composerImages.length >= 4}
+                style={[styles.attachButton, { backgroundColor: colors.card, borderColor: colors.cardBorder, opacity: composerImages.length >= 4 ? 0.6 : 1 }]}
+              >
                 <Feather name="image" size={17} color={colors.buy} />
-                <Text style={[styles.attachText, { color: colors.text }]}>Add chart screenshot (JPEG, PNG, WebP · up to 3 MB)</Text>
+                <Text style={[styles.attachText, { color: colors.text }]}>
+                  {composerImages.length ? `Add another image (${composerImages.length}/4)` : 'Add chart or image (JPEG, PNG, WebP · up to 3 MB each)'}
+                </Text>
               </TouchableOpacity>
             ) : null}
             {composerKind === 'signal' || composerKind === 'analysis' ? (
@@ -2103,13 +2153,14 @@ export default function CommunityScreen() {
         >
           <View style={[styles.modalHeader, { borderBottomColor: colors.cardBorder }]}>
             <TouchableOpacity onPress={() => setCommentPost(null)} style={styles.headerIcon} accessibilityLabel="Close discussion"><Feather name="arrow-left" size={20} color={colors.text} /></TouchableOpacity>
-            <Text style={[styles.modalTitle, { color: colors.text }]}>Discussion</Text>
+            <Text style={[styles.modalTitle, { color: colors.text }]}>Post & discussion</Text>
             <View style={styles.headerIcon} />
           </View>
           <ScrollView contentContainerStyle={styles.commentsContent} keyboardShouldPersistTaps="handled" keyboardDismissMode="interactive">
             {commentPost ? <CommunityPostCard
               post={commentPost}
               palette={colors}
+              fullText
               ownAccount={commentPost.authorAccountId === profile?.accountId}
               reactionBusy={reactionBusyIds.has(commentPost.id)}
               onReact={(reaction) => void handleReaction(commentPost, reaction)}
@@ -2607,7 +2658,8 @@ const styles = StyleSheet.create({
   directionText: { fontSize: 11, fontFamily: 'Inter_700Bold' },
   analysisSource: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, borderWidth: 1, borderRadius: 12, padding: 12 },
   analysisSourceTitle: { fontSize: 12, fontFamily: 'Inter_700Bold', marginBottom: 4 },
-  attachmentPreview: { height: 175, position: 'relative', overflow: 'hidden', borderRadius: 13 },
+  attachmentGallery: { gap: 8 },
+  attachmentPreview: { width: 124, height: 110, position: 'relative', overflow: 'hidden', borderRadius: 13 },
   previewImage: { width: '100%', height: '100%' },
   removeAttachment: { position: 'absolute', right: 8, top: 8, width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
   attachButton: { minHeight: 43, flexDirection: 'row', alignItems: 'center', gap: 9, borderWidth: 1, borderRadius: 12, paddingHorizontal: 12 },

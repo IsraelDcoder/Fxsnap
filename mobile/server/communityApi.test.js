@@ -6,11 +6,134 @@ process.env.SUPABASE_SERVICE_ROLE_KEY = 'community-test-service-role-key';
 process.env.FXSNAP_COMMUNITY_ENABLED = 'true';
 process.env.FXSNAP_COMMUNITY_ADMIN_SUPABASE_USER_IDS = '';
 
-const { createCommunityApi } = require('./communityApi');
+const { createCommunityApi, detectMessageImageMimeType } = require('./communityApi');
 
 const MEMBER_ID = '00000000-0000-4000-8000-000000000010';
 const ACCOUNT_ID = 'usr_community-test-member';
 const RULES_VERSION = 'community-rules-v1';
+
+test('community image uploads store PNG, JPEG, and WebP bytes using detected MIME and extension', async () => {
+  const profile = {
+    account_id: ACCOUNT_ID,
+    supabase_user_id: MEMBER_ID,
+    username: 'chartpro',
+    picture_url: null,
+    accepted_rules_version: RULES_VERSION,
+    status: 'active',
+    muted_until: null,
+    joined_at: new Date().toISOString(),
+  };
+  const fixtures = [
+    { mimeType: 'image/png', declaredMimeType: 'image/jpeg', bytes: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 1]) },
+    { mimeType: 'image/jpeg', declaredMimeType: 'image/png', bytes: Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 16, 1, 2]) },
+    { mimeType: 'image/webp', declaredMimeType: 'image/jpeg', bytes: Buffer.from('RIFF0000WEBP', 'ascii') },
+  ];
+
+  for (const [index, fixture] of fixtures.entries()) {
+    assert.equal(detectMessageImageMimeType(fixture.bytes), fixture.mimeType);
+    const harness = makeHarness({ initialProfiles: [profile] });
+    const uploaded = await harness.call('/api/community/upload', {
+      method: 'POST',
+      body: { mimeType: fixture.declaredMimeType, data: fixture.bytes.toString('base64') },
+    });
+
+    assert.equal(uploaded.statusCode, 201, JSON.stringify(uploaded.body));
+    const extension = fixture.mimeType === 'image/jpeg' ? 'jpg' : fixture.mimeType.slice('image/'.length);
+    assert.match(uploaded.body.imageUrl, new RegExp(`/${ACCOUNT_ID}/[0-9a-f-]+\\.${extension}$`));
+    const objectPath = decodeURIComponent(new URL(uploaded.body.imageUrl).pathname.split('/').slice(-2).join('/'));
+    const stored = harness.uploadedObjects.get(objectPath);
+    assert.ok(stored, `Expected uploaded ${fixture.mimeType} object to exist`);
+    assert.equal(stored.contentType, fixture.mimeType);
+    assert.deepEqual(stored.body, fixture.bytes);
+
+    const retrieved = await harness.fetchStoredImage(uploaded.body.imageUrl);
+    assert.equal(retrieved.status, 200);
+    assert.equal(retrieved.headers.get('content-type'), fixture.mimeType);
+    assert.deepEqual(Buffer.from(await retrieved.arrayBuffer()), fixture.bytes);
+
+    const post = await harness.call('/api/community/messages', {
+      method: 'POST',
+      body: {
+        clientMessageId: `00000000-0000-4000-8000-${String(index + 300).padStart(12, '0')}`,
+        kind: 'text',
+        category: 'chart_analysis',
+        body: 'Chart image',
+        payload: { imageUrl: uploaded.body.imageUrl, imageWidth: 1, imageHeight: 1 },
+      },
+    });
+    assert.equal(post.statusCode, 201, JSON.stringify(post.body));
+    assert.equal(post.body.message.payload.imageUrl, uploaded.body.imageUrl);
+    const feed = await harness.call('/api/community/messages?feed=latest');
+    assert.equal(feed.statusCode, 200, JSON.stringify(feed.body));
+    assert.equal(feed.body.messages[0].payload.imageUrl, uploaded.body.imageUrl);
+  }
+});
+
+test('community image uploads reject bytes without a supported image signature', async () => {
+  const profile = {
+    account_id: ACCOUNT_ID,
+    supabase_user_id: MEMBER_ID,
+    username: 'chartpro',
+    picture_url: null,
+    accepted_rules_version: RULES_VERSION,
+    status: 'active',
+    muted_until: null,
+    joined_at: new Date().toISOString(),
+  };
+  const harness = makeHarness({ initialProfiles: [profile]   });
+
+  test('Community posts accept up to four owned gallery images and reject images uploaded by another account', async () => {
+    const profile = {
+      account_id: ACCOUNT_ID,
+      supabase_user_id: MEMBER_ID,
+      username: 'chartpro',
+      picture_url: null,
+      accepted_rules_version: RULES_VERSION,
+      status: 'active',
+      muted_until: null,
+      joined_at: new Date().toISOString(),
+    };
+    const harness = makeHarness({ initialProfiles: [profile] });
+    const imageUrls = [];
+    for (let index = 0; index < 4; index += 1) {
+      const upload = await harness.call('/api/community/upload', {
+        method: 'POST',
+        body: { mimeType: 'image/png', data: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, index]).toString('base64') },
+      });
+      assert.equal(upload.statusCode, 201, JSON.stringify(upload.body));
+      imageUrls.push(upload.body.imageUrl);
+    }
+    const message = {
+      clientMessageId: '00000000-0000-4000-8000-000000000399',
+      kind: 'text',
+      body: 'Gallery post',
+      payload: {
+        imageUrls,
+        imageSizes: Array.from({ length: 4 }, () => ({ width: 640, height: 480 })),
+      },
+    };
+    const accepted = await harness.call('/api/community/messages', { method: 'POST', body: message });
+    assert.equal(accepted.statusCode, 201, JSON.stringify(accepted.body));
+    assert.deepEqual(accepted.body.message.payload.imageUrls, imageUrls);
+
+    const rejected = await harness.call('/api/community/messages', {
+      method: 'POST',
+      body: {
+        ...message,
+        clientMessageId: '00000000-0000-4000-8000-000000000398',
+        payload: { imageUrls: ['https://community-test.supabase.co/storage/v1/object/public/fxsnap-community-media/another-user/post.png'] },
+      },
+    });
+    assert.equal(rejected.statusCode, 400);
+  });
+  const response = await harness.call('/api/community/upload', {
+    method: 'POST',
+    body: { mimeType: 'image/png', data: Buffer.from('not an image').toString('base64') },
+  });
+  assert.equal(response.statusCode, 400);
+  assert.equal(response.body.error, 'Only PNG, JPEG, or WebP images are supported.');
+  assert.equal(harness.uploadedObjects.size, 0);
+});
 
 function makeResponse(status, body) {
   return {
@@ -47,8 +170,32 @@ function makeHarness({
   const pushedCommunityEvents = [];
   const savedNames = [];
   const requests = [];
+  const uploadedObjects = new Map();
   global.fetch = async (url, options = {}) => {
     const parsed = new URL(String(url));
+    const storageObjectMatch = parsed.pathname.match(/\/storage\/v1\/object\/(?:public\/)?fxsnap-community-media\/(.+)$/);
+    if (storageObjectMatch) {
+      const objectPath = decodeURIComponent(storageObjectMatch[1]);
+      if ((options.method || 'GET') === 'POST') {
+        const storedObject = {
+          body: Buffer.from(options.body),
+          contentType: options.headers['content-type'],
+        };
+        uploadedObjects.set(objectPath, storedObject);
+        return makeResponse(200, {});
+      }
+      const storedObject = uploadedObjects.get(objectPath);
+      if (!storedObject) return makeResponse(404, { error: 'Object not found.' });
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: (name) => name.toLowerCase() === 'content-type' ? storedObject.contentType : null },
+        arrayBuffer: async () => storedObject.body.buffer.slice(
+          storedObject.body.byteOffset,
+          storedObject.body.byteOffset + storedObject.body.byteLength,
+        ),
+      };
+    }
     const table = parsed.pathname.split('/').pop();
     const method = options.method || 'GET';
     const request = { table, method, query: parsed.search, body: options.body ? JSON.parse(options.body) : null };
@@ -345,6 +492,10 @@ function makeHarness({
     requests,
     savedNames,
     pushedCommunityEvents,
+    uploadedObjects,
+    async fetchStoredImage(imageUrl) {
+      return global.fetch(imageUrl);
+    },
     async call(path, { method = 'GET', body } = {}) {
       const response = {};
       await api({ method, body }, response, new URL(path, 'https://fxsnap.test'));
@@ -1287,6 +1438,9 @@ test('members can edit and remove only their own text content', async () => {
   const edited = await call(ownerApi, 'PATCH', {
     body: 'Edited post',
     category: 'market_discussion',
+    imageUrl: `https://community-test.supabase.co/storage/v1/object/public/fxsnap-community-media/${ACCOUNT_ID}/0.png`,
+    imageUrls: Array.from({ length: 4 }, (_, index) => `https://community-test.supabase.co/storage/v1/object/public/fxsnap-community-media/${ACCOUNT_ID}/${index}.png`),
+    imageSizes: Array.from({ length: 4 }, () => ({ width: 1200, height: 800 })),
     imageWidth: 1200,
     imageHeight: 800,
   });
@@ -1296,20 +1450,29 @@ test('members can edit and remove only their own text content', async () => {
   assert.equal(edited.body.message.commentCount, 2);
   assert.equal(edited.body.message.payload.imageWidth, 1200);
   assert.equal(edited.body.message.payload.imageHeight, 800);
+  assert.equal(edited.body.message.payload.imageUrls.length, 4);
+  const removedImages = await call(ownerApi, 'PATCH', {
+    body: 'Edited without media',
+    imageUrl: null,
+    imageUrls: [],
+    imageSizes: [],
+  });
+  assert.equal(removedImages.statusCode, 200, JSON.stringify(removedImages.body));
+  assert.deepEqual(removedImages.body.message.payload.imageUrls, []);
   const invalidImageDimensions = await call(ownerApi, 'PATCH', {
     body: 'Invalid image dimensions',
     imageWidth: 0,
     imageHeight: 800,
   });
   assert.equal(invalidImageDimensions.statusCode, 400);
-  assert.equal(messages[0].body, 'Edited post');
+  assert.equal(messages[0].body, 'Edited without media');
 
   const otherApi = apiFor({ accountId: otherAccountId, deviceId: 'community-test-device-1234', supabaseUserId: otherUserId });
   const rejectedEdit = await call(otherApi, 'PATCH', { body: 'Unauthorized edit' });
   const rejectedDelete = await call(otherApi, 'DELETE');
   assert.equal(rejectedEdit.statusCode, 403);
   assert.equal(rejectedDelete.statusCode, 403);
-  assert.equal(messages[0].body, 'Edited post');
+  assert.equal(messages[0].body, 'Edited without media');
   assert.equal(messages[0].removed_at, null);
 
   const deleted = await call(ownerApi, 'DELETE');

@@ -12,6 +12,10 @@ import { CommunityReactionTapGuard } from '@/services/communityReactionInteracti
 import { formatInstrumentPriceText } from '@/services/priceFormatting';
 import { formatRiskReward } from '@/services/analysisResult';
 import { useColors } from '@/hooks/useColors';
+import { COMMUNITY_POST_PREVIEW_LINES, communityTextExceedsPreview } from '@/services/communityTextPreview';
+import { getCommunityMediaPresentation, getCommunityPostImages } from '@/services/communityMediaPresentation';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 function textValue(value: unknown, fallback = '—') {
   return typeof value === 'string' && value.trim() ? value : fallback;
@@ -47,6 +51,79 @@ function parsePreviewPoll(value: unknown): PreviewPollData | null {
   return options.length ? { question: poll.question, totalVotes: poll.totalVotes, options } : null;
 }
 
+function CommunityImageViewer({ imageUrl, onClose }: { imageUrl: string; onClose: () => void }) {
+  const insets = useSafeAreaInsets();
+  const { width, height } = useWindowDimensions();
+  const scale = useSharedValue(1);
+  const savedScale = useSharedValue(1);
+  const translateX = useSharedValue(0);
+  const translateY = useSharedValue(0);
+  const savedTranslateX = useSharedValue(0);
+  const savedTranslateY = useSharedValue(0);
+  const imageStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateX: translateX.value },
+      { translateY: translateY.value },
+      { scale: scale.value },
+    ],
+  }));
+  const pinch = Gesture.Pinch()
+    .onUpdate((event) => {
+      scale.value = Math.max(1, Math.min(5, savedScale.value * event.scale));
+    })
+    .onEnd(() => {
+      savedScale.value = scale.value;
+      if (scale.value <= 1) {
+        translateX.value = 0;
+        translateY.value = 0;
+        savedTranslateX.value = 0;
+        savedTranslateY.value = 0;
+      }
+    });
+  const pan = Gesture.Pan()
+    .averageTouches(true)
+    .onUpdate((event) => {
+      if (scale.value <= 1) return;
+      const maxX = width * (scale.value - 1) / 2;
+      const maxY = height * (scale.value - 1) / 2;
+      translateX.value = Math.max(-maxX, Math.min(maxX, savedTranslateX.value + event.translationX));
+      translateY.value = Math.max(-maxY, Math.min(maxY, savedTranslateY.value + event.translationY));
+    })
+    .onEnd(() => {
+      savedTranslateX.value = translateX.value;
+      savedTranslateY.value = translateY.value;
+    });
+  const gestures = Gesture.Simultaneous(pinch, pan);
+
+  return (
+    <Modal visible animationType="fade" transparent statusBarTranslucent onRequestClose={onClose}>
+      <View style={[styles.imageViewer, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+        <GestureDetector gesture={gestures}>
+          <Animated.View style={styles.imageViewerCanvas}>
+            <Animated.View style={[styles.imageViewerImageWrap, imageStyle]}>
+              <Image
+                source={{ uri: imageUrl }}
+                style={styles.imageViewerImage}
+                contentFit="contain"
+                cachePolicy="memory-disk"
+                accessibilityLabel="Full-size Community image. Pinch to zoom and drag to pan."
+              />
+            </Animated.View>
+          </Animated.View>
+        </GestureDetector>
+        <TouchableOpacity
+          onPress={onClose}
+          style={[styles.imageViewerClose, { top: insets.top + 10 }]}
+          accessibilityRole="button"
+          accessibilityLabel="Close image viewer"
+        >
+          <Feather name="x" size={23} color="#FFFFFF" />
+        </TouchableOpacity>
+      </View>
+    </Modal>
+  );
+}
+
 export default function CommunityPostCard({
   post,
   palette,
@@ -54,6 +131,7 @@ export default function CommunityPostCard({
   onReact,
   reactionBusy = false,
   onComment,
+  onOpenPost,
   onRepost,
   repostBusy = false,
   onSave,
@@ -66,6 +144,7 @@ export default function CommunityPostCard({
   onAuthorPress,
   compact = false,
   feedStyle = false,
+  fullText = false,
 }: {
   post: CommunityMessage;
   palette?: ReturnType<typeof useColors>;
@@ -73,6 +152,7 @@ export default function CommunityPostCard({
   onReact: (reaction: CommunityReaction) => void;
   reactionBusy?: boolean;
   onComment: () => void;
+  onOpenPost?: () => void;
   onRepost?: () => void;
   repostBusy?: boolean;
   onSave?: () => void;
@@ -85,6 +165,7 @@ export default function CommunityPostCard({
   onAuthorPress?: () => void;
   compact?: boolean;
   feedStyle?: boolean;
+  fullText?: boolean;
 }) {
   const defaultColors = useColors();
   const colors = palette || defaultColors;
@@ -99,7 +180,9 @@ export default function CommunityPostCard({
     transform: [{ scale: reactionScale.value }],
   }));
   const [reactionPicker, setReactionPicker] = useState<{ left: number; top: number } | null>(null);
-  const [expandedBody, setExpandedBody] = useState(false);
+  const [expandedPostId, setExpandedPostId] = useState<string | null>(null);
+  const [measuredText, setMeasuredText] = useState<{ postId: string; body: string; exceedsPreview: boolean } | null>(null);
+  const [imageViewerUrl, setImageViewerUrl] = useState<string | null>(null);
   const selectedReaction = post.reactions.find((item) => item.reacted);
   const selectedReactionInfo = COMMUNITY_REACTIONS.find((item) => item.id === selectedReaction?.reaction);
   const repostCount = Number.isFinite(post.repostCount) ? post.repostCount : 0;
@@ -148,14 +231,11 @@ export default function CommunityPostCard({
     onReact('love');
   };
   const category = COMMUNITY_CATEGORIES.find((item) => item.id === post.category)?.label || 'Community';
-  const imageUrl = typeof post.payload.imageUrl === 'string' ? post.payload.imageUrl : null;
-  const imageWidth = typeof post.payload.imageWidth === 'number' ? post.payload.imageWidth : null;
-  const imageHeight = typeof post.payload.imageHeight === 'number' ? post.payload.imageHeight : null;
-  const imageAspectRatio = imageWidth && imageHeight
-    ? Math.min(1.8, Math.max(0.6, imageWidth / imageHeight))
-    : 1.15;
+  const postImages = getCommunityPostImages(post.payload);
   const analysis = post.kind === 'analysis' ? post.payload : null;
   const signal = post.kind === 'signal' ? post.payload : null;
+  const isChart = post.kind === 'analysis' || post.category === 'chart_analysis' || post.kind === 'signal';
+  const singleMediaFrameHeight = getCommunityMediaPresentation(windowWidth, null, null, isChart).frameHeight;
   const sourceCreatedAt = analysis && typeof analysis.sourceCreatedAt === 'string'
     ? analysis.sourceCreatedAt
     : null;
@@ -165,6 +245,10 @@ export default function CommunityPostCard({
   const previewTrade = __DEV__ && post.payload.previewTrade === true;
   const previewPoll = __DEV__ ? parsePreviewPoll(post.payload.previewPoll) : null;
   const poll = parseCommunityPoll(post.payload.poll);
+  const bodyExpanded = expandedPostId === post.id;
+  const bodyExceedsPreview = measuredText?.postId === post.id
+    && measuredText.body === post.body
+    && measuredText.exceedsPreview;
   return (
     <View ref={shareableViewRef} collapsable={false} style={[
       styles.card,
@@ -239,22 +323,37 @@ export default function CommunityPostCard({
       {post.body ? (
         <>
           <TouchableOpacity
-            onPress={onComment}
-            disabled={!compact}
-            accessibilityRole={compact ? 'button' : undefined}
-            accessibilityLabel={compact ? 'Open post discussion' : undefined}
+            onPress={onOpenPost}
+            disabled={!onOpenPost}
+            accessibilityRole={onOpenPost ? 'button' : undefined}
+            accessibilityLabel={onOpenPost ? 'Open full post and discussion' : undefined}
           >
-            <Text style={[styles.body, compact && styles.compactBody, { color: colors.text }]} numberOfLines={compact ? 6 : post.body.length > 560 && !expandedBody ? 6 : undefined}>
+            <Text
+              style={[styles.body, compact && styles.compactBody, { color: colors.text }]}
+              numberOfLines={fullText || bodyExpanded ? undefined : COMMUNITY_POST_PREVIEW_LINES}
+              ellipsizeMode="tail"
+              onTextLayout={fullText || bodyExpanded ? undefined : (event) => {
+                const exceedsPreview = communityTextExceedsPreview(post.body, event.nativeEvent.lines.map((line) => line.text));
+                setMeasuredText((current) => (
+                  current?.postId === post.id
+                  && current.body === post.body
+                  && current.exceedsPreview === exceedsPreview
+                    ? current
+                    : { postId: post.id, body: post.body, exceedsPreview }
+                ));
+              }}
+            >
               {post.body}
             </Text>
           </TouchableOpacity>
-          {!compact && post.body.length > 560 ? (
+          {!fullText && (bodyExpanded || bodyExceedsPreview) ? (
             <TouchableOpacity
-              onPress={() => setExpandedBody((expanded) => !expanded)}
+              onPress={() => setExpandedPostId((current) => current === post.id ? null : post.id)}
               accessibilityRole="button"
-              accessibilityLabel={expandedBody ? 'Show less post text' : 'Read more post text'}
+              accessibilityLabel={bodyExpanded ? 'Show less post text' : 'Read more post text'}
+              style={styles.readMoreTarget}
             >
-              <Text style={[styles.readMore, { color: colors.buy }]}>{expandedBody ? 'Show less' : 'Read more'}</Text>
+              <Text style={[styles.readMore, { color: colors.buy }]}>{bodyExpanded ? 'Show less' : 'Read more'}</Text>
             </TouchableOpacity>
           ) : null}
         </>
@@ -350,17 +449,57 @@ export default function CommunityPostCard({
         </View>
       ) : null}
 
-      {imageUrl ? (
-        <TouchableOpacity onPress={onComment} disabled={!compact} accessibilityRole={compact ? 'button' : undefined} accessibilityLabel={compact ? 'Open post discussion' : undefined}>
-        <Image
-          source={{ uri: imageUrl }}
-          style={[styles.postImage, compact && styles.compactPostImage, { aspectRatio: imageAspectRatio, backgroundColor: colors.surface }]}
-          contentFit="cover"
-          cachePolicy="memory-disk"
-          transition={120}
-          accessibilityLabel="Chart attachment"
-        />
-        </TouchableOpacity>
+      {postImages.length ? (
+        <View style={[styles.postMediaGallery, postImages.length === 1 && styles.postMediaGallerySingle]}>
+          {postImages.map((media, index) => {
+            const presentation = getCommunityMediaPresentation(
+              windowWidth,
+              media.imageWidth,
+              media.imageHeight,
+              isChart,
+            );
+            const multiple = postImages.length > 1;
+            return (
+              <TouchableOpacity
+                key={media.url}
+                onPress={() => setImageViewerUrl(media.url)}
+                accessibilityRole="button"
+                accessibilityLabel={`Open full-size post image ${index + 1} of ${postImages.length}`}
+                style={[
+                  styles.postImageFrame,
+                  {
+                    width: multiple ? '48%' : '100%',
+                    maxWidth: multiple ? undefined : presentation.frameWidth,
+                    height: multiple ? Math.min(190, singleMediaFrameHeight * 0.68) : singleMediaFrameHeight,
+                    backgroundColor: colors.surface,
+                    borderColor: `${colors.buy}35`,
+                  },
+                ]}
+              >
+                {presentation.showBlurredBackdrop ? (
+                  <Image
+                    source={{ uri: media.url }}
+                    style={[StyleSheet.absoluteFill, styles.postImageBlurredBackdrop]}
+                    contentFit="cover"
+                    blurRadius={18}
+                    cachePolicy="memory-disk"
+                    transition={120}
+                    accessibilityElementsHidden
+                    importantForAccessibility="no-hide-descendants"
+                  />
+                ) : null}
+                <Image
+                  source={{ uri: media.url }}
+                  style={styles.postImage}
+                  contentFit={presentation.contentFit}
+                  cachePolicy="memory-disk"
+                  transition={120}
+                  accessibilityLabel={`Community post image ${index + 1}`}
+                />
+              </TouchableOpacity>
+            );
+          })}
+        </View>
       ) : null}
 
       {post.kind === 'announcement' ? (
@@ -509,6 +648,9 @@ export default function CommunityPostCard({
             </View>
           </View>
         </Modal>
+      ) : null}
+      {imageViewerUrl ? (
+        <CommunityImageViewer imageUrl={imageViewerUrl} onClose={() => setImageViewerUrl(null)} />
       ) : null}
     </View>
   );
@@ -730,7 +872,8 @@ const styles = StyleSheet.create({
   moreButton: { width: 28, height: 34, alignItems: 'center', justifyContent: 'center' },
   body: { fontSize: 14, lineHeight: 21, fontFamily: 'Inter_400Regular' },
   compactBody: { fontSize: 11, lineHeight: 16 },
-  readMore: { alignSelf: 'flex-start', fontSize: 11, fontFamily: 'Inter_600SemiBold' },
+  readMoreTarget: { alignSelf: 'flex-start', minHeight: 44, justifyContent: 'center', paddingRight: 8 },
+  readMore: { alignSelf: 'flex-start', fontSize: 11, lineHeight: 16, fontFamily: 'Inter_600SemiBold' },
   previewDiscussionCard: { minHeight: 88, flexDirection: 'row', alignItems: 'center', gap: 9, borderWidth: 1, borderRadius: 11, padding: 5 },
   previewChartFrame: { width: '40%', height: 77, overflow: 'hidden', borderRadius: 8, position: 'relative' },
   previewInstrumentBadge: { position: 'absolute', left: 6, top: 6, paddingHorizontal: 5, paddingVertical: 3, borderRadius: 4, backgroundColor: '#17374C' },
@@ -772,8 +915,16 @@ const styles = StyleSheet.create({
   analysisContext: { fontSize: 10, lineHeight: 14, fontFamily: 'Inter_500Medium' },
   staleNotice: { fontSize: 10, fontFamily: 'Inter_600SemiBold' },
   disclaimer: { fontSize: 9, lineHeight: 14, fontFamily: 'Inter_400Regular' },
-  postImage: { width: '100%', borderRadius: 12 },
-  compactPostImage: { borderRadius: 12 },
+  postMediaGallery: { width: '100%', alignSelf: 'center', flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  postMediaGallerySingle: { maxWidth: 400 },
+  postImageFrame: { alignSelf: 'center', overflow: 'hidden', borderWidth: 1, borderRadius: 14, position: 'relative' },
+  postImageBlurredBackdrop: { opacity: 0.58, transform: [{ scale: 1.08 }] },
+  postImage: { ...StyleSheet.absoluteFillObject, width: '100%', height: '100%' },
+  imageViewer: { flex: 1, backgroundColor: '#050807' },
+  imageViewerCanvas: { flex: 1, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
+  imageViewerImageWrap: { width: '100%', height: '100%', alignItems: 'center', justifyContent: 'center' },
+  imageViewerImage: { width: '100%', height: '100%' },
+  imageViewerClose: { position: 'absolute', right: 16, width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: '#17211FCC' },
   actions: { borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 11, flexDirection: 'row', justifyContent: 'space-around' },
   compactActions: { borderTopWidth: 0, paddingTop: 0, justifyContent: 'space-between', gap: 2 },
   feedActions: { borderTopWidth: 0, paddingTop: 1, justifyContent: 'space-between', gap: 4 },
