@@ -96,35 +96,6 @@ To preview the web app in a browser:
 ```powershell
 cd mobile
 npm run dev -- --web
-```
-
-For local Premium chart-analysis testing without an active subscription, run the API and app in separate terminals. Set `NODE_ENV=development` and `FXSNAP_DEV_ANALYSIS_PREMIUM_BYPASS=true` only on the local API process; set `EXPO_PUBLIC_DEV_PREMIUM_BYPASS=true` and `EXPO_PUBLIC_API_BASE_URL=http://localhost:3000` for the Expo dev server. The API still requires a configured `OPENROUTER_API_KEY`. The bypass applies only to chart analysis, is disabled outside development builds/server mode, and does not unlock strategy generation or affect production.
-
-Configure local values from [`mobile/.env.example`](./mobile/.env.example). Keep real API keys and server credentials in an untracked local environment file or deployment secret manager; never put server secrets in `EXPO_PUBLIC_*` variables or commit them.
-
-Useful commands from `mobile/`:
-
-```powershell
-npm run typecheck
-npm test
-npm run build
-```
-
-`npm run build` exports the web app. Native store builds use `npm run build:ios`, `npm run build:android`, or `npm run build:all` after EAS is configured.
-
-## Deployment and production setup
-
-The mobile app calls the production API at `https://fxsnap.vercel.app`. Backend changes must be deployed separately from GitHub pushes and mobile app builds; publishing source code does not itself update the live API or install a new native app.
-
-See [`mobile/DEPLOYMENT.md`](./mobile/DEPLOYMENT.md) for backend hosting, required environment variables, Supabase storage, Community rollout, and push notification setup. See [`mobile/RELEASE_SETUP.md`](./mobile/RELEASE_SETUP.md) for EAS, RevenueCat, sign-in, and store release configuration.
-
-Community remains disabled until its SQL migration has been applied to the intended Supabase project and the server-side `FXSNAP_COMMUNITY_ENABLED` flag has been deliberately enabled. Keep the service-role key on the server only. Do not enable the feature before completing the documented migration and verification steps.
-
-## Testing and release readiness
-
-Automated checks are available for the analysis backend and app types. Hardware- and provider-dependent behavior still needs testing on real iOS and Android devices, including chart image upload, native analysis-card sharing, billing and restore, permissions, offline errors, and accessibility.
-
-The [`mobile/TEST_MATRIX.md`](./mobile/TEST_MATRIX.md) lists device and service checks that should be performed and recorded before release. A passing local build or test suite does not verify external model credentials, production API deployment, store billing, Community configuration, or native-device behavior.
 
 ## Legal and support
 
