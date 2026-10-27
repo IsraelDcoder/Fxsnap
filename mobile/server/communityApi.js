@@ -9,11 +9,33 @@ const IMAGE_DIMENSIONS = {
   imageWidth: z.number().int().min(1).max(8000).optional(),
   imageHeight: z.number().int().min(1).max(8000).optional(),
 };
+const IMAGE_GALLERY = {
+  imageUrls: z.array(z.string().url().max(2048)).max(4).optional(),
+  imageSizes: z.array(z.object({
+    width: z.number().int().min(1).max(8000),
+    height: z.number().int().min(1).max(8000),
+  }).strict()).max(4).optional(),
+};
 const ALLOWED_MESSAGE_IMAGES = new Map([
   ['image/jpeg', 'jpg'],
   ['image/png', 'png'],
   ['image/webp', 'webp'],
 ]);
+function detectMessageImageMimeType(bytes) {
+  if (bytes.length >= 8
+    && bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) {
+    return 'image/png';
+  }
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return 'image/jpeg';
+  }
+  if (bytes.length >= 12
+    && bytes.subarray(0, 4).toString('ascii') === 'RIFF'
+    && bytes.subarray(8, 12).toString('ascii') === 'WEBP') {
+    return 'image/webp';
+  }
+  return null;
+}
 const COMMUNITY_CATEGORIES = ['trading', 'investing', 'finance', 'market_discussion', 'learning', 'chart_analysis', 'questions', 'events'];
 const MESSAGE_REACTIONS = ['love', 'fire', 'funny', 'clap', 'wow'];
 const USERNAME_PATTERN = /^[a-z0-9_]{3,24}$/;
@@ -672,6 +694,7 @@ function createCommunityApi({
         reasoning: z.string().trim().max(1200).default(''),
         imageUrl: z.string().url().max(2048).nullable().optional(),
         ...IMAGE_DIMENSIONS,
+        ...IMAGE_GALLERY,
       }).safeParse(payload);
       if (!signal.success) return sendJson(res, 400, { error: 'Complete the trade idea instrument, direction, and timeframe. Price levels are optional.' });
       safePayload = signal.data;
@@ -692,6 +715,7 @@ function createCommunityApi({
         reasoning: z.array(z.string().max(500)).max(8).default([]),
         imageUrl: z.string().url().max(2048).nullable().optional(),
         ...IMAGE_DIMENSIONS,
+        ...IMAGE_GALLERY,
       }).safeParse(payload);
       if (!snapshot.success) return sendJson(res, 400, { error: 'The FXSnap analysis snapshot is incomplete or invalid.' });
       safePayload = snapshot.data;
@@ -707,6 +731,7 @@ function createCommunityApi({
           endsAt: z.string().datetime().nullable(),
         }).strict().optional(),
         ...IMAGE_DIMENSIONS,
+        ...IMAGE_GALLERY,
       }).safeParse(payload);
       if (!textPayload.success) return sendJson(res, 400, { error: 'Invalid chart image attachment.' });
       if (textPayload.data.poll) {
@@ -719,10 +744,19 @@ function createCommunityApi({
           return sendJson(res, 400, { error: 'Choose a future poll end time.' });
         }
       }
-      if (textPayload.data.imageUrl) {
+      const communityImageUrls = [...new Set([
+        ...(textPayload.data.imageUrl ? [textPayload.data.imageUrl] : []),
+        ...(textPayload.data.imageUrls || []),
+      ])];
+      if (communityImageUrls.length > 4) {
+        return sendJson(res, 400, { error: 'Community posts can include up to four images.' });
+      }
+      if (communityImageUrls.length) {
         const config = getServerConfig();
         const prefix = `${config.supabaseUrl}/storage/v1/object/public/fxsnap-community-media/${actor.accountId}/`;
-        if (!textPayload.data.imageUrl.startsWith(prefix)) return sendJson(res, 400, { error: 'Upload chart images through FXSnap Community before sharing.' });
+        if (communityImageUrls.some((imageUrl) => !imageUrl.startsWith(prefix))) {
+          return sendJson(res, 400, { error: 'Upload chart images through FXSnap Community before sharing.' });
+        }
       }
       safePayload = textPayload.data;
     }
@@ -1384,19 +1418,26 @@ function createCommunityApi({
           body: z.string().trim().max(2000),
           category: z.enum(COMMUNITY_CATEGORIES).optional(),
           imageUrl: z.string().url().max(2048).nullable().optional(),
+          ...IMAGE_GALLERY,
           ...IMAGE_DIMENSIONS,
         }).strict().safeParse(await readJsonBody(req));
         if (!input.success) return sendJson(res, 400, { error: 'Invalid Community post update.' });
-        const imageUrl = input.data.imageUrl === undefined
-          ? message.payload?.imageUrl || null
-          : input.data.imageUrl;
-        if (!input.data.body && !imageUrl) {
+        const imageUrls = input.data.imageUrls
+          ?? (input.data.imageUrl === undefined
+            ? message.payload?.imageUrls || (message.payload?.imageUrl ? [message.payload.imageUrl] : [])
+            : input.data.imageUrl ? [input.data.imageUrl] : []);
+        const imageUrl = input.data.imageUrl === undefined ? imageUrls[0] || null : input.data.imageUrl;
+        const communityImageUrls = [...new Set([...(imageUrl ? [imageUrl] : []), ...imageUrls])];
+        if (communityImageUrls.length > 4) {
+          return sendJson(res, 400, { error: 'Community posts can include up to four images.' });
+        }
+        if (!input.data.body && !communityImageUrls.length) {
           return sendJson(res, 400, { error: 'A post must contain text or an image.' });
         }
-        if (imageUrl) {
+        if (communityImageUrls.length) {
           const config = getServerConfig();
           const prefix = `${config.supabaseUrl}/storage/v1/object/public/fxsnap-community-media/${actor.accountId}/`;
-          if (!imageUrl.startsWith(prefix)) {
+          if (communityImageUrls.some((url) => !url.startsWith(prefix))) {
             return sendJson(res, 400, { error: 'Upload chart images through FXSnap Community before sharing.' });
           }
         }
@@ -1416,6 +1457,8 @@ function createCommunityApi({
             payload: {
               ...(message.payload || {}),
               imageUrl,
+              imageUrls,
+              ...(input.data.imageSizes === undefined ? {} : { imageSizes: input.data.imageSizes }),
               ...(input.data.imageWidth === undefined ? {} : { imageWidth: input.data.imageWidth }),
               ...(input.data.imageHeight === undefined ? {} : { imageHeight: input.data.imageHeight }),
             },
@@ -1596,31 +1639,35 @@ function createCommunityApi({
 
       if (pathname === '/api/community/upload' && req.method === 'POST') {
         const input = z.object({
-          mimeType: z.string().max(40),
+          mimeType: z.string().max(40).optional(),
           data: z.string().min(4).max(4_200_000),
         }).safeParse(await readJsonBody(req));
-        if (!input.success || !ALLOWED_MESSAGE_IMAGES.has(input.data.mimeType)) {
+        if (!input.success) {
           return sendJson(res, 400, { error: 'Only PNG, JPEG, or WebP images are supported.' });
         }
         const bytes = Buffer.from(input.data.data, 'base64');
         if (bytes.length < 8 || bytes.length > MAX_MESSAGE_IMAGE_BYTES) {
           return sendJson(res, 413, { error: 'Community images must be smaller than 3 MB.' });
         }
-        const signatureValid = input.data.mimeType === 'image/png'
-          ? bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
-          : input.data.mimeType === 'image/jpeg'
-            ? bytes[0] === 0xff && bytes[1] === 0xd8 && bytes.at(-2) === 0xff && bytes.at(-1) === 0xd9
-            : bytes.subarray(0, 4).toString('ascii') === 'RIFF' && bytes.subarray(8, 12).toString('ascii') === 'WEBP';
-        if (!signatureValid) return sendJson(res, 400, { error: 'The image data does not match its declared file type.' });
+        const mimeType = detectMessageImageMimeType(bytes);
+        if (!mimeType || !ALLOWED_MESSAGE_IMAGES.has(mimeType)) {
+          return sendJson(res, 400, { error: 'Only PNG, JPEG, or WebP images are supported.' });
+        }
+        if (input.data.mimeType && input.data.mimeType !== mimeType) {
+          console.warn('[Community] Image MIME metadata differs from encoded bytes; using the detected format.', {
+            reportedMimeType: input.data.mimeType,
+            detectedMimeType: mimeType,
+          });
+        }
         await rateLimit(actor.accountId, 'uploads', 10, 3600);
         const config = getServerConfig();
-        const fileName = `${actor.accountId}/${crypto.randomUUID()}.${ALLOWED_MESSAGE_IMAGES.get(input.data.mimeType)}`;
+        const fileName = `${actor.accountId}/${crypto.randomUUID()}.${ALLOWED_MESSAGE_IMAGES.get(mimeType)}`;
         const uploadResponse = await fetch(`${config.supabaseUrl}/storage/v1/object/fxsnap-community-media/${fileName}`, {
           method: 'POST',
           headers: {
             apikey: config.serviceKey,
             authorization: `Bearer ${config.serviceKey}`,
-            'content-type': input.data.mimeType,
+            'content-type': mimeType,
             'x-upsert': 'false',
           },
           body: bytes,
@@ -1907,6 +1954,7 @@ function createCommunityApi({
 
 module.exports = {
   createCommunityApi,
+  detectMessageImageMimeType,
   RULES_VERSION,
   USERNAME_PATTERN,
   isUsernameReserved,

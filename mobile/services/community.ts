@@ -7,6 +7,10 @@ import { API_BASE_URL } from '@/services/apiAuth';
 import { getFxsnapAccountApiHeaders } from '@/services/account';
 import { getSupabaseClient } from '@/services/supabase';
 import { handleCommunityPreviewRequest } from '@/services/communityPreview';
+import {
+  detectCommunityImageMimeType,
+  normalizeCommunityImageBase64,
+} from '@/services/communityImageFormat';
 
 export const COMMUNITY_RULES_VERSION = 'community-rules-v1';
 export const COMMUNITY_CATEGORIES = [
@@ -288,6 +292,8 @@ export async function updateCommunityMessage(
     body: string;
     category: CommunityCategory;
     imageUrl?: string | null;
+    imageUrls?: string[];
+    imageSizes?: Array<{ width: number; height: number }>;
     imageWidth?: number;
     imageHeight?: number;
   },
@@ -387,11 +393,23 @@ export async function unfollowCommunityMember(username: string) {
 }
 
 export async function uploadCommunityImage(asset: ImagePicker.ImagePickerAsset) {
-  const base64 = asset.base64;
-  const mimeType = asset.mimeType || 'image/jpeg';
+  const base64 = asset.base64 ? normalizeCommunityImageBase64(asset.base64) : '';
   if (!base64 || base64.length > 4_200_000) throw new Error('Choose an image under 3 MB and try again.');
-  if (!['image/jpeg', 'image/png', 'image/webp'].includes(mimeType)) {
+  const mimeType = detectCommunityImageMimeType(base64);
+  if (!mimeType) {
     throw new Error('Choose a JPEG, PNG, or WebP chart image.');
+  }
+  if (asset.mimeType && asset.mimeType !== mimeType) {
+    const fileName = asset.fileName || '';
+    const extensionSeparator = fileName.lastIndexOf('.');
+    const fileExtension = extensionSeparator >= 0 ? fileName.slice(extensionSeparator + 1).toLowerCase() : null;
+    const uriScheme = asset.uri.match(/^[a-z][a-z0-9+.-]*:/i)?.[0]?.slice(0, -1).toLowerCase() || null;
+    console.warn('[Community] Image picker metadata differs from encoded bytes; using the detected format.', {
+      reportedMimeType: asset.mimeType,
+      detectedMimeType: mimeType,
+      fileExtension,
+      uriScheme,
+    });
   }
   return request<{ imageUrl: string }>('/api/community/upload', json({ mimeType, data: base64 }));
 }
