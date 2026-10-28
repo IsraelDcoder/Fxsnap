@@ -1,5 +1,4 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as SecureStore from 'expo-secure-store';
 import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
@@ -37,7 +36,7 @@ export type PushNotificationPayload = {
 };
 
 const NOTIFICATION_SETTINGS_KEY = 'fxsnap:notificationSettings';
-const PUSH_TOKEN_KEY = 'fxsnap_pushToken';
+const PUSH_TOKEN_KEY = 'fxsnapPushToken';
 
 Notifications.setNotificationHandler({
   handleNotification: async (notification) => {
@@ -115,6 +114,10 @@ export async function requestAndRegisterPushNotifications(preferences?: Notifica
       name: 'FXSnap Community',
       importance: Notifications.AndroidImportance.DEFAULT,
     });
+    await Notifications.setNotificationChannelAsync('fxsnap-events', {
+      name: 'Live spaces',
+      importance: Notifications.AndroidImportance.HIGH,
+    });
     await Notifications.setNotificationChannelAsync('fxsnap-retention', {
       name: 'FXSnap updates',
       importance: Notifications.AndroidImportance.DEFAULT,
@@ -163,8 +166,7 @@ export async function requestAndRegisterPushNotifications(preferences?: Notifica
     throw new Error(`Push token registration failed (${response.status})${detail ? `: ${detail}` : ''}`);
   }
 
-  await SecureStore.setItemAsync(PUSH_TOKEN_KEY, token);
-  await AsyncStorage.removeItem(PUSH_TOKEN_KEY);
+  await AsyncStorage.setItem(PUSH_TOKEN_KEY, token);
   return { granted: true, token };
 }
 
@@ -231,10 +233,10 @@ export async function unregisterPushToken() {
     headers: await getOptionalFxsnapAccountApiHeaders(),
   });
   if (!response.ok) throw new Error('Unable to unregister push token');
-  await SecureStore.deleteItemAsync(PUSH_TOKEN_KEY);
+  await AsyncStorage.removeItem(PUSH_TOKEN_KEY);
 }
 
 export async function clearNotificationPreferences() {
   await AsyncStorage.removeItem(NOTIFICATION_SETTINGS_KEY);
-  await SecureStore.deleteItemAsync(PUSH_TOKEN_KEY);
+  await AsyncStorage.removeItem(PUSH_TOKEN_KEY);
 }

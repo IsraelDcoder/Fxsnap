@@ -14,7 +14,7 @@ export function canViewFullAnalysis(isSubscribed: boolean): boolean {
 }
 
 export function isPremiumFeatureRoute(path: string): boolean {
-  return PREMIUM_FEATURE_ROUTES.has(path) || isCommunityFeatureRoute(path);
+  return PREMIUM_FEATURE_ROUTES.has(path);
 }
 
 export function isCommunityFeatureRoute(path: string): boolean {
@@ -22,10 +22,11 @@ export function isCommunityFeatureRoute(path: string): boolean {
 }
 
 export function getFeatureAccessDecision(feature: string, isSubscribed: boolean): FeatureAccessDecision {
+  if (feature === 'COMMUNITY') return { allowed: true, requiresPaywall: false };
   const hasPremiumAccess = isSubscribed
     || (isDevelopmentPremiumBypassEnabled() && (feature === 'AI_ANALYSIS' || feature === 'TRADE_SETUP'));
   if (hasPremiumAccess) return { allowed: true, requiresPaywall: false };
-  if (feature === 'AI_ANALYSIS' || feature === 'TRADE_SETUP' || feature === 'STRATEGY_GENERATOR' || feature === 'COMMUNITY') {
+  if (feature === 'AI_ANALYSIS' || feature === 'TRADE_SETUP' || feature === 'STRATEGY_GENERATOR') {
     return { allowed: false, requiresPaywall: true };
   }
   return { allowed: true, requiresPaywall: false };

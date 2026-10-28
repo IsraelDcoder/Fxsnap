@@ -171,7 +171,37 @@ async function sendSupportInboxNotification() {
   })))) {
     tickets.push(...await expo.sendPushNotificationsAsync(chunk));
   }
+
   return { sent: tickets.filter((ticket) => ticket.status === 'ok').length, total: tickets.length };
+}
+
+async function sendLiveSpaceNotification(space) {
+  if (!process.env.EXPO_ACCESS_TOKEN) {
+    return { sent: 0, skipped: 'EXPO_ACCESS_TOKEN is not configured.' };
+  }
+  const { Expo, expo } = await getExpoClient();
+  const entries = (await getRegisteredTokens())
+    .filter((entry) => Expo.isExpoPushToken(entry.token));
+  if (!entries.length) return { sent: 0, skipped: 'No registered push devices are available.' };
+
+  const messages = entries.map((entry) => ({
+    to: entry.token,
+    title: `${space.title} is live`,
+    body: `Join the ongoing FXSnap audio space${space.topic ? ` about ${space.topic}` : ''}.`,
+    data: { type: 'live-space', route: '/events', spaceId: space.id },
+    channelId: 'fxsnap-events',
+    sound: 'default',
+    priority: 'high',
+  }));
+  const results = [];
+  for (const chunk of expo.chunkPushNotifications(messages)) {
+    const tickets = await expo.sendPushNotificationsAsync(chunk);
+    results.push(...tickets);
+  }
+  return {
+    sent: results.filter((ticket) => ticket.status === 'ok').length,
+    failed: results.filter((ticket) => ticket.status !== 'ok').length,
+  };
 }
 
 async function sendSupportReplyNotification(accountId) {
@@ -205,5 +235,6 @@ module.exports = {
   sendScheduledCampaigns,
   dispatchCommunityPushNotifications,
   sendSupportInboxNotification,
+  sendLiveSpaceNotification,
   sendSupportReplyNotification,
 };

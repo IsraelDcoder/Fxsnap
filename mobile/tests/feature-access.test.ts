@@ -2,14 +2,16 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { shouldGuardFeatureRoute } from '../services/featureAccess';
 
-test('free users are gated from analysis, trade setup, strategy generation, and Community', () => {
+test('free users are gated from premium features while Community remains available', () => {
   [
     '/analysis',
     '/strategy',
+  ].forEach((route) => assert.equal(shouldGuardFeatureRoute(route, false), true, route));
+  [
     '/community',
     '/community-search',
     '/community-notifications',
-  ].forEach((route) => assert.equal(shouldGuardFeatureRoute(route, false), true, route));
+  ].forEach((route) => assert.equal(shouldGuardFeatureRoute(route, false), false, route));
 });
 
 test('other app features remain accessible to free users', () => {

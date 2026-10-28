@@ -298,7 +298,7 @@ function RootLayoutNav({ fontsReady }: { fontsReady: boolean }) {
           <ActivityIndicator color={colors.buy} />
         </View>
       ) : null}
-      <CommunityInteractionPrompt enabled={!isLoading && onboardingComplete && isSubscribed && pathname !== '/onboarding' && (!isCommunityPath || communityAccessVerifiedPath === pathname)} />
+      <CommunityInteractionPrompt enabled={!isLoading && onboardingComplete && pathname !== '/onboarding' && (!isCommunityPath || communityAccessVerifiedPath === pathname)} />
       {startupReady && showStartupSplash === true ? (
         <StartupBrandReveal onComplete={finishStartupSplash} />
       ) : null}

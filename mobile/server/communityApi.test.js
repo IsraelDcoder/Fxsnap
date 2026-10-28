@@ -504,20 +504,12 @@ function makeHarness({
   };
 }
 
-test('community API requests require a verified premium subscription before accessing stored community data', async () => {
-  const harness = makeHarness({
-    requirePremiumSubscription: async (_deviceId, response) => {
-      response.statusCode = 402;
-      response.body = { code: 'PREMIUM_REQUIRED' };
-      return false;
-    },
-  });
+test('community API requests allow linked accounts without a premium subscription', async () => {
+  const harness = makeHarness();
 
   const response = await harness.call('/api/community/bootstrap');
 
-  assert.equal(response.statusCode, 402);
-  assert.deepEqual(response.body, { code: 'PREMIUM_REQUIRED' });
-  assert.equal(harness.requests.length, 0);
+  assert.equal(response.statusCode, 200);
 });
 
 test('members can load and publish replies in a post discussion', async () => {

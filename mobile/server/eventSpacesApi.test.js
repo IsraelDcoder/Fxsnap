@@ -29,6 +29,7 @@ function makeHarness({ isAdmin = true, accountId = ADMIN_ACCOUNT_ID } = {}) {
   const liveRooms = new Set();
   const liveParticipants = new Map();
   const roleChanges = [];
+  const liveSpaceNotifications = [];
   let actorState = { isAdmin, accountId };
   let idCounter = 1;
 
@@ -147,12 +148,17 @@ function makeHarness({ isAdmin = true, accountId = ADMIN_ACCOUNT_ID } = {}) {
     },
     readJsonBody: async (request) => request.body || {},
     livekit,
+    sendLiveSpaceNotification: async (space) => {
+      liveSpaceNotifications.push(space);
+      return { sent: 1 };
+    },
   });
   return {
     spaces,
     participants,
     liveRooms,
     roleChanges,
+    liveSpaceNotifications,
     setActor(next) { actorState = next; },
     async call(path, { method = 'GET', body } = {}) {
       const res = {};
@@ -305,6 +311,9 @@ test('LiveKit room lifecycle starts and ends with the event status', async () =>
   assert.equal(started.body.space.status, 'live');
   assert.match(started.body.space.livekit_room_name, /^fxsnap-event-/);
   assert.equal(harness.liveRooms.has(started.body.space.livekit_room_name), true);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(harness.liveSpaceNotifications.length, 1);
+  assert.equal(harness.liveSpaceNotifications[0].id, eventId);
 
   const ended = await harness.call(`/api/events/spaces/${eventId}/lifecycle`, {
     method: 'POST',

@@ -4527,6 +4527,7 @@ function createRequestHandler() {
     },
     sendJson,
     readJsonBody,
+    sendLiveSpaceNotification: (space) => require('./notificationService').sendLiveSpaceNotification(space),
   });
   const handleCommunityRequest = createCommunityApi({
     getActor: getCommunityActor,
