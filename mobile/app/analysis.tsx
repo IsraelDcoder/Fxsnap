@@ -4,16 +4,14 @@ import {
   Alert,
   Image,
   Platform,
-  ScrollView,
   StyleSheet,
   Text,
   View,
+  useWindowDimensions,
 } from 'react-native';
 import { AnimatedTouchableOpacity as TouchableOpacity } from '@/components/AnimatedTouchableOpacity';
-import { AmbientBackdrop } from '@/components/AmbientBackdrop';
 import Animated, {
   FadeIn,
-  FadeInDown,
   FadeInUp,
   useReducedMotion,
 } from 'react-native-reanimated';
@@ -108,6 +106,7 @@ function AnalyzingView({ ready = false }: { ready?: boolean }) {
 
 export default function AnalysisScreen() {
   const insets = useSafeAreaInsets();
+  const { height: viewportHeight } = useWindowDimensions();
   const colors = useColors();
   const reduceMotion = useReducedMotion();
   const { retry } = useLocalSearchParams<{ retry?: string }>();
@@ -122,10 +121,11 @@ export default function AnalysisScreen() {
   const [selectedPair, setSelectedPair] = useState<string | null>(retryRequest?.pair ?? null);
   const [retryingExistingChart, setRetryingExistingChart] = useState(Boolean(retryRequest));
   const [timeframeCharts, setTimeframeCharts] = useState<{ h4: TimeframeChart | null; m15: TimeframeChart | null }>({ h4: null, m15: null });
+  const [activeTimeframe, setActiveTimeframe] = useState<'h4' | 'm15'>('m15');
   const [showPairModal, setShowPairModal] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
 
-  const topPad = Platform.OS === 'web' ? 67 : insets.top;
+  const topPad = Platform.OS === 'web' ? 40 : insets.top;
   const botPad = Platform.OS === 'web' ? 34 : insets.bottom;
 
   const checkAccessBeforeAnalysis = async (feature: 'AI_ANALYSIS' | 'TRADE_SETUP' = 'AI_ANALYSIS'): Promise<boolean> => {
@@ -244,6 +244,47 @@ export default function AnalysisScreen() {
       [timeframe]: { uri: asset.uri, imageBase64, mimeType: asset.mimeType || 'image/jpeg' },
     }));
     setAnalysisError(null);
+  };
+
+  const pickTimeframeCamera = async (timeframe: 'h4' | 'm15') => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    if (Platform.OS !== 'web') {
+      const permission = await ImagePicker.requestCameraPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert('Permission needed', 'Please allow camera access.');
+        return;
+      }
+    }
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: 'images',
+      allowsEditing: false,
+      quality: 0.85,
+      base64: true,
+    });
+    if (result.canceled || !result.assets[0]) return;
+    const asset = result.assets[0];
+    const imageBase64 = asset.base64 || '';
+    if (imageBase64.length < 100 || imageBase64.length > 5_400_000) {
+      setAnalysisError('Choose a smaller chart image (under about 4 MB) so both timeframes can be analyzed together.');
+      return;
+    }
+    setTimeframeCharts((current) => ({
+      ...current,
+      [timeframe]: { uri: asset.uri, imageBase64, mimeType: asset.mimeType || 'image/jpeg' },
+    }));
+    setAnalysisError(null);
+  };
+
+  const openTimeframePicker = async (timeframe: 'h4' | 'm15') => {
+    if (mode !== 'multiTimeframe') {
+      if (!(await checkAccessBeforeAnalysis('TRADE_SETUP'))) return;
+      setMode('multiTimeframe');
+      setStage('pick');
+      setSelectedPair(null);
+      setTimeframeCharts({ h4: null, m15: null });
+    }
+    setActiveTimeframe(timeframe);
+    await pickTimeframeChart(timeframe);
   };
 
   const startMultiTimeframeMode = async () => {
@@ -413,134 +454,186 @@ export default function AnalysisScreen() {
 
 
 
-  const NoticeBanner = () => (
-    <Animated.View entering={reduceMotion ? undefined : FadeInDown.duration(400)} style={[styles.balanceBanner, { backgroundColor: colors.surface, borderColor: colors.gold }]}>
-      <Feather name="bar-chart-2" size={16} color="#FFD60A" />
-      <Text style={[styles.balanceBannerText, { color: colors.text }]}>📊 For best results, upload a clear chart image showing price action, timeframe, and visible levels.{"\n"}Blurry, cropped, or cluttered charts may lead to inaccurate analysis.</Text>
-    </Animated.View>
-  );
+  const activeTimeframeChart = timeframeCharts[activeTimeframe];
+  const captureFrameHeight = Math.min(460, Math.max(300, viewportHeight * 0.4));
+  const hasBothTimeframes = Boolean(timeframeCharts.h4 && timeframeCharts.m15);
+  const handlePrimaryCaptureAction = () => {
+    if (mode === 'multiTimeframe') {
+      void pickTimeframeCamera(activeTimeframe);
+      return;
+    }
+    if (imageUri) {
+      void handleImageSelected();
+      return;
+    }
+    void pickFromCamera();
+  };
+  const handleGalleryAction = () => {
+    if (mode === 'multiTimeframe') {
+      void pickTimeframeChart(activeTimeframe);
+      return;
+    }
+    void pickFromGallery();
+  };
+  const openFramePicker = () => {
+    if (mode === 'multiTimeframe') {
+      void pickTimeframeChart(activeTimeframe);
+      return;
+    }
+    void pickFromGallery();
+  };
 
   return (
-    <View style={[styles.container, { paddingTop: topPad, backgroundColor: colors.background }]}>
-      <AmbientBackdrop />
+    <View style={[styles.container, { paddingTop: stage === 'analyzing' || stage === 'ready' ? topPad : Math.max(insets.top, Platform.OS === 'web' ? 38 : 0), backgroundColor: colors.background }]}>
       {stage !== 'analyzing' && stage !== 'ready' && (
-        <Animated.View entering={reduceMotion ? undefined : FadeIn.duration(300)} style={styles.header}>
-          <TouchableOpacity style={[styles.backBtn, { backgroundColor: colors.card, borderColor: colors.cardBorder }]} onPress={() => router.replace('/home')}>
-                  <Feather name="arrow-left" size={22} color={colors.text} />
+        <Animated.View entering={reduceMotion ? undefined : FadeIn.duration(300)} style={styles.analysisHeader}>
+          <View style={styles.analysisHeaderCopy}>
+            <Text style={[styles.analysisHeaderTitle, { color: colors.text }]}>New Analysis</Text>
+            <Text style={[styles.analysisHeaderSubtitle, { color: colors.textSecondary }]}>Add a chart to get AI insights</Text>
+          </View>
+          <TouchableOpacity
+            style={[styles.analysisCloseButton, { backgroundColor: colors.surface }]}
+            onPress={() => router.replace('/(tabs)/home')}
+            accessibilityRole="button"
+            accessibilityLabel="Close analysis"
+          >
+            <Feather name="x" size={22} color={colors.text} />
           </TouchableOpacity>
-          <Text style={[styles.headerTitle, { color: colors.text }]}>Chart Analysis</Text>
-          <View style={{ width: 44 }} />
         </Animated.View>
       )}
 
-      {stage === 'pick' && (
-        <Animated.View entering={reduceMotion ? undefined : FadeInUp.delay(100).duration(500)} style={[styles.content, { paddingBottom: botPad + 24 }]}>
+      {(stage === 'pick' || stage === 'preview') && (
+        <Animated.ScrollView
+          entering={reduceMotion ? undefined : FadeInUp.delay(100).duration(500)}
+          style={styles.analysisComposerScroll}
+          contentContainerStyle={[styles.analysisComposer, { paddingBottom: botPad + 8 }]}
+          showsVerticalScrollIndicator={false}
+        >
           <View style={[styles.modeSwitcher, { backgroundColor: colors.surface, borderColor: colors.cardBorder }]}>
             <TouchableOpacity accessibilityRole="tab" accessibilityState={{ selected: mode === 'quick' }} onPress={startQuickMode} style={[styles.modeButton, mode === 'quick' && { backgroundColor: colors.card }]}>
-              <Text style={[styles.modeButtonText, { color: mode === 'quick' ? colors.text : colors.textMuted }]}>Quick Analysis</Text>
+              <Text style={[styles.modeButtonText, { color: mode === 'quick' ? colors.text : colors.textMuted }]}>Quick</Text>
             </TouchableOpacity>
             <TouchableOpacity accessibilityRole="tab" accessibilityState={{ selected: mode === 'multiTimeframe' }} onPress={startMultiTimeframeMode} style={[styles.modeButton, mode === 'multiTimeframe' && { backgroundColor: colors.card }]}>
               <Text style={[styles.modeButtonText, { color: mode === 'multiTimeframe' ? colors.text : colors.textMuted }]}>Multi-Timeframe</Text>
             </TouchableOpacity>
           </View>
 
-          {mode === 'quick' ? (
-            <>
-              <View style={styles.uploadHero}>
-                <View style={[styles.uploadIcon, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
-                  <Feather name="image" size={48} color={colors.textMuted} />
-                </View>
-                <Text style={[styles.uploadTitle, { color: colors.text }]}>Quick Analysis</Text>
-                <Text style={[styles.uploadSubtext, { color: colors.textSecondary }]}>Upload one chart for a fast setup read.</Text>
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel={mode === 'multiTimeframe' ? `Chart preview for ${activeTimeframe === 'h4' ? 'H4 context' : 'M15 entry'}. Tap to choose an image.` : imageUri ? 'Replace chart image' : 'Choose chart image'}
+            onPress={openFramePicker}
+            style={[
+              styles.captureFrame,
+              { height: captureFrameHeight, borderColor: colors.cardBorder, backgroundColor: colors.card },
+            ]}
+          >
+            {mode === 'multiTimeframe' && activeTimeframeChart ? (
+              <Image source={{ uri: activeTimeframeChart.uri }} style={styles.captureImage} resizeMode="contain" />
+            ) : mode === 'quick' && imageUri ? (
+              <Image source={{ uri: imageUri }} style={styles.captureImage} resizeMode="contain" />
+            ) : (
+              <View style={styles.framePlaceholder}>
+                <Feather name="image" size={42} color={colors.textSecondary} />
+                <Text style={[styles.framePlaceholderText, { color: colors.textSecondary }]}>Align your chart in frame</Text>
               </View>
+            )}
+            <View pointerEvents="none" style={[styles.frameCorner, styles.frameCornerTopLeft, { borderColor: colors.textSecondary }]} />
+            <View pointerEvents="none" style={[styles.frameCorner, styles.frameCornerTopRight, { borderColor: colors.textSecondary }]} />
+            <View pointerEvents="none" style={[styles.frameCorner, styles.frameCornerBottomLeft, { borderColor: colors.textSecondary }]} />
+            <View pointerEvents="none" style={[styles.frameCorner, styles.frameCornerBottomRight, { borderColor: colors.textSecondary }]} />
+          </TouchableOpacity>
 
-              <View style={styles.pickActions}>
-                <TouchableOpacity style={[styles.pickBtn, { backgroundColor: colors.card, borderColor: colors.cardBorder }]} onPress={pickFromCamera}>
-                  <View style={[styles.pickBtnIcon, { backgroundColor: colors.surface }]}><Feather name="camera" size={28} color={colors.text} /></View>
-                  <Text style={[styles.pickBtnLabel, { color: colors.text }]}>Camera</Text>
-                  <Text style={[styles.pickBtnSub, { color: colors.textSecondary }]}>Take a photo now</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={[styles.pickBtn, { backgroundColor: colors.card, borderColor: colors.cardBorder }]} onPress={pickFromGallery}>
-                  <View style={[styles.pickBtnIcon, { backgroundColor: colors.surface }]}><Feather name="image" size={28} color={colors.text} /></View>
-                  <Text style={[styles.pickBtnLabel, { color: colors.text }]}>Gallery</Text>
-                  <Text style={[styles.pickBtnSub, { color: colors.textSecondary }]}>Choose existing chart</Text>
-                </TouchableOpacity>
-              </View>
-              <Text style={[styles.analysisDisclaimer, { color: colors.textMuted }]}>The AI analyzes only the uploaded chart image. This app does not provide financial advice. Trade at your own risk.</Text>
-            </>
-          ) : (
-            <View style={styles.multiWorkflow}>
-              <View style={styles.multiIntro}>
-                <Text style={[styles.multiTitle, { color: colors.text }]}>Multi-Timeframe Analysis</Text>
-                <Text style={[styles.uploadSubtext, { color: colors.textSecondary }]}>Analyze your setup with 4H structure and 15M entry confirmation.</Text>
-              </View>
+          {mode === 'multiTimeframe' ? (
+            <View style={styles.timeframeRow}>
+              {(['h4', 'm15'] as const).map((timeframe) => {
+                const chart = timeframeCharts[timeframe];
+                const label = timeframe === 'h4' ? 'H4 context' : 'M15 entry';
+                const selected = activeTimeframe === timeframe;
+                return (
+                  <TouchableOpacity
+                    key={timeframe}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${chart ? 'Replace' : 'Add'} ${label} chart`}
+                    onPress={() => void openTimeframePicker(timeframe)}
+                    style={[
+                      styles.timeframeTile,
+                      {
+                        backgroundColor: colors.card,
+                        borderColor: selected ? colors.buy : colors.cardBorder,
+                      },
+                    ]}
+                  >
+                    <Text style={[styles.timeframeTileTitle, { color: colors.text }]}>{label}</Text>
+                    <View style={[styles.timeframeTileDrop, { borderColor: colors.cardBorder }]}>
+                      {chart ? (
+                        <Image source={{ uri: chart.uri }} style={styles.timeframeTileImage} resizeMode="cover" />
+                      ) : (
+                        <>
+                          <Feather name="plus" size={25} color={colors.textSecondary} />
+                          <Text style={[styles.timeframeTilePrompt, { color: colors.textSecondary }]}>Add chart</Text>
+                        </>
+                      )}
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          ) : null}
 
-              <TouchableOpacity style={[styles.pairSelector, { backgroundColor: colors.card, borderColor: colors.cardBorder }]} onPress={() => setShowPairModal(true)}>
-                <View>
-                  <Text style={[styles.pairSelectorLabel, { color: colors.textMuted }]}>SELECT PAIR</Text>
-                  <Text style={[styles.pairSelectorValue, { color: selectedPair ? colors.text : colors.textSecondary }]}>{selectedPair || 'Choose an instrument'}</Text>
-                </View>
-                <Feather name="chevron-right" size={20} color={colors.textSecondary} />
-              </TouchableOpacity>
-
-              <ScrollView style={styles.multiUploadList} contentContainerStyle={styles.multiUploadContent} showsVerticalScrollIndicator={false}>
-                {(['h4', 'm15'] as const).map((timeframe) => {
-                  const chart = timeframeCharts[timeframe];
-                  const label = timeframe === 'h4' ? '4H' : '15M';
-                  return (
-                    <TouchableOpacity
-                      key={timeframe}
-                      accessibilityRole="button"
-                      accessibilityLabel={`${chart ? 'Replace' : 'Upload'} ${label} chart`}
-                      onPress={() => void pickTimeframeChart(timeframe)}
-                      style={[styles.timeframeCard, { backgroundColor: colors.card, borderColor: chart ? colors.buy : colors.cardBorder }]}
-                    >
-                      <View style={styles.timeframeCardTop}>
-                        <View style={[styles.timeframeBadge, { backgroundColor: colors.surface }]}><Text style={[styles.timeframeBadgeText, { color: colors.text }]}>{label}</Text></View>
-                        {chart ? <Image source={{ uri: chart.uri }} style={styles.timeframePreview} resizeMode="cover" /> : <Feather name="camera" size={19} color={colors.textSecondary} />}
-                      </View>
-                      <Text style={[styles.timeframeCardTitle, { color: colors.text }]}>{chart ? `${label} chart added` : `Upload ${label} chart`}</Text>
-                      <Text style={[styles.timeframeCardSubtitle, { color: colors.textSecondary }]}>{chart ? 'Tap to replace image' : timeframe === 'h4' ? 'Higher-timeframe trend and structure' : 'Entry setup and confirmation'}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </ScrollView>
-
+          {mode === 'multiTimeframe' ? (
+            <View style={styles.multiControls}>
               <TouchableOpacity
                 accessibilityRole="button"
-                disabled={!selectedPair || !timeframeCharts.h4 || !timeframeCharts.m15}
-                onPress={() => void handleMultiTimeframeAnalysis()}
-                style={[styles.analyzeBtn, { backgroundColor: colors.primary, opacity: selectedPair && timeframeCharts.h4 && timeframeCharts.m15 ? 1 : 0.45 }]}
+                onPress={() => setShowPairModal(true)}
+                style={[styles.pairSelectorCompact, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}
               >
-                <Feather name="zap" size={18} color={colors.primaryForeground} />
-                <Text style={[styles.analyzeBtnText, { color: colors.primaryForeground }]}>Analyze Setup</Text>
+                <Text style={[styles.pairSelectorCompactText, { color: selectedPair ? colors.text : colors.textSecondary }]}>
+                  {selectedPair || 'Select pair'}
+                </Text>
+                <Feather name="chevron-down" size={17} color={colors.textSecondary} />
               </TouchableOpacity>
-              {analysisError ? <Text style={styles.errorText}>{analysisError}</Text> : null}
+              {hasBothTimeframes ? (
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  disabled={!selectedPair}
+                  onPress={() => void handleMultiTimeframeAnalysis()}
+                  style={[styles.multiAnalyzeButton, { backgroundColor: colors.primary, opacity: selectedPair ? 1 : 0.5 }]}
+                >
+                  <Feather name="zap" size={16} color={colors.primaryForeground} />
+                  <Text style={[styles.multiAnalyzeButtonText, { color: colors.primaryForeground }]}>Analyze setup</Text>
+                </TouchableOpacity>
+              ) : null}
             </View>
-          )}
-        </Animated.View>
-      )}
+          ) : null}
 
-      {stage === 'preview' && imageUri && (
-        <Animated.View entering={reduceMotion ? undefined : FadeIn.duration(400)} style={[styles.content, { paddingBottom: botPad + 24 }]}>
-          <NoticeBanner />
-          <View style={[styles.previewContainer, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}> 
-            <Image source={{ uri: imageUri }} style={styles.previewImage} resizeMode="cover" />
-          </View>
-          <View style={styles.previewActions}>
-            <TouchableOpacity style={[styles.changeBtn, { backgroundColor: colors.card, borderColor: colors.cardBorder }]} onPress={() => setStage('pick')}>
-                      <Feather name="refresh-cw" size={16} color={colors.textSecondary} />
-              <Text style={[styles.changeBtnText, { color: colors.textSecondary }]}>Change Image</Text>
+          <View style={styles.captureControls}>
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel={mode === 'multiTimeframe' ? `Choose ${activeTimeframe === 'h4' ? 'H4' : 'M15'} chart from gallery` : 'Choose chart from gallery'}
+              onPress={handleGalleryAction}
+              style={styles.galleryButton}
+            >
+              <View style={[styles.galleryIconCircle, { backgroundColor: colors.surface }]}>
+                <Feather name="image" size={25} color={colors.text} />
+              </View>
+              <Text style={[styles.galleryLabel, { color: colors.textSecondary }]}>Gallery</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={[styles.analyzeBtn, { backgroundColor: colors.primary }]} onPress={handleImageSelected}>
-              <Feather name="zap" size={18} color={colors.primaryForeground} />
-              <Text style={[styles.analyzeBtnText, { color: colors.primaryForeground }]}>{retryingExistingChart ? 'Retry Analysis' : 'Analyse Chart'}</Text>
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel={mode === 'multiTimeframe' ? `Take ${activeTimeframe === 'h4' ? 'H4' : 'M15'} chart photo` : imageUri ? 'Analyze chart' : 'Take chart photo'}
+              onPress={handlePrimaryCaptureAction}
+              style={[styles.shutterOuter, { borderColor: colors.text }]}
+            >
+              <View style={[styles.shutterInner, { backgroundColor: colors.text }]} />
             </TouchableOpacity>
+            <View style={styles.captureControlSpacer} />
           </View>
-          {analysisError && (
-            <Text style={styles.errorText}>{analysisError}</Text>
-          )}
-        </Animated.View>
+
+          <Text style={[styles.analysisDisclaimer, { color: colors.textSecondary }]}>
+            Educational analysis, not financial advice.
+          </Text>
+          {analysisError ? <Text style={styles.errorText}>{analysisError}</Text> : null}
+        </Animated.ScrollView>
       )}
 
       {(stage === 'analyzing' || stage === 'ready') && <AnalyzingView ready={stage === 'ready'} />}
@@ -556,136 +649,68 @@ export default function AnalysisScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000000' },
-  header: {
+  analysisHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingVertical: 12,
+    paddingHorizontal: 18,
+    paddingTop: 16,
+    paddingBottom: 10,
   },
-  backBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
-    backgroundColor: '#1A1A1A',
+  analysisHeaderCopy: { flex: 1, gap: 2 },
+  analysisHeaderTitle: { fontSize: 28, lineHeight: 34, letterSpacing: -0.6, fontFamily: 'Inter_700Bold' },
+  analysisHeaderSubtitle: { fontSize: 15, lineHeight: 21, fontFamily: 'Inter_500Medium' },
+  analysisCloseButton: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#2A2A2A',
+    marginLeft: 12,
   },
-  headerTitle: { fontSize: 17, fontFamily: 'Inter_600SemiBold', color: '#FFFFFF' },
-  content: { flex: 1, paddingHorizontal: 20, paddingTop: 12, gap: 20 },
-  modeSwitcher: { flexDirection: 'row', minHeight: 46, padding: 4, borderWidth: 1, borderRadius: 11, gap: 4 },
-  modeButton: { flex: 1, minHeight: 36, alignItems: 'center', justifyContent: 'center', borderRadius: 8 },
-  modeButtonText: { fontSize: 13, fontFamily: 'Inter_600SemiBold' },
-  multiWorkflow: { flex: 1, minHeight: 0, gap: 12 },
-  multiIntro: { alignItems: 'center', gap: 4, paddingVertical: 4 },
-  multiTitle: { fontSize: 20, fontFamily: 'Inter_700Bold', textAlign: 'center' },
-  pairSelector: { minHeight: 58, borderWidth: 1, borderRadius: 10, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  pairSelectorLabel: { fontSize: 10, fontFamily: 'Inter_600SemiBold', marginBottom: 3 },
-  pairSelectorValue: { fontSize: 15, fontFamily: 'Inter_600SemiBold' },
-  multiUploadList: { flex: 1, minHeight: 0 },
-  multiUploadContent: { gap: 10, paddingBottom: 2 },
-  timeframeCard: { minHeight: 126, borderWidth: 1, borderRadius: 11, padding: 14, justifyContent: 'center', gap: 9 },
-  timeframeCardTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  timeframeBadge: { minWidth: 46, height: 28, paddingHorizontal: 8, borderRadius: 7, alignItems: 'center', justifyContent: 'center' },
-  timeframeBadgeText: { fontSize: 13, fontFamily: 'Inter_700Bold' },
-  timeframePreview: { width: 64, height: 44, borderRadius: 6 },
-  timeframeCardTitle: { fontSize: 15, fontFamily: 'Inter_600SemiBold' },
-  timeframeCardSubtitle: { fontSize: 12, fontFamily: 'Inter_400Regular' },
-  balanceBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    backgroundColor: '#1A1600',
-    borderRadius: 12,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: '#3D3400',
-  },
-  balanceBannerText: {
-    flex: 1,
-    fontSize: 13,
-    fontFamily: 'Inter_400Regular',
-    color: '#C7C7CC',
-    lineHeight: 19,
-  },
-  uploadHero: { alignItems: 'center', gap: 16, paddingVertical: 28 },
-  uploadIcon: {
-    width: 100,
-    height: 100,
-    borderRadius: 28,
-    backgroundColor: '#1A1A1A',
-    borderWidth: 2,
-    borderColor: '#2A2A2A',
+  analysisComposerScroll: { flex: 1 },
+  analysisComposer: { flexGrow: 1, paddingHorizontal: 18, paddingTop: 10, gap: 10 },
+  modeSwitcher: { flexDirection: 'row', minHeight: 44, padding: 4, borderWidth: 1, borderRadius: 22, gap: 3 },
+  modeButton: { flex: 1, minHeight: 34, alignItems: 'center', justifyContent: 'center', borderRadius: 18 },
+  modeButtonText: { fontSize: 14, fontFamily: 'Inter_600SemiBold' },
+  captureFrame: {
+    width: '100%',
+    minHeight: 280,
+    borderWidth: 1.5,
     borderStyle: 'dashed',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  uploadTitle: { fontSize: 26, fontFamily: 'Inter_700Bold', color: '#FFFFFF' },
-  uploadSubtext: {
-    fontSize: 15,
-    fontFamily: 'Inter_400Regular',
-    color: '#8E8E93',
-    textAlign: 'center',
-    lineHeight: 22,
-    paddingHorizontal: 16,
-  },
-  pickActions: { flexDirection: 'row', gap: 14 },
-  pickBtn: {
-    flex: 1,
-    backgroundColor: '#1A1A1A',
     borderRadius: 18,
-    padding: 20,
-    alignItems: 'center',
-    gap: 10,
-    borderWidth: 1,
-    borderColor: '#2A2A2A',
-  },
-  pickBtnIcon: {
-    width: 60,
-    height: 60,
-    borderRadius: 18,
-    backgroundColor: '#2A2A2A',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  pickBtnLabel: { fontSize: 16, fontFamily: 'Inter_600SemiBold', color: '#FFFFFF' },
-  pickBtnSub: { fontSize: 12, fontFamily: 'Inter_400Regular', color: '#8E8E93', textAlign: 'center' },
-  analysisDisclaimer: { fontSize: 12, fontFamily: 'Inter_400Regular', color: '#48484A', textAlign: 'center' },
-  errorText: { fontSize: 13, fontFamily: 'Inter_500Medium', color: '#FF5252', textAlign: 'center', marginTop: 12 },
-  previewContainer: {
-    borderRadius: 20,
     overflow: 'hidden',
-    height: 300,
-    backgroundColor: '#1A1A1A',
-    borderWidth: 1,
-    borderColor: '#2A2A2A',
-  },
-  previewImage: { width: '100%', height: '100%' },
-  previewActions: { gap: 12 },
-  changeBtn: {
-    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
-    height: 50,
-    borderRadius: 14,
-    backgroundColor: '#1A1A1A',
-    borderWidth: 1,
-    borderColor: '#2A2A2A',
   },
-  changeBtnText: { fontSize: 15, fontFamily: 'Inter_500Medium', color: '#8E8E93' },
-  analyzeBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-    height: 58,
-    borderRadius: 16,
-    backgroundColor: '#FFFFFF',
-  },
-  analyzeBtnText: { fontSize: 17, fontFamily: 'Inter_700Bold', color: '#000' },
+  captureImage: { width: '100%', height: '100%', position: 'absolute' },
+  framePlaceholder: { alignItems: 'center', justifyContent: 'center', gap: 10 },
+  framePlaceholderText: { fontSize: 15, lineHeight: 21, fontFamily: 'Inter_500Medium' },
+  frameCorner: { position: 'absolute', width: 25, height: 25 },
+  frameCornerTopLeft: { top: 20, left: 20, borderTopWidth: 3, borderLeftWidth: 3, borderTopLeftRadius: 8 },
+  frameCornerTopRight: { top: 20, right: 20, borderTopWidth: 3, borderRightWidth: 3, borderTopRightRadius: 8 },
+  frameCornerBottomLeft: { bottom: 20, left: 20, borderBottomWidth: 3, borderLeftWidth: 3, borderBottomLeftRadius: 8 },
+  frameCornerBottomRight: { bottom: 20, right: 20, borderBottomWidth: 3, borderRightWidth: 3, borderBottomRightRadius: 8 },
+  timeframeRow: { flexDirection: 'row', gap: 10 },
+  timeframeTile: { flex: 1, minWidth: 0, minHeight: 124, borderRadius: 18, padding: 12, borderWidth: 1, gap: 10 },
+  timeframeTileTitle: { fontSize: 15, lineHeight: 20, fontFamily: 'Inter_700Bold' },
+  timeframeTileDrop: { flex: 1, minHeight: 68, borderRadius: 12, borderWidth: 1.5, borderStyle: 'dashed', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', gap: 1 },
+  timeframeTilePrompt: { fontSize: 12, lineHeight: 17, fontFamily: 'Inter_500Medium' },
+  timeframeTileImage: { width: '100%', height: '100%' },
+  multiControls: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  pairSelectorCompact: { flex: 1, minHeight: 40, borderWidth: 1, borderRadius: 12, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  pairSelectorCompactText: { fontSize: 13, fontFamily: 'Inter_600SemiBold' },
+  multiAnalyzeButton: { minHeight: 40, borderRadius: 12, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+  multiAnalyzeButtonText: { fontSize: 12, fontFamily: 'Inter_700Bold' },
+  captureControls: { minHeight: 94, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 32, paddingTop: 2 },
+  galleryButton: { width: 72, alignItems: 'center', gap: 4 },
+  galleryIconCircle: { width: 60, height: 60, borderRadius: 30, alignItems: 'center', justifyContent: 'center' },
+  galleryLabel: { fontSize: 12, lineHeight: 17, fontFamily: 'Inter_500Medium' },
+  shutterOuter: { width: 80, height: 80, borderWidth: 4, borderRadius: 40, alignItems: 'center', justifyContent: 'center', padding: 4 },
+  shutterInner: { width: '100%', height: '100%', borderRadius: 36 },
+  captureControlSpacer: { width: 72 },
+  analysisDisclaimer: { fontSize: 12, lineHeight: 17, fontFamily: 'Inter_500Medium', textAlign: 'center', marginBottom: 2 },
+  errorText: { fontSize: 13, fontFamily: 'Inter_500Medium', color: '#FF5252', textAlign: 'center', marginTop: 12 },
   // ── Analyzing stage ──
   analyzingContainer: {
     flex: 1,

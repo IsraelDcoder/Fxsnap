@@ -75,7 +75,7 @@ export interface AnalysisResult {
     stopLoss: number;
     takeProfit1: number;
     takeProfit2: number | null;
-    riskReward: number;
+    riskReward: number | null;
   } | null;
   verdict?: 'TRADE_PLAN' | 'CONDITIONAL_PLAN' | 'NO_TRADE';
   conviction?: 'HIGH' | 'MEDIUM' | 'LOW' | null;

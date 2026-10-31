@@ -12,14 +12,16 @@ import {
 } from 'react-native';
 import { AnimatedTouchableOpacity as TouchableOpacity } from '@/components/AnimatedTouchableOpacity';
 import { GlassView, isLiquidGlassAvailable } from 'expo-glass-effect';
+import { BlurView } from 'expo-blur';
 import { AmbientBackdrop } from '@/components/AmbientBackdrop';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { router, useFocusEffect } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import Animated, {
   cancelAnimation,
   Easing,
+  FadeIn,
   FadeInDown,
   FadeOutUp,
   useAnimatedStyle,
@@ -38,6 +40,7 @@ import { getDeviceId } from '@/services/apiAuth';
 import type { ProtectedFeature } from '@/services/featureAccess';
 
 export default function HomeDashboard({ previewMode = false }: { previewMode?: boolean }) {
+  const { exitOffer } = useLocalSearchParams<{ exitOffer?: string }>();
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const { width: viewportWidth } = useWindowDimensions();
@@ -45,6 +48,8 @@ export default function HomeDashboard({ previewMode = false }: { previewMode?: b
   const reduceMotion = useReducedMotion();
   const { settings, savedBriefs, saveBriefCard, deleteBriefCard, checkFeatureAccess } = useApp();
   const [sessionModalVisible, setSessionModalVisible] = useState(false);
+  const [exitOfferVisible, setExitOfferVisible] = useState(false);
+  const [exitOfferSecondsRemaining, setExitOfferSecondsRemaining] = useState(10 * 60 - 1);
   const [toolsExpanded, setToolsExpanded] = useState(false);
   const [sessionState, setSessionState] = useState(getTradingSessionState());
   const [briefState, setBriefState] = useState<DailyBriefState | null>(null);
@@ -56,6 +61,23 @@ export default function HomeDashboard({ previewMode = false }: { previewMode?: b
   const [savingBrief, setSavingBrief] = useState(false);
   const saveInFlight = useRef(false);
   const briefRequestId = useRef(0);
+
+  useEffect(() => {
+    if (exitOffer === '1') setExitOfferVisible(true);
+  }, [exitOffer]);
+
+  useEffect(() => {
+    if (!exitOfferVisible) return;
+    const timer = setInterval(() => {
+      setExitOfferSecondsRemaining((remaining) => Math.max(0, remaining - 1));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [exitOfferVisible]);
+
+  const closeExitOffer = () => {
+    setExitOfferVisible(false);
+    router.replace('/(tabs)/home');
+  };
 
   const firstName = settings.displayName.trim().split(/\s+/)[0] || 'Trader';
   const greeting = getTimeGreeting();
@@ -413,6 +435,68 @@ export default function HomeDashboard({ previewMode = false }: { previewMode?: b
             })}
             <Text style={[styles.modalFootnote, { color: colors.textMuted }]}>Hours use each market’s local timezone, including daylight-saving changes. Local holidays are not reflected.</Text>
           </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={exitOfferVisible}
+        transparent
+        animationType="none"
+        statusBarTranslucent
+        onRequestClose={closeExitOffer}
+      >
+        <View style={styles.exitOfferBackdrop}>
+          <BlurView
+            intensity={55}
+            tint={colors.text === '#FFFFFF' ? 'dark' : 'light'}
+            style={StyleSheet.absoluteFill}
+          />
+          <View style={styles.exitOfferScrim} />
+          <Animated.View
+            entering={reduceMotion ? undefined : FadeInDown.delay(160).duration(700).springify().damping(17)}
+            style={[styles.exitOfferCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}
+          >
+            <TouchableOpacity
+              onPress={closeExitOffer}
+              style={[styles.exitOfferClose, { backgroundColor: colors.surface }]}
+              accessibilityRole="button"
+              accessibilityLabel="Close special offer"
+            >
+              <Feather name="x" size={18} color={colors.textSecondary} />
+            </TouchableOpacity>
+            <Animated.View
+              entering={reduceMotion ? undefined : FadeIn.delay(320).duration(550)}
+              style={[styles.exitOfferIcon, { backgroundColor: `${colors.buy}20` }]}
+            >
+              <Feather name="gift" size={27} color={colors.buy} />
+            </Animated.View>
+            <Text style={[styles.exitOfferEyebrow, { color: colors.buy }]}>WAIT! ARE YOU SURE?</Text>
+            <Text style={[styles.exitOfferTitle, { color: colors.text }]}>
+              How about 50% off your first year if you start today?
+            </Text>
+            <Text style={[styles.exitOfferCopy, { color: colors.textSecondary }]}>
+              Keep your full FXSnap Pro toolkit and lock in the best-value plan.
+            </Text>
+            <View style={[styles.exitOfferTimer, { backgroundColor: `${colors.buy}16`, borderColor: `${colors.buy}55` }]}>
+              <Feather name="clock" size={16} color={colors.buy} />
+              <Text style={[styles.exitOfferTimerText, { color: colors.buy }]}>
+                Offer expires in {String(Math.floor(exitOfferSecondsRemaining / 60)).padStart(2, '0')}:{String(exitOfferSecondsRemaining % 60).padStart(2, '0')}
+              </Text>
+            </View>
+            <TouchableOpacity
+              onPress={closeExitOffer}
+              style={[styles.exitOfferButton, { backgroundColor: colors.text }]}
+              accessibilityRole="button"
+              accessibilityLabel="Continue with the special offer"
+              accessibilityHint="This preview offer does not start a purchase"
+            >
+              <Text style={[styles.exitOfferButtonText, { color: colors.background }]}>Continue with offer</Text>
+              <Feather name="arrow-right" size={19} color={colors.background} />
+            </TouchableOpacity>
+            <Text style={[styles.exitOfferFinePrint, { color: colors.textMuted }]}>
+              Offer preview · Purchase activation will be added with the discounted store product.
+            </Text>
+          </Animated.View>
         </View>
       </Modal>
     </View>
@@ -1028,6 +1112,19 @@ const styles = StyleSheet.create({
   aiNavLabel: { fontSize: 9, fontFamily: 'Inter_700Bold' },
   modalScrim: { flex: 1, backgroundColor: 'rgba(0,0,0,0.68)', justifyContent: 'flex-end', padding: 16 },
   sessionModal: { borderWidth: 1, borderRadius: 20, padding: 18, paddingBottom: 23 },
+  exitOfferBackdrop: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 20 },
+  exitOfferScrim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.48)' },
+  exitOfferCard: { width: '100%', maxWidth: 390, alignItems: 'center', borderWidth: 1, borderRadius: 26, paddingHorizontal: 22, paddingTop: 30, paddingBottom: 20, gap: 12, overflow: 'hidden', elevation: 22, shadowColor: '#000000', shadowOpacity: 0.32, shadowRadius: 32, shadowOffset: { width: 0, height: 18 } },
+  exitOfferClose: { position: 'absolute', top: 12, right: 12, width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center', zIndex: 1 },
+  exitOfferIcon: { width: 60, height: 60, borderRadius: 22, alignItems: 'center', justifyContent: 'center', marginBottom: 2 },
+  exitOfferEyebrow: { fontSize: 11, lineHeight: 16, letterSpacing: 1.5, fontFamily: 'Inter_800ExtraBold', textAlign: 'center' },
+  exitOfferTitle: { fontSize: 25, lineHeight: 31, fontFamily: 'Inter_800ExtraBold', textAlign: 'center' },
+  exitOfferCopy: { fontSize: 13, lineHeight: 19, fontFamily: 'Inter_400Regular', textAlign: 'center' },
+  exitOfferTimer: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, borderRadius: 14, paddingHorizontal: 14, marginTop: 4 },
+  exitOfferTimerText: { fontSize: 13, lineHeight: 18, fontFamily: 'Inter_700Bold' },
+  exitOfferButton: { width: '100%', minHeight: 54, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 17, paddingHorizontal: 18, marginTop: 2 },
+  exitOfferButtonText: { fontSize: 15, lineHeight: 21, fontFamily: 'Inter_700Bold' },
+  exitOfferFinePrint: { fontSize: 10, lineHeight: 14, fontFamily: 'Inter_400Regular', textAlign: 'center' },
   modalHeading: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
   modalSubtitle: { marginTop: 4, fontSize: 12, fontFamily: 'Inter_400Regular' },
   modalClose: { width: 38, height: 38, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },

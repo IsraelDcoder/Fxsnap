@@ -9,13 +9,13 @@ FXSnap is an educational analysis tool, not a broker, signal service, or financi
 1. **Set up a personal workspace.** Onboarding introduces the app and preferences. The home dashboard brings together quick actions, market-session context, daily insights, and an account/risk snapshot.
 2. **Choose a chart-analysis mode.** Start a quick analysis with one chart, selecting an image from the gallery or taking a photo, or use Multi-Timeframe analysis with higher-timeframe (H4) context and a lower-timeframe (M15) entry chart.
 3. **Get a chart-grounded read.** The backend sends the image to a vision model and normalizes the response into a consistent result. The analysis can describe the visible instrument and timeframe, chart quality, latest visible price, price action, trend and structure, support/resistance, volatility, indicators when visible, and limitations.
-4. **Review candidate levels separately from trade readiness.** When supported by the chart, results can include an entry zone, invalidation/stop, one or two targets, and risk/reward calculated from the same prices. A directional read or candidate setup is not automatically an actionable trade. Missing evidence, conflicting structure, stale or unreadable screenshot details, invalid price geometry, and insufficient risk/reward can all leave a result marked no-trade.
+4. **Review candidate levels separately from trade readiness.** When supported by the chart, results can include an entry zone, invalidation/stop, one or two targets, and risk/reward recalculated from entry, stop, and TP1 (using conservative range edges). A model-provided ratio is not trusted on its own, and the server will not invent a stop buffer when the screenshot does not support one. A directional read or candidate setup is not automatically an entry signal. Missing evidence, conflicting structure, stale or unreadable screenshot details, invalid price geometry, and insufficient risk/reward can all leave a result marked no-trade.
 5. **Use or keep the result.** Inspect the analysis and insights, review the chart with its annotated levels, share an analysis card, share an eligible post to Community, save the analysis to history, or copy levels for personal review.
 6. **Continue the workflow.** Use saved analyses and strategies, planning and risk tools, market information, learning content, and—when enabled—Community to support an ongoing trading routine.
 
 ## Analysis principles
 
-FXSnap aims to return a useful, complete explanation of what the submitted chart supports, including uncertainty and missing fields. It does not invent prices or fill gaps with assumptions just to make a result look complete.
+FXSnap aims to return a useful, complete explanation of what the submitted chart supports, including uncertainty and missing fields. It does not invent prices or fill gaps with assumptions just to make a result look complete. No screenshot-based system can guarantee perfect trading accuracy; verify levels and freshness against current market conditions.
 
 - The submitted chart is the evidence source. A selected instrument is only a hint and does not override what is visible.
 - Screenshot-derived prices are not verified live quotes. Candle timestamps, current-price markers, and whether the latest candle is still forming may be unclear.
@@ -98,7 +98,7 @@ cd mobile
 npm run dev -- --web
 ```
 
-For local Premium chart-analysis testing without an active subscription, run the API and app in separate terminals. Set `NODE_ENV=development` and `FXSNAP_DEV_ANALYSIS_PREMIUM_BYPASS=true` only on the local API process; set `EXPO_PUBLIC_DEV_PREMIUM_BYPASS=true` and `EXPO_PUBLIC_API_BASE_URL=http://localhost:3000` for the Expo dev server. The API still requires a configured `OPENROUTER_API_KEY`. The bypass applies only to chart analysis, is disabled outside development builds/server mode, and does not unlock strategy generation or affect production.
+Chart analysis and trade setup require an active Premium subscription in both development and production builds. The client does not provide a development bypass for these features; an unsubscribed user is sent to the paywall. A local API may be configured separately for development, but that does not grant access through the app. The API still requires a configured `OPENROUTER_API_KEY`.
 
 Configure local values from [`mobile/.env.example`](./mobile/.env.example). Keep real API keys and server credentials in an untracked local environment file or deployment secret manager; never put server secrets in `EXPO_PUBLIC_*` variables or commit them.
 

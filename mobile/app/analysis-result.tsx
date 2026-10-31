@@ -41,48 +41,15 @@ import Svg, { Defs, Line, LinearGradient as SvgLinearGradient, Path, Rect, Stop 
 import { BlurView } from 'expo-blur';
 import { trackEvent } from '@/services/telemetry';
 import { canViewFullAnalysis } from '@/services/featureAccess';
-import { getInstrument } from '@/services/instruments';
 import { shareAnalysisCardOnWeb } from '@/services/shareAnalysisCard';
 import { resolveAnalysisDirection } from '@/services/analysisDirection';
-import { formatDevelopingNote, formatRiskReward, formatTradeReadiness, getDirectionalCallLabel, hasValidatedTradeSetup, isUnavailableAnalysisValue } from '@/services/analysisResult';
+import { calculateRiskRewardFromLevels, formatDevelopingNote, formatRiskReward, formatTradeReadiness, getDirectionalCallLabel, getMissingTradeLevelsExplanation, hasValidatedTradeSetup, isUnavailableAnalysisValue } from '@/services/analysisResult';
 import { formatInstrumentPriceText } from '@/services/priceFormatting';
 
 type ResultTab = 'analysis' | 'insights';
 
-function pairCurrencies(pair: string) {
-  const currencies = pair.toUpperCase().match(/[A-Z]{3}/g) ?? [];
-  return [currencies[0] ?? pair.slice(0, 3).toUpperCase(), currencies[1] ?? pair.slice(-3).toUpperCase()];
-}
-
-function currencyFlag(currency: string) {
-  const countryByCurrency: Record<string, string> = {
-    EUR: 'EU', USD: 'US', GBP: 'GB', JPY: 'JP', CHF: 'CH', CAD: 'CA',
-    AUD: 'AU', NZD: 'NZ', CNY: 'CN', HKD: 'HK', SGD: 'SG', SEK: 'SE',
-    NOK: 'NO', MXN: 'MX', ZAR: 'ZA',
-  };
-  const country = countryByCurrency[currency] || '';
-  return country
-    ? String.fromCodePoint(...[...country].map((letter) => 127397 + letter.charCodeAt(0)))
-    : currency.slice(0, 2);
-}
-
 function firstAvailableLevel(...values: (string | number | undefined)[]) {
   return values.find((value) => !isUnavailableAnalysisValue(value));
-}
-
-function getPipDistance(entry: string, stop: string, pair: string) {
-  const midpoint = (value: string) => {
-    const numbers = value.match(/-?\d+(?:\.\d+)?/g)?.map(Number).filter(Number.isFinite) ?? [];
-    if (!numbers.length) return null;
-    return numbers.length > 1 ? (numbers[0] + numbers[1]) / 2 : numbers[0];
-  };
-  const entryPrice = midpoint(entry);
-  const stopPrice = midpoint(stop);
-  if (entryPrice == null || stopPrice == null) return null;
-  const [, quote] = pairCurrencies(pair);
-  const instrument = getInstrument(pair.replace(/[^A-Z0-9]/gi, ''));
-  const pipSize = instrument?.pipSize ?? (quote === 'JPY' ? 0.01 : 0.0001);
-  return Math.round(Math.abs(entryPrice - stopPrice) / pipSize);
 }
 
 function buildSmoothChartPaths(series: number[] = []) {
@@ -239,9 +206,7 @@ export default function AnalysisResultScreen() {
     && currentAnalysis.tradeStatus === 'actionable'
     && hasDirectionalCandidate
     && hasValidatedTradeSetup(currentAnalysis);
-  const hasCompleteDirectionalSetup = hasTradePlan || (hasDirectionalCandidate
-    && currentAnalysis != null
-    && hasValidatedTradeSetup(currentAnalysis));
+  const hasCompleteDirectionalSetup = currentAnalysis != null && hasValidatedTradeSetup(currentAnalysis);
   const isDevelopingResult = currentAnalysis != null
     && !isAnalysisUnavailable
     && canShowMarketRead
@@ -262,11 +227,8 @@ export default function AnalysisResultScreen() {
   const isBuy = marketReadDirection === 'BUY';
   const isSell = marketReadDirection === 'SELL';
   const hasFullAnalysisAccess = canViewFullAnalysis(isSubscribed);
-  const directionColor = isBuy || (!isSell && marketRead === 'bullish') ? '#00E676'
-    : isSell || marketRead === 'bearish' ? '#FF5252' : '#8E8E93';
   const alreadySaved = savedAnalyses.some((a) => a.id === currentAnalysis?.id);
   const pair = currentAnalysis?.pair ?? '';
-  const [baseCurrency, quoteCurrency] = pairCurrencies(pair);
   const targetLevels = [
     ...(currentAnalysis?.tradePlan ? [currentAnalysis.tradePlan.takeProfit1, currentAnalysis.tradePlan.takeProfit2].filter((level): level is number => level != null).map(String) : []),
     ...(currentAnalysis?.takeProfitLevels ?? []),
@@ -274,6 +236,19 @@ export default function AnalysisResultScreen() {
     ...(currentAnalysis?.tp ? [currentAnalysis.tp] : []),
   ].filter((level, index, levels) => firstAvailableLevel(level) != null && levels.indexOf(level) === index).slice(0, 2);
   const usableTargetLevels = targetLevels;
+  const rawEntryLevel = firstAvailableLevel(currentAnalysis?.tradePlan?.entry, currentAnalysis?.entry, currentAnalysis?.tradeSetup?.entryZone);
+  const rawStopLevel = firstAvailableLevel(currentAnalysis?.tradePlan?.stopLoss, currentAnalysis?.sl, currentAnalysis?.tradeSetup?.stopLoss);
+  const rawTargetLevel = firstAvailableLevel(currentAnalysis?.tradePlan?.takeProfit1, usableTargetLevels[0], currentAnalysis?.tradeSetup?.takeProfit, currentAnalysis?.tp);
+  const calculatedRiskReward = calculateRiskRewardFromLevels(
+    rawEntryLevel,
+    rawStopLevel,
+    rawTargetLevel,
+    tradeDirection,
+  );
+  const riskReward = calculatedRiskReward == null ? '—' : formatRiskReward(calculatedRiskReward);
+  const riskRewardText = riskReward === '—'
+    ? 'Needs supported entry, stop and TP1 levels'
+    : riskReward;
   const entryLevel = formatInstrumentPriceText(firstAvailableLevel(currentAnalysis?.tradePlan?.entry, currentAnalysis?.entry, currentAnalysis?.tradeSetup?.entryZone), pair);
   const stopLevel = formatInstrumentPriceText(firstAvailableLevel(currentAnalysis?.tradePlan?.stopLoss, currentAnalysis?.sl, currentAnalysis?.tradeSetup?.stopLoss), pair);
   const tp1Level = formatInstrumentPriceText(usableTargetLevels[0], pair);
@@ -284,15 +259,12 @@ export default function AnalysisResultScreen() {
     tp: tp1Level,
     takeProfitLevels: usableTargetLevels.slice(0, 1),
     tradeSetup: currentAnalysis.tradeSetup
-      ? { ...currentAnalysis.tradeSetup, takeProfit: tp1Level, riskReward: '—' }
+      ? { ...currentAnalysis.tradeSetup, takeProfit: tp1Level, riskReward }
       : undefined,
+    tradePlan: currentAnalysis.tradePlan
+      ? { ...currentAnalysis.tradePlan, riskReward: calculatedRiskReward }
+      : currentAnalysis.tradePlan,
   } : currentAnalysis;
-  const stopDistance = currentAnalysis?.slPips ?? getPipDistance(entryLevel, stopLevel, pair);
-  const riskReward = formatRiskReward(currentAnalysis?.tradePlan?.riskReward ?? currentAnalysis?.tradeSetup?.riskReward);
-  const riskRewardText = riskReward === '—'
-    ? 'Not calculable from available levels'
-    : riskReward.includes(':') ? riskReward : `1:${riskReward}`;
-  const confidence = currentAnalysis?.marketConfidence ?? currentAnalysis?.confidence ?? 0;
   const entryReadiness = Math.round(Math.max(0, Math.min(100, currentAnalysis?.entryReadiness ?? 0)));
   const readinessDirection = hasDirectionalCandidate
     ? currentAnalysis?.tradePlan?.direction ?? currentAnalysis?.tradeSetup?.type?.toUpperCase()
@@ -306,7 +278,7 @@ export default function AnalysisResultScreen() {
       stopLevel,
       tp1Level,
       readinessDirection,
-      currentAnalysis?.tradeSetup?.riskReward,
+      calculatedRiskReward ?? undefined,
     );
   const directionalCallLabel = getDirectionalCallLabel(readinessText);
   const directionLabel = isAnalysisUnavailable
@@ -314,14 +286,10 @@ export default function AnalysisResultScreen() {
     : hasDirectionalCandidate && tradeDirection
       ? getDirectionalCallLabel(tradeDirection)
       : directionalCallLabel;
-  const signalColor = directionLabel === 'BUY' ? '#00E676'
-    : directionLabel === 'SELL' ? '#FF5252' : '#FFC857';
-  const currentPrice = currentAnalysis?.latestVisiblePrice;
-  const marketEntryText = currentPrice != null
-    ? formatInstrumentPriceText(currentPrice, pair)
-    : hasTradePlan ? entryLevel : 'Unreadable from screenshot';
+  const screenshotPrice = currentAnalysis?.latestVisiblePrice == null
+    ? 'Not readable'
+    : formatInstrumentPriceText(currentAnalysis.latestVisiblePrice, pair);
   const chartPaths = buildSmoothChartPaths(currentAnalysis?.priceSeries);
-  const confidenceLabel = confidence >= 70 ? 'High' : confidence >= 40 ? 'Medium' : 'Low';
   const reasoning = currentAnalysis ? currentAnalysis.reasoning?.length ? currentAnalysis.reasoning.slice(0, 5) : [
     currentAnalysis.analysis?.trend && currentAnalysis.analysis.trend !== 'neutral' ? `Trend: ${currentAnalysis.analysis.trend}.` : '',
     currentAnalysis.analysis?.structure && !isUnavailableAnalysisValue(currentAnalysis.analysis.structure) ? `Structure: ${currentAnalysis.analysis.structure}.` : '',
@@ -338,6 +306,23 @@ export default function AnalysisResultScreen() {
       .replace(/[.?!]+$/, '');
     return `Decision: ${directionalCallLabel} directional call; no complete entry plan was validated.${explanation ? ` Stated reason: ${explanation}.` : ''}`;
   });
+  const riskRewardParts = riskReward.match(/^(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)$/);
+  const riskRewardRatio = calculatedRiskReward;
+  const canShowRiskReward = hasDirectionalCandidate
+    && hasCompleteDirectionalSetup
+    && riskRewardRatio != null
+    && Number.isFinite(riskRewardRatio)
+    && riskRewardRatio > 0;
+  const riskRewardBarRatio = canShowRiskReward ? Math.min(riskRewardRatio ?? 0, 5) : 0;
+  const riskBarRiskWidth = `${(1 / (1 + riskRewardBarRatio)) * 100}%` as `${number}%`;
+  const riskBarRewardWidth = `${(riskRewardBarRatio / (1 + riskRewardBarRatio)) * 100}%` as `${number}%`;
+  const primaryReasoning = displayReasoning[0]
+    ? formatDevelopingNote(displayReasoning[0])
+    : formatDevelopingNote(currentAnalysis?.analysis?.notes || currentAnalysis?.multiTimeframe?.summary || 'No additional reasoning was provided.');
+  const resultLimitations = [
+    ...(currentAnalysis?.dataLimitations ?? []),
+    ...(currentAnalysis?.whyNotNow ?? []),
+  ].filter((note, index, notes) => notes.indexOf(note) === index);
   const hasDirectionalBiasOnly = !hasDirectionalCandidate
     && canShowMarketRead
     && (marketReadDirection === 'BUY' || marketReadDirection === 'SELL');
@@ -619,19 +604,23 @@ export default function AnalysisResultScreen() {
   return (
     <View style={[styles.container, { paddingTop: topPad, backgroundColor: colors.background }]}>
       <AmbientBackdrop />
-      <Animated.View entering={FadeIn.duration(300)} style={styles.header}>
+      <Animated.View entering={FadeIn.duration(300)} style={[styles.resultHeader, { borderBottomColor: colors.cardBorder }]}>
         <TouchableOpacity style={[styles.backBtn, { backgroundColor: colors.card, borderColor: colors.cardBorder }]} onPress={() => router.replace('/home')} accessibilityRole="button" accessibilityLabel="Back">
           <Feather name="arrow-left" size={22} color={colors.text} />
         </TouchableOpacity>
-        <Text style={[styles.headerTitle, { color: colors.text }]}>Analysis Result</Text>
-        <Animated.View style={iconAnimStyle}>
-          <TouchableOpacity
-            style={[styles.saveIconBtn, { backgroundColor: colors.card, borderColor: colors.cardBorder }, alreadySaved && styles.saveIconBtnActive]}
-            onPress={handleSave}
-          >
-            <Feather name="bookmark" size={20} color={alreadySaved ? colors.gold : colors.text} />
-          </TouchableOpacity>
-        </Animated.View>
+        <View style={styles.resultHeaderTitle}>
+          <Text style={[styles.headerTitle, { color: colors.text }]}>{currentAnalysis.pair}</Text>
+          {currentAnalysis.timeframe ? <Text style={[styles.resultHeaderSubtitle, { color: colors.textSecondary }]}>{currentAnalysis.timeframe}</Text> : null}
+        </View>
+        <TouchableOpacity
+          style={[styles.backBtn, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}
+          onPress={() => void handleShare()}
+          disabled={shareDisabled}
+          accessibilityRole="button"
+          accessibilityLabel="Share analysis"
+        >
+          {shareDisabled ? <ActivityIndicator size="small" color={colors.text} /> : <Feather name="share-2" size={19} color={colors.text} />}
+        </TouchableOpacity>
       </Animated.View>
 
       <ScrollView
@@ -639,27 +628,6 @@ export default function AnalysisResultScreen() {
         contentContainerStyle={[styles.scrollContent, { paddingBottom: botPad + 32 }]}
         showsVerticalScrollIndicator={false}
       >
-        <Animated.View entering={FadeInDown.delay(60).duration(400)} style={[styles.assetHeader, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
-          <View style={styles.assetIdentity}>
-            <View style={styles.flagStack}>
-              <Text style={[styles.currencyFlag, styles.baseFlag]}>{currencyFlag(baseCurrency)}</Text>
-              <Text style={[styles.currencyFlag, styles.quoteFlag]}>{currencyFlag(quoteCurrency)}</Text>
-            </View>
-            <View style={styles.assetNameWrap}>
-              <Text style={[styles.assetPair, { color: colors.text }]}>{currentAnalysis.pair}</Text>
-              <Text style={[styles.assetTimeframe, { backgroundColor: colors.surface, color: colors.textSecondary }]}>{currentAnalysis.timeframe || '—'}</Text>
-            </View>
-          </View>
-          <View style={styles.entrySummary}>
-            <Text style={[styles.entryCaption, { color: colors.textSecondary }]}>{currentPrice != null ? 'LATEST VISIBLE PRICE' : hasTradePlan ? 'PLANNED ENTRY' : 'PRICE UNREADABLE'}</Text>
-            <Text numberOfLines={1} adjustsFontSizeToFit style={[styles.entryPrice, { color: colors.text }]}>{marketEntryText}</Text>
-            <View style={[styles.directionPill, { backgroundColor: `${signalColor}20` }]}>
-              <Feather name={directionLabel === 'SELL' ? 'trending-down' : directionLabel === 'BUY' ? 'trending-up' : 'clock'} size={13} color={signalColor} />
-              <Text style={[styles.directionPillText, { color: signalColor }]}>{directionLabel}</Text>
-            </View>
-          </View>
-        </Animated.View>
-
         {(isInvalid || currentAnalysis.status === 'ai_unavailable' || currentAnalysis.status === 'ai_invalid_response') ? (
           <View style={[styles.resultError, { backgroundColor: `${colors.sell}12`, borderColor: `${colors.sell}45` }]}>
             <Feather name="alert-triangle" size={18} color="#FF7777" />
@@ -704,114 +672,101 @@ export default function AnalysisResultScreen() {
           </Animated.View>
           {chartLevelValues.filter(([key, value]) => hasCompleteDirectionalSetup && value !== '—' && (key !== 'tp2' || hasFullAnalysisAccess)).map(([key, value]) => {
             const color = key === 'entry' ? '#DDEBFF' : key === 'sl' ? '#FF6262' : '#39E58C';
-            return <Animated.View key={`label-${key}`} entering={FadeInUp.delay(180).duration(350)} style={[styles.chartLevelLabel, { top: `${levelY(key, value)}%`, borderColor: `${color}80` }]}><Text numberOfLines={1} style={[styles.chartLevelText, { color }]}>{value}</Text></Animated.View>;
+            const label = key === 'sl' ? 'STOP' : key.toUpperCase();
+            return (
+              <Animated.View key={`label-${key}`} entering={FadeInUp.delay(180).duration(350)} style={[styles.chartLevelLabel, { top: `${levelY(key, value)}%`, borderColor: `${color}80` }]}>
+                <TouchableOpacity onPress={() => highlightLevel(key)} accessibilityRole="button" accessibilityLabel={`${label} ${value}`}>
+                  <Text numberOfLines={1} style={[styles.chartLevelText, { color }]}>{label} {value}</Text>
+                </TouchableOpacity>
+              </Animated.View>
+            );
           })}
-          {hasCompleteDirectionalSetup ? (<>
-          <View style={styles.targetsCallout}>
-            <View style={styles.calloutHeading}><Feather name="target" size={14} color="#39E58C" /><Text style={styles.targetsHeading}>TARGETS</Text></View>
-            <TouchableOpacity style={styles.calloutLevelRow} onPress={() => highlightLevel('tp1')}>
-            <View style={styles.targetTrack}><View style={styles.targetDot} /></View><Text style={styles.calloutLevelName}>TP1</Text><Text numberOfLines={1} style={styles.calloutLevelPrice}>{tp1Level}</Text>
-            </TouchableOpacity>
-            {usableTargetLevels.length > 1 ? (
-              <TouchableOpacity style={styles.calloutLevelRow} onPress={() => hasFullAnalysisAccess ? highlightLevel('tp2') : openLockedContent('tp2')}>
-                <View style={styles.targetTrack}><View style={styles.targetDot} /></View><Text style={styles.calloutLevelName}>TP2</Text><Text numberOfLines={1} style={styles.calloutLevelPrice}>{hasFullAnalysisAccess ? tp2Level : 'Unlock'}</Text>{!hasFullAnalysisAccess ? <Feather name="lock" size={10} color="#C6A94B" /> : null}
-              </TouchableOpacity>
-            ) : (
-              <View style={styles.calloutLevelRow}><View style={styles.targetTrack}><View style={styles.targetDotMuted} /></View><Text style={styles.calloutLevelName}>TP2</Text><Text style={styles.calloutMissing}>Open</Text></View>
-            )}
-          </View>
-          <TouchableOpacity style={styles.stopCallout} onPress={() => highlightLevel('sl')}>
-            <View style={styles.calloutHeading}><Feather name="slash" size={14} color="#FF6262" /><Text style={styles.stopHeading}>STOP LOSS</Text></View>
-            <View style={styles.calloutLevelRow}><View style={[styles.targetTrack, styles.stopTrack]}><View style={styles.stopDot} /></View><Text numberOfLines={1} style={styles.stopPrice}>{stopLevel}</Text></View>
-            <Text style={styles.stopDistance}>{stopDistance != null ? `${stopDistance} pips from entry` : 'Distance unavailable'}</Text>
-          </TouchableOpacity>
-          </>) : null}
         </Animated.View>
 
-        {hasTradePlan && currentAnalysis?.tradePlan ? (
-          <View style={[styles.levelsCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
-        <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>{currentAnalysis.conviction === 'LOW' ? 'TRADE PLAN · LOW CONVICTION' : 'TRADE PLAN'}</Text>
-        <TradeLevelRow label="Direction" value={currentAnalysis.tradePlan.direction} color={currentAnalysis.tradePlan.direction === 'BUY' ? colors.buy : colors.sell} />
-        <View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
-        <TradeLevelRow label="Entry" value={entryLevel} />
-        <View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
-        <TradeLevelRow label="Stop Loss" value={stopLevel} color={colors.sell} />
-        <View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
-        <TradeLevelRow label="Take Profit" value={tp1Level} color={colors.buy} />
-        <View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
-        <TradeLevelRow label="Risk : Reward" value={riskRewardText} color={colors.buy} />
-        <Text style={[styles.reasoningText, { color: colors.textSecondary, marginTop: 12 }]}>
-          {currentAnalysis.conviction === 'LOW'
-            ? (currentAnalysis.verdictReason || 'HOLD — Review the chart structure and the identified levels before entering.')
-            : currentAnalysis.verdictReason || 'HOLD — Review the chart structure and the identified levels before entering.'}
-        </Text>
-          </View>
-        ) : null}
-
         <View style={[styles.segmentedControl, { backgroundColor: colors.surface, borderColor: colors.cardBorder }]}>
-          <TouchableOpacity style={[styles.segment, activeTab === 'analysis' && { backgroundColor: colors.card }]} onPress={() => selectTab('analysis')}><Text style={[styles.segmentText, { color: activeTab === 'analysis' ? colors.text : colors.textSecondary }]}>Our Analysis</Text></TouchableOpacity>
+          <TouchableOpacity style={[styles.segment, activeTab === 'analysis' && { backgroundColor: colors.card }]} onPress={() => selectTab('analysis')}><Text style={[styles.segmentText, { color: activeTab === 'analysis' ? colors.text : colors.textSecondary }]}>Analysis</Text></TouchableOpacity>
           <TouchableOpacity style={[styles.segment, activeTab === 'insights' && { backgroundColor: colors.card }]} onPress={() => selectTab('insights')}><Text style={[styles.segmentText, { color: activeTab === 'insights' ? colors.text : colors.textSecondary }]}>Insights</Text></TouchableOpacity>
         </View>
 
         {activeTab === 'analysis' ? (
           <>
-            <Animated.View entering={FadeInUp.duration(350)} style={[styles.verdictCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
-              <View style={styles.verdictTop}><Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>{hasTradePlan ? 'TRADE PLAN' : hasDirectionalCandidate ? 'TRADE SETUP' : hasDirectionalBiasOnly ? 'DIRECTIONAL CALL' : 'TRADE SIGNAL'}</Text><View style={[styles.verdictBadge, { backgroundColor: `${signalColor}20` }]}><View style={[styles.verdictDot, { backgroundColor: signalColor }]} /><Text style={[styles.verdictText, { color: signalColor }]}>{directionLabel}</Text></View></View>
-              {hasDirectionalCandidate && !isValidatedActionable ? (
-                <Text style={[styles.bodyMuted, { color: colors.textSecondary }]}>
-                  {hasCompleteDirectionalSetup
-                    ? `${tradeDirection} plan — Entry ${entryLevel}, SL ${stopLevel}, TP1 ${tp1Level}. Verify these chart levels against current price and your risk plan.`
-                    : `${tradeDirection} direction identified, but a complete entry, stop and target could not all be verified from the chart.`}
+            <Animated.View entering={FadeInUp.duration(350)} style={[styles.candidateBanner, { backgroundColor: isValidatedActionable ? `${colors.buy}14` : '#F6AE3D14', borderColor: isValidatedActionable ? `${colors.buy}45` : '#F6AE3D55' }]}>
+              <View style={[styles.candidateDot, { backgroundColor: isValidatedActionable ? colors.buy : '#E5A83B' }]} />
+              <View style={styles.candidateCopy}>
+                <Text style={[styles.candidateTitle, { color: isValidatedActionable ? colors.buy : '#D99A2B' }]}>
+                  {isValidatedActionable
+                    ? 'Validated setup'
+                    : hasDirectionalCandidate
+                      ? `${tradeDirection ?? 'Directional'} candidate setup`
+                      : 'No candidate setup identified'}
                 </Text>
-              ) : null}
-              {hasDirectionalBiasOnly ? <Text style={[styles.bodyMuted, { color: colors.textSecondary }]}>{`Directional call: ${directionalCallLabel}. Entry, stop-loss, and take-profit levels are not validated; this is not an entry signal.`}</Text> : null}
-              {currentPrice != null ? <View style={styles.confidenceLine}><Text style={[styles.bodyMuted, { color: colors.textSecondary }]}>Latest visible price (screenshot)</Text><Text style={[styles.confidenceText, { color: colors.text }]}>{marketEntryText}</Text></View> : null}
+                <Text style={[styles.candidateDescription, { color: colors.textSecondary }]}>
+                  {isValidatedActionable
+                    ? 'The levels passed chart checks. Verify current market price and conditions before acting.'
+                    : hasDirectionalCandidate
+                      ? currentAnalysis.entryStatus === 'trigger_observed'
+                        ? 'The trigger appears in the screenshot. Verify it against current market conditions; the screenshot is not live.'
+                        : hasCompleteDirectionalSetup
+                          ? currentAnalysis.tradeTrigger || 'Conditional setup. Wait for the stated entry trigger before considering an entry.'
+                          : getMissingTradeLevelsExplanation(currentAnalysis) || 'A complete, chart-supported entry, stop and target are needed.'
+                      : currentAnalysis.noTradeReason || currentAnalysis.message || 'The chart evidence did not establish a directional candidate.'}
+                </Text>
+              </View>
+              <Feather name={isValidatedActionable ? 'check-circle' : 'alert-circle'} size={18} color={isValidatedActionable ? colors.buy : '#D99A2B'} />
             </Animated.View>
-            {hasTradePlan && currentAnalysis?.tradePlan ? (
-              <View style={[styles.levelsCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
-                <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>{currentAnalysis.conviction === 'LOW' ? 'TRADE PLAN · LOW CONVICTION' : 'TRADE PLAN'}</Text>
-                <TradeLevelRow label="Direction" value={tradeDirection || '—'} color={tradeDirection === 'SELL' ? colors.sell : colors.buy} />
-                <View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
-                <TradeLevelRow label="Entry" value={entryLevel} color={colors.buy} />
-                <View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
-                <TradeLevelRow label="Stop Loss" value={stopLevel} color={colors.sell} />
-                <View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
-                <TradeLevelRow label="Take Profit 1" value={tp1Level} color={colors.buy} />
-                <View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
-                <TradeLevelRow label="Risk : Reward" value={riskRewardText} color={colors.buy} />
-                <Text style={[styles.reasoningText, { color: colors.textSecondary, marginTop: 12 }]}>
-                  {currentAnalysis.conviction === 'LOW'
-                  ? (currentAnalysis.verdictReason || 'LOW QUALITY — RECOMMENDED: SKIP.')
-                    : currentAnalysis.tradePlan.entryType === 'trigger'
-                      ? `${tradeDirection} setup — Entry is conditional on ${(currentAnalysis.tradePlan.triggerEvent || 'retest_hold').replace(/_/g, ' ')} at ${entryLevel}.`
-                      : `${tradeDirection} setup — Verify the planned levels against current market conditions before entry.`}
+
+            <View style={styles.levelTiles}>
+              {[
+                { label: 'ENTRY', value: entryLevel, color: colors.text },
+                { label: 'STOP', value: stopLevel, color: colors.sell },
+                { label: 'TP1', value: tp1Level, color: colors.buy },
+              ].map((level) => (
+                <View key={level.label} style={[styles.levelTile, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+                  <Text style={[styles.levelTileLabel, { color: colors.textSecondary }]}>{level.label}</Text>
+                  <Text numberOfLines={1} adjustsFontSizeToFit style={[styles.levelTileValue, { color: level.value === '—' ? colors.textMuted : level.color }]}>
+                    {level.value === '—' ? 'Unavailable' : level.value}
+                  </Text>
+                </View>
+              ))}
+            </View>
+
+            <View style={[styles.riskRewardCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+              <View style={styles.riskRewardHeading}>
+                <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>RISK / REWARD</Text>
+                <Text style={[styles.riskRewardValue, { color: canShowRiskReward ? colors.text : colors.textSecondary }]}>
+                  {canShowRiskReward ? riskRewardText : '—'}
                 </Text>
               </View>
-            ) : hasDirectionalCandidate ? (
-              <View style={[styles.levelsCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
-                <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>{isValidatedActionable ? 'TRADE LEVELS' : 'CONDITIONAL LEVELS'}</Text>
-                <TradeLevelRow label="Entry" value={entryLevel === '—' ? 'Not established' : entryLevel} /><View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
-                <TradeLevelRow label="Stop Loss" value={stopLevel === '—' ? 'Not established' : stopLevel} color={colors.sell} /><View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
-                <TradeLevelRow label="Take Profit 1" value={tp1Level === '—' ? 'Not established' : tp1Level} color={colors.buy} /><View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
-                <TradeLevelRow label="Take Profit 2" value={usableTargetLevels.length > 1 ? (hasFullAnalysisAccess ? tp2Level : '••••••') : 'Open'} color={colors.buy} locked={!hasFullAnalysisAccess && usableTargetLevels.length > 1} onPress={() => openLockedContent('tp2')} /><View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
-                <TradeLevelRow label="Risk : Reward" value={hasFullAnalysisAccess ? riskRewardText : '••••'} color={colors.buy} locked={!hasFullAnalysisAccess} onPress={() => openLockedContent('risk-reward')} />
+              <View style={[styles.riskRewardTrack, { backgroundColor: colors.surface }]}>
+                {canShowRiskReward ? (
+                  <>
+                    <View style={[styles.riskSegment, { width: riskBarRiskWidth }]} />
+                    <View style={[styles.rewardSegment, { width: riskBarRewardWidth, backgroundColor: colors.buy }]} />
+                  </>
+                ) : null}
+                <View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
+                <TradeLevelRow label="Visible price (screenshot)" value={screenshotPrice} />
+                <View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
+                <TradeLevelRow label="Evidence score (not win probability)" value={`${currentAnalysis.confidence}%`} />
               </View>
-            ) : null}
-            {isValidatedActionable ? (
-              <View style={[styles.levelsCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
-                <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>ENTRY PLAN</Text>
-                <Text style={[styles.reasoningText, { color: colors.textSecondary }]}>
-                  {formatDevelopingNote(currentAnalysis.tradeTrigger || 'Enter only while price remains within the validated entry zone. Keep the stop loss and take-profit levels in place.')}
-                </Text>
+              <View style={styles.riskRewardLegend}>
+                <Text style={[styles.bodyMuted, { color: colors.textSecondary }]}>{canShowRiskReward ? 'Calculated from entry, stop and TP1' : riskRewardText}</Text>
+                {canShowRiskReward ? <Text style={[styles.bodyMuted, { color: colors.buy }]}>{riskRewardParts?.[2] ?? '<0.01'}R potential reward</Text> : null}
               </View>
-            ) : null}
+            </View>
+
             <View style={[styles.levelsCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
               <TouchableOpacity style={styles.aiHeading} onPress={() => {
                 if (!hasFullAnalysisAccess) { openLockedContent('ai-analysis'); return; }
                 setAnalysisExpanded((expanded) => !expanded);
                 trackEvent('analysis_expanded', { expanded: !analysisExpanded });
               }}>
-                <View><Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>AI ANALYSIS</Text><Text style={[styles.bodyMuted, { color: colors.textSecondary }]}>{hasFullAnalysisAccess ? (isDevelopingResult ? 'Reasoning behind this market read' : analysisExpanded ? 'Reasoning behind this setup' : 'Read more about this setup') : 'Premium insight · Tap to unlock'}</Text></View>
+                <View style={styles.reasoningHeadingCopy}>
+                  <Text style={[styles.reasoningTitle, { color: colors.text }]}>Reasoning</Text>
+                  <Text numberOfLines={analysisExpanded ? undefined : 2} style={[styles.bodyMuted, { color: colors.textSecondary }]}>
+                    {hasFullAnalysisAccess ? primaryReasoning : 'Premium insight · Tap to unlock'}
+                  </Text>
+                </View>
                 <Feather name={hasFullAnalysisAccess && analysisExpanded ? 'chevron-up' : 'chevron-down'} size={18} color={colors.textSecondary} />
               </TouchableOpacity>
               {hasFullAnalysisAccess && analysisExpanded ? (
@@ -819,6 +774,18 @@ export default function AnalysisResultScreen() {
               ) : !hasFullAnalysisAccess ? (
                 <View style={styles.lockedReasoning}><View pointerEvents="none" style={styles.lockedReasoningPreview}>{(displayReasoning.length ? displayReasoning.slice(0, 3) : ['Trend and structure analysis', 'Key levels and confluence']).map((reason, index) => <Text key={`${index}-${reason}`} numberOfLines={1} style={[styles.reasoningText, { color: colors.textSecondary }]}>{`• ${formatDevelopingNote(reason)}`}</Text>)}<BlurView intensity={36} tint={colors.text === '#FFFFFF' ? 'dark' : 'light'} style={StyleSheet.absoluteFill} /></View><TouchableOpacity style={[styles.unlockButton, { backgroundColor: colors.primary }]} onPress={() => openLockedContent('ai-analysis')}><Feather name="lock" size={14} color={colors.primaryForeground} /><Text style={[styles.unlockButtonText, { color: colors.primaryForeground }]}>Unlock full analysis</Text></TouchableOpacity></View>
               ) : null}
+            </View>
+            <View style={[styles.levelsCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+              <View style={styles.riskNoteHeading}>
+                <Feather name="info" size={16} color="#D99A2B" />
+                <Text style={[styles.reasoningTitle, { color: colors.text }]}>Limitations</Text>
+              </View>
+              {(resultLimitations.length ? resultLimitations : ['Analysis is based on the uploaded screenshot, not live market data.']).slice(0, 3).map((note, index) => (
+                <View key={`${index}-${note}`} style={styles.reasoningRow}>
+                  <View style={[styles.reasoningBullet, { backgroundColor: '#D99A2B' }]} />
+                  <Text style={[styles.reasoningText, { color: colors.textSecondary }]}>{formatDevelopingNote(note)}</Text>
+                </View>
+              ))}
             </View>
           </>
         ) : (
@@ -862,26 +829,46 @@ export default function AnalysisResultScreen() {
                 ? [...(currentAnalysis.whyNotNow ?? []), ...(currentAnalysis.dataLimitations ?? []), ...(currentAnalysis.rrIssues ?? [])].map((note, index) => <View key={`${index}-${note}`} style={styles.reasoningRow}><Feather name="alert-circle" size={14} color="#FFC857" /><Text style={[styles.reasoningText, { color: colors.textSecondary }]}>{formatDevelopingNote(note)}</Text></View>)
                 : <Text style={[styles.reasoningText, { color: colors.textSecondary }]}>No additional risk notes provided.</Text>}
             </View>
+            <View style={styles.resultActions}>
+              <TouchableOpacity
+                style={[styles.actionButton, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}
+                onPress={() => router.push({ pathname: '/community', params: { shareAnalysisId: currentAnalysis.id } })}
+              >
+                <Feather name="users" size={16} color={colors.text} />
+                <Text style={[styles.actionButtonText, { color: colors.text }]}>Share to Community</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.actionButton, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}
+                onPress={() => void handleCopy()}
+              >
+                <Feather name="copy" size={16} color={colors.text} />
+                <Text style={[styles.actionButtonText, { color: colors.text }]}>Copy levels</Text>
+              </TouchableOpacity>
+            </View>
           </>
         )}
         <Text style={[styles.resultDisclaimer, { color: colors.textMuted }]}>AI analysis, not financial advice. Always use appropriate risk management.</Text>
-        <View style={styles.resultActions}>
-          <TouchableOpacity style={[styles.actionButton, { backgroundColor: colors.card, borderColor: colors.cardBorder }]} onPress={() => void handleShare()} disabled={shareDisabled}>{shareDisabled ? <ActivityIndicator size="small" color={colors.text} /> : <Feather name="share-2" size={16} color={colors.text} />}<Text style={[styles.actionButtonText, { color: colors.text }]}>Share</Text></TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.actionButton, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}
-            onPress={() => {
-              if (currentAnalysis) router.push({ pathname: '/community', params: { shareAnalysisId: currentAnalysis.id } });
-            }}
-            disabled={!currentAnalysis}
-          >
-            <Feather name="users" size={16} color={colors.text} />
-            <Text style={[styles.actionButtonText, { color: colors.text }]}>Share to Community</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.actionButton, { backgroundColor: colors.card, borderColor: colors.cardBorder }, alreadySaved && styles.actionButtonDisabled]} onPress={handleSave} disabled={alreadySaved}><Feather name="bookmark" size={16} color={colors.text} /><Text style={[styles.actionButtonText, { color: colors.text }]}>{alreadySaved ? 'Saved' : 'Save to History'}</Text></TouchableOpacity>
-          <TouchableOpacity style={[styles.actionButton, { backgroundColor: colors.card, borderColor: colors.cardBorder }]} onPress={() => void handleCopy()}><Feather name="copy" size={16} color={colors.text} /><Text style={[styles.actionButtonText, { color: colors.text }]}>Copy levels</Text></TouchableOpacity>
-        </View>
         {shareError ? <View style={styles.shareErrorBox}><Text style={styles.shareErrorTitle}>Couldn't create the share card.</Text><TouchableOpacity style={styles.shareRetryBtn} onPress={() => void handleShare()}><Text style={styles.shareRetryText}>Try again</Text></TouchableOpacity></View> : null}
       </ScrollView>
+
+      <View style={[styles.resultFooter, { paddingBottom: botPad > 0 ? Math.max(botPad, 14) : 14, backgroundColor: colors.background, borderTopColor: colors.cardBorder }]}>
+        <TouchableOpacity
+          style={[styles.footerButton, styles.saveFooterButton, alreadySaved && styles.actionButtonDisabled]}
+          onPress={handleSave}
+          disabled={alreadySaved}
+        >
+          <Feather name={alreadySaved ? 'check' : 'bookmark'} size={17} color="#101512" />
+          <Text style={styles.saveFooterText}>{alreadySaved ? 'Saved' : 'Save'}</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.footerButton, styles.shareFooterButton, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}
+          onPress={() => void handleShare()}
+          disabled={shareDisabled}
+        >
+          {shareDisabled ? <ActivityIndicator size="small" color={colors.text} /> : <Feather name="share-2" size={17} color={colors.text} />}
+          <Text style={[styles.footerShareText, { color: colors.text }]}>Share card</Text>
+        </TouchableOpacity>
+      </View>
 
       {/* Keep the card attached to the native view tree, behind the result screen, for capture. */}
       <View style={styles.hiddenShareContainer}>
@@ -918,6 +905,15 @@ const styles = StyleSheet.create({
     borderColor: '#292929',
     borderRadius: 16,
   },
+  resultHeader: { minHeight: 58, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 7, borderBottomWidth: StyleSheet.hairlineWidth },
+  resultHeaderTitle: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  resultHeaderSubtitle: { marginTop: 2, fontSize: 10, fontFamily: 'Inter_500Medium' },
+  resultFooter: { flexDirection: 'row', gap: 10, paddingHorizontal: 16, paddingTop: 10, borderTopWidth: StyleSheet.hairlineWidth },
+  footerButton: { minHeight: 50, flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 13, borderWidth: 1 },
+  saveFooterButton: { backgroundColor: '#39E58C', borderColor: '#39E58C' },
+  shareFooterButton: {},
+  saveFooterText: { color: '#101512', fontSize: 13, fontFamily: 'Inter_700Bold' },
+  footerShareText: { fontSize: 13, fontFamily: 'Inter_700Bold' },
   assetIdentity: { flexDirection: 'row', alignItems: 'center', flex: 1, minWidth: 0, gap: 10 },
   flagStack: { width: 48, height: 36, justifyContent: 'center' },
   currencyFlag: {
@@ -971,7 +967,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#303630',
   },
-  chartTint: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.34)' },
+  chartTint: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.12)' },
   chartEmpty: { backgroundColor: '#111713' },
   chartUnavailable: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', gap: 8 },
   chartUnavailableText: { color: '#777777', fontSize: 11, fontFamily: 'Inter_500Medium' },
@@ -1055,6 +1051,25 @@ const styles = StyleSheet.create({
   lockedValue: { color: '#8F8F8F' },
   tableDivider: { height: 1, backgroundColor: '#292929' },
   aiHeading: { minHeight: 34, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  reasoningHeadingCopy: { flex: 1, gap: 5 },
+  reasoningTitle: { fontSize: 14, fontFamily: 'Inter_700Bold' },
+  candidateBanner: { minHeight: 72, flexDirection: 'row', alignItems: 'center', gap: 11, paddingHorizontal: 14, paddingVertical: 12, borderRadius: 14, borderWidth: 1 },
+  candidateDot: { width: 9, height: 9, borderRadius: 5 },
+  candidateCopy: { flex: 1, gap: 4 },
+  candidateTitle: { fontSize: 13, fontFamily: 'Inter_700Bold' },
+  candidateDescription: { fontSize: 11, lineHeight: 16, fontFamily: 'Inter_400Regular' },
+  levelTiles: { flexDirection: 'row', gap: 9 },
+  levelTile: { flex: 1, minWidth: 0, minHeight: 76, justifyContent: 'center', gap: 7, paddingHorizontal: 10, paddingVertical: 11, borderRadius: 13, borderWidth: 1 },
+  levelTileLabel: { fontSize: 9, letterSpacing: 0.8, fontFamily: 'Inter_700Bold' },
+  levelTileValue: { fontSize: 14, fontFamily: 'Inter_700Bold' },
+  riskRewardCard: { gap: 12, padding: 14, borderRadius: 15, borderWidth: 1 },
+  riskRewardHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  riskRewardValue: { fontSize: 14, fontFamily: 'Inter_700Bold' },
+  riskRewardTrack: { height: 10, flexDirection: 'row', overflow: 'hidden', borderRadius: 5 },
+  riskSegment: { height: '100%', backgroundColor: '#FF6262' },
+  rewardSegment: { height: '100%' },
+  riskRewardLegend: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  riskNoteHeading: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   lockedReasoning: { gap: 10 },
   lockedReasoningPreview: { position: 'relative', overflow: 'hidden', gap: 8, paddingVertical: 4 },
   unlockButton: { minHeight: 42, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 11, backgroundColor: '#F2F2F2' },
@@ -1103,7 +1118,7 @@ const styles = StyleSheet.create({
   },
   saveIconBtnActive: { backgroundColor: '#1A1600', borderColor: '#3D3400' },
   scroll: { flex: 1 },
-  scrollContent: { paddingHorizontal: 20, paddingTop: 8, gap: 16 },
+  scrollContent: { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 24, gap: 14 },
   directionCard: {
     backgroundColor: '#1A1A1A',
     borderRadius: 20,

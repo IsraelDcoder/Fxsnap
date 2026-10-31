@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { normalizeChartTradePlan, normalizeChartTradeSetup, normalizeLatestVisiblePrice, type ChartAnalysisResult } from '../services/chartDetection';
-import { buildAnalysisResult, formatDevelopingNote, formatRiskReward, formatTradeReadiness, getDirectionalCallLabel, getMarketDevelopmentPlan, getMissingTradeLevelsExplanation, getTradeReadinessLabel, hasValidatedTradeSetup, isUnavailableAnalysisValue } from '../services/analysisResult';
+import { buildAnalysisResult, calculateRiskRewardFromLevels, formatDevelopingNote, formatRiskReward, formatTradeReadiness, getDirectionalCallLabel, getMarketDevelopmentPlan, getMissingTradeLevelsExplanation, getTradeReadinessLabel, hasValidatedTradeSetup, isUnavailableAnalysisValue } from '../services/analysisResult';
 
 function chartResult(overrides: Partial<ChartAnalysisResult> = {}): ChartAnalysisResult {
   return {
@@ -335,7 +335,7 @@ test('explains missing no-trade levels as a hold while the market develops', () 
   );
   assert.equal(getMissingTradeLevelsExplanation({
     ...result,
-    tradeSetup: { ...result.tradeSetup!, entryZone: '1.1000', stopLoss: '1.0950', riskReward: 2 },
+    tradeSetup: { ...result.tradeSetup!, type: 'buy', entryZone: '1.1000', stopLoss: '1.0950', riskReward: 2 },
     takeProfitLevels: ['1.1100'],
   }), null);
 });
@@ -383,6 +383,14 @@ test('recognizes model-generated unavailable phrases instead of displaying them 
   assert.equal(formatRiskReward(0.08000000000000303), '1:0.08');
   assert.equal(formatRiskReward('1:0.9393939393939916'), '1:0.94');
   assert.equal(formatRiskReward(0.004), '1:<0.01');
+});
+
+test('risk/reward is derived from valid level geometry and rejects wrong-side levels', () => {
+  assert.equal(calculateRiskRewardFromLevels('1.1000', '1.0990', '1.1020', 'BUY'), 2);
+  assert.equal(calculateRiskRewardFromLevels('1.1000', '1.1010', '1.0980', 'SELL'), 2);
+  assert.equal(calculateRiskRewardFromLevels('1.1000-1.1010', '1.0980', '1.1030', 'BUY'), 0.67);
+  assert.equal(calculateRiskRewardFromLevels('1.1000', '1.1010', '1.1020', 'BUY'), null);
+  assert.equal(calculateRiskRewardFromLevels('1.1000', '1.0990', '1.1020', 'SELL'), null);
 });
 
 test('incomplete successful responses are presented as developing, not as established trades', () => {
@@ -490,7 +498,7 @@ test('a complete candidate with a low calculated R:R remains valid and reports t
       risk_reward: 0.9393939393939916,
     },
   }), 'EUR/USD');
-  assert.match(getMarketDevelopmentPlan(floatingPointNoise), /R:R 1:0\.94/);
+  assert.match(getMarketDevelopmentPlan(floatingPointNoise), /R:R 1:0\.8/);
 });
 
 test('waiting setups remain on hold and explain the confirmation trigger', () => {

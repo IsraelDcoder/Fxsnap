@@ -1108,13 +1108,23 @@ function normalizeVerdictFields(raw, normalized) {
   const biasDirection = bias === 'bullish' ? 'BUY' : bias === 'bearish' ? 'SELL' : null;
   const planDirection = suppliedPlanDirection || biasDirection;
   const explicitNoTrade = String(raw.verdict ?? raw.trade_setup?.verdict ?? '').toUpperCase() === 'NO_TRADE';
-  const entry = numericPrice(sourcePlan.entry) ?? numericPrice(legacy.entry_zone) ?? (support[0] ?? 0);
-  const stop = numericPrice(sourcePlan.stop_loss) ?? numericPrice(legacy.stop_loss) ?? (planDirection === 'BUY' ? (support[0] ?? entry) - 0.01 : planDirection === 'SELL' ? (resistance[0] ?? entry) + 0.01 : NaN);
-  const target = numericPrice(sourcePlan.take_profit_1) ?? numericPrice(legacy.take_profit) ?? (planDirection === 'BUY' ? (resistance[0] ?? entry + 0.01) : planDirection === 'SELL' ? (support[0] ?? entry - 0.01) : NaN);
+  const entry = numericPrice(sourcePlan.entry) ?? numericPrice(legacy.entry_zone);
+  const stop = numericPrice(sourcePlan.stop_loss) ?? numericPrice(legacy.stop_loss);
+  const target = numericPrice(sourcePlan.take_profit_1) ?? numericPrice(legacy.take_profit);
   const target2 = numericPrice(sourcePlan.take_profit_2) ?? null;
-  const riskReward = typeof sourcePlan.risk_reward === 'number' ? sourcePlan.risk_reward : (Number.isFinite(target) && Number.isFinite(entry) && Number.isFinite(stop) && entry !== stop ? Math.round((Math.abs(target - entry) / Math.abs(entry - stop)) * 100) / 100 : null);
+  const calculatedRiskReward = entry != null && stop != null && target != null
+    ? computeRRFromLevels({
+      entry,
+      sl: stop,
+      tp: target,
+      direction: planDirection?.toLowerCase(),
+    })
+    : null;
+  const riskReward = calculatedRiskReward && calculatedRiskReward.issues.length === 0
+    ? Math.round(calculatedRiskReward.rr * 100) / 100
+    : null;
 
-  const plan = !explicitNoTrade && planDirection && support.length > 0 && resistance.length > 0 && Number.isFinite(entry) && Number.isFinite(stop) && Number.isFinite(target)
+  const plan = !explicitNoTrade && planDirection && support.length > 0 && resistance.length > 0 && riskReward != null
     ? {
       direction: planDirection,
       entry_type: sourcePlan.entry_type === 'trigger' ? 'trigger' : 'market',
@@ -1123,11 +1133,11 @@ function normalizeVerdictFields(raw, normalized) {
       stop_loss: stop,
       take_profit_1: target,
       take_profit_2: target2,
-      risk_reward: riskReward ?? 1,
+      risk_reward: riskReward,
     }
     : null;
 
-  const rrValue = typeof sourcePlan.risk_reward === 'number' ? sourcePlan.risk_reward : (riskReward ?? null);
+  const rrValue = riskReward;
   const triggerPending = Boolean(plan && plan.entry_type === 'trigger' && (plan.trigger_event || sourcePlan.trigger_event || legacy.entry_trigger));
   const rangeChop = pricePosition === 'mid_range' || setup === 'range_middle' || setup === 'range_edge';
   const triggerFired = Boolean(plan && plan.entry_type === 'market');
@@ -1154,6 +1164,10 @@ function normalizeVerdictFields(raw, normalized) {
 
   return {
     status: plan ? normalized.status : 'no_trade',
+    trade_setup: {
+      ...normalized.trade_setup,
+      risk_reward: riskReward,
+    },
     ...(verdictOnlyPayload ? {
       status: plan ? 'success' : 'no_trade',
       trade_setup: {
@@ -2299,25 +2313,13 @@ function normalizeCompleteChartAnalysis(raw, input = {}) {
       .sort((a, b) => Math.abs(entry - a) - Math.abs(entry - b))[0];
     if (invalidation == null) return null;
 
-    const invalidationSource = side === 'BUY' ? levelsRaw.support : levelsRaw.resistance;
-    const invalidationText = (Array.isArray(invalidationSource) ? invalidationSource : [invalidationSource])
-      .map((value) => String(value ?? '').trim())
-      .find((value) => numericPrice(value.replace(/,/g, '')) === invalidation) || String(invalidation);
-    const visibleInvalidation = invalidationText;
-    const hasVisiblePrecision = /\.\d+/.test(visibleInvalidation);
-    const instrumentRule = chartInstrumentRule(chartRaw.pair || raw.detectedPair || input.pair);
-    const precision = hasVisiblePrecision
-      ? visibleInvalidation.split('.')[1].replace(/\D/g, '').length
-      : instrumentRule?.pricePrecision ?? 2;
-    const tick = hasVisiblePrecision ? 10 ** -precision : instrumentRule?.tickSize ?? 10 ** -precision;
     const suppliedStopRaw = suppliedPlan.stop_loss ?? legacyPlan.stop_loss;
     const suppliedStop = numericPrice(typeof suppliedStopRaw === 'string' ? suppliedStopRaw.replace(/,/g, '') : suppliedStopRaw);
     const suppliedStopValid = suppliedStop != null
       && (side === 'BUY' ? suppliedStop < invalidation : suppliedStop > invalidation)
       && Math.abs(suppliedStop - invalidation) <= invalidation * 0.01;
-    const stop = suppliedStopValid
-      ? suppliedStop
-      : Number((invalidation + (side === 'BUY' ? -tick : tick)).toFixed(precision));
+    if (!suppliedStopValid) return null;
+    const stop = suppliedStop;
     const risk = Math.abs(entry - stop);
     const reward = Math.abs(target - entry);
     if (!(risk > 0 && reward > 0)

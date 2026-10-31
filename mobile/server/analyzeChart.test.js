@@ -944,6 +944,45 @@ test('mid-range charts produce a nearest-level plan with recomputed RR', () => {
   assert.equal(result.trade_setup.entry_zone, String(result.trade_plan.entry));
 });
 
+test('missing stop-loss stays unplanned instead of receiving an inferred tick buffer', () => {
+  const result = normalizeCompleteChartAnalysis({
+    chart: { is_chart: true, pair: 'EURUSD', timeframe: 'M15' },
+    analysis: { trend: 'bullish', structure: 'Higher highs and higher lows.' },
+    levels: { support: [1.1], resistance: [1.105] },
+    bias: 'BUY',
+    price_position: 'at_support',
+    setup: 'trend_pullback',
+    trade_plan: { direction: 'BUY', entry: 1.1, take_profit_1: 1.105 },
+  });
+
+  assert.equal(result.status, 'no_trade');
+  assert.equal(result.trade_plan, null);
+  assert.equal(result.trade_setup.type, 'none');
+  assert.equal(result.trade_setup.stop_loss, 'none');
+  assert.equal(result.trade_setup.risk_reward, null);
+});
+
+test('legacy normalization does not create missing levels from support and resistance', () => {
+  const result = normalizeAnalysis({
+    status: 'success',
+    bias: 'BUY',
+    levels: { support: [1.1], resistance: [1.105] },
+    trade_setup: {
+      type: 'buy',
+      entry_zone: 'none',
+      stop_loss: 'none',
+      take_profit: 'none',
+      risk_reward: 99,
+    },
+  });
+
+  assert.equal(result.trade_plan, null);
+  assert.equal(result.trade_setup.entry_zone, 'none');
+  assert.equal(result.trade_setup.stop_loss, 'none');
+  assert.equal(result.trade_setup.take_profit, 'none');
+  assert.equal(result.trade_setup.risk_reward, null);
+});
+
 test('trending pullback with rejection remains a direct market BUY plan', () => {
   const result = normalizeCompleteChartAnalysis({
     chart: { is_chart: true, pair: 'EURUSD', timeframe: 'M15' },

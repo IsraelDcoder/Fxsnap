@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Animated,
   BackHandler,
+  Easing,
   Platform,
   ScrollView,
   StyleSheet,
@@ -28,7 +30,7 @@ type PaywallPlan = 'weekly' | 'monthly' | 'yearly';
 
 type PaywallPackage = {
   plan: PaywallPlan;
-  package: PurchasesPackage;
+  package: PurchasesPackage | null;
   price: string;
   priceAmount: number;
   priceAmountMicros: number;
@@ -121,8 +123,28 @@ export default function PaywallScreen() {
   const [error, setError] = useState('');
   const [retryOfferings, setRetryOfferings] = useState(0);
   const [remoteConfig, setRemoteConfig] = useState<PaywallRemoteConfig | null>(null);
+  const [closeButtonVisible, setCloseButtonVisible] = useState(false);
+  const closeButtonProgress = useRef(new Animated.Value(0)).current;
   const onboardingCompletionStarted = useRef(false);
   const dismissInProgress = useRef(false);
+
+  useEffect(() => {
+    if (appLoading || isSubscribed) return;
+    const revealTimeout = setTimeout(() => {
+      setCloseButtonVisible(true);
+      Animated.timing(closeButtonProgress, {
+        toValue: 1,
+        duration: 450,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: Platform.OS !== 'web',
+      }).start();
+    }, 3000);
+
+    return () => {
+      clearTimeout(revealTimeout);
+      closeButtonProgress.stopAnimation();
+    };
+  }, [appLoading, closeButtonProgress, isSubscribed]);
 
   const dismissPaywall = useCallback(() => {
     if (dismissInProgress.current) return;
@@ -142,7 +164,7 @@ export default function PaywallScreen() {
         if (onboardingPaywall) {
           trackEvent('onboarding_completed', { version: 2, completion: 'dismissed' });
         }
-        router.replace('/(tabs)/home');
+        router.replace('/(tabs)/home?exitOffer=1');
       } catch (dismissError) {
         console.error('[Paywall] Could not dismiss the paywall.', dismissError);
         setError('Could not open Home. Please try again.');
@@ -197,7 +219,18 @@ export default function PaywallScreen() {
     void (async () => {
       try {
         if (!(await configureBilling())) {
-          if (active) setError('Subscription plans are unavailable on this device.');
+          if (active && Platform.OS === 'web' && __DEV__) {
+            const placeholderPackages: PaywallPackage[] = [
+              { plan: 'weekly', package: null, price: '$4.99', priceAmount: 4.99, priceAmountMicros: 4_990_000, currencyCode: 'USD', period: 'week', eligibleForFreeTrial: false },
+              { plan: 'monthly', package: null, price: '$14.99', priceAmount: 14.99, priceAmountMicros: 14_990_000, currencyCode: 'USD', period: 'month', eligibleForFreeTrial: false },
+              { plan: 'yearly', package: null, price: '$99.99', priceAmount: 99.99, priceAmountMicros: 99_990_000, currencyCode: 'USD', period: 'year', eligibleForFreeTrial: false },
+            ];
+            setPackages(placeholderPackages);
+            setSelectedPackageId('yearly-placeholder');
+            setError('');
+          } else if (active) {
+            setError('Subscription plans are unavailable on this device.');
+          }
           return;
         }
 
@@ -229,7 +262,7 @@ export default function PaywallScreen() {
         setPackages(withTrialEligibility);
         const defaultPackage = withTrialEligibility.find((item) => item.plan === 'yearly')
           ?? withTrialEligibility[0];
-        setSelectedPackageId(defaultPackage?.package.identifier ?? null);
+        setSelectedPackageId(defaultPackage?.package?.identifier ?? null);
         if (withTrialEligibility.length === 0) setError('No subscription plans are available right now.');
       } catch (loadError) {
         console.error('[Paywall] Could not load the current RevenueCat offering.', loadError);
@@ -251,19 +284,27 @@ export default function PaywallScreen() {
     return () => { active = false; };
   }, []);
 
-  const selectedPackage = packages.find((item) => item.package.identifier === selectedPackageId) ?? null;
+  const selectedPackage = packages.find((item) => (
+    item.package?.identifier === selectedPackageId
+    || (!item.package && `${item.plan}-placeholder` === selectedPackageId)
+  )) ?? null;
   const yearlySavings = useMemo(() => {
     const weekly = packages.find((item) => item.plan === 'weekly');
+    const monthly = packages.find((item) => item.plan === 'monthly');
     const annual = packages.find((item) => item.plan === 'yearly');
-    if (
-      !weekly
-      || !annual
-      || weekly.currencyCode !== annual.currencyCode
-      || weekly.priceAmountMicros <= 0
-      || annual.priceAmountMicros < 0
-    ) return null;
-    const savings = Math.round(((weekly.priceAmountMicros * 52 - annual.priceAmountMicros) / (weekly.priceAmountMicros * 52)) * 100);
-    return savings > 0 ? savings : null;
+    if (!annual || annual.priceAmountMicros <= 0) return null;
+    const savingsAgainstMonthly = monthly
+      && monthly.currencyCode === annual.currencyCode
+      && monthly.priceAmountMicros > 0
+      ? Math.round(((monthly.priceAmountMicros * 12 - annual.priceAmountMicros) / (monthly.priceAmountMicros * 12)) * 100)
+      : null;
+    const savingsAgainstWeekly = weekly
+      && weekly.currencyCode === annual.currencyCode
+      && weekly.priceAmountMicros > 0
+      ? Math.round(((weekly.priceAmountMicros * 52 - annual.priceAmountMicros) / (weekly.priceAmountMicros * 52)) * 100)
+      : null;
+    const savings = savingsAgainstMonthly ?? savingsAgainstWeekly;
+    return savings !== null && savings > 0 ? savings : null;
   }, [packages]);
 
   const yearlyWeeklyPrice = useMemo(() => {
@@ -289,6 +330,10 @@ export default function PaywallScreen() {
 
   const handlePurchase = async () => {
     if (!selectedPackage || processing) return;
+    if (!selectedPackage.package) {
+      setError('Purchases are unavailable in the web preview. Use a native app build to subscribe.');
+      return;
+    }
     setProcessing(true);
     setError('');
     const productProperties = { plan: selectedPackage.plan, product_id: selectedPackage.package.product.identifier };
@@ -377,14 +422,30 @@ export default function PaywallScreen() {
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.topBar}>
-          <TouchableOpacity
-            onPress={dismissPaywall}
-            style={[styles.closeButton, { backgroundColor: theme.subtle }]}
-            accessibilityRole="button"
-            accessibilityLabel="Close paywall"
-          >
-            <Feather name="x" size={18} color={theme.textMuted} />
-          </TouchableOpacity>
+          <View style={styles.closeButtonSlot}>
+            {closeButtonVisible ? (
+              <Animated.View
+                style={{
+                  opacity: closeButtonProgress,
+                  transform: [{
+                    scale: closeButtonProgress.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [0.8, 1],
+                    }),
+                  }],
+                }}
+              >
+                <TouchableOpacity
+                  onPress={dismissPaywall}
+                  style={[styles.closeButton, { backgroundColor: theme.subtle }]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Close paywall"
+                >
+                  <Feather name="x" size={18} color={theme.textMuted} />
+                </TouchableOpacity>
+              </Animated.View>
+            ) : null}
+          </View>
           <TouchableOpacity
             onPress={() => void handleRestore()}
             style={styles.restoreButton}
@@ -473,20 +534,23 @@ export default function PaywallScreen() {
             ) : null}
             <View style={styles.planList}>
               {orderedPackages.map((item) => {
-                const selected = item.package.identifier === selectedPackageId;
+                const packageId = item.package?.identifier ?? `${item.plan}-placeholder`;
+                const selected = packageId === selectedPackageId;
                 const showSavings = item.plan === 'yearly'
                   && yearlySavings !== null
                   && packages.some((candidate) => candidate.plan === 'weekly');
                 return (
                   <TouchableOpacity
-                    key={item.package.identifier}
+                    key={packageId}
                     onPress={() => {
-                      setSelectedPackageId(item.package.identifier);
+                      setSelectedPackageId(packageId);
                       setError('');
-                      trackEvent('subscription_plan_selected', {
-                        plan: item.plan,
-                        product_id: item.package.product.identifier,
-                      });
+                      if (item.package) {
+                        trackEvent('subscription_plan_selected', {
+                          plan: item.plan,
+                          product_id: item.package.product.identifier,
+                        });
+                      }
                     }}
                     style={[
                       styles.planCard,
@@ -498,12 +562,12 @@ export default function PaywallScreen() {
                     disabled={processing}
                     accessibilityRole="radio"
                     accessibilityState={{ selected }}
-                    accessibilityLabel={`${PLAN_LABELS[item.plan]}, ${item.price} per ${item.period}`}
+                    accessibilityLabel={`${PLAN_LABELS[item.plan]}, ${item.price} per ${item.period}${showSavings ? `, best value, save ${yearlySavings}%` : ''}`}
                   >
                     {showSavings ? (
                       <View style={[styles.savingsBadge, { backgroundColor: theme.accent }]}>
                         <Feather name="zap" size={11} color={theme.background} />
-                        <Text style={[styles.savingsText, { color: theme.background }]}>SAVE {yearlySavings}%</Text>
+                        <Text style={[styles.savingsText, { color: theme.background }]}>BEST VALUE · SAVE {yearlySavings}%</Text>
                       </View>
                     ) : null}
                     <View style={[styles.radio, {
@@ -576,6 +640,14 @@ export default function PaywallScreen() {
                 {reassuranceText}
               </Text>
             </View>
+            <View style={styles.benefitList}>
+              {['Cancel anytime', 'No ads, ever', 'Custom AI routines'].map((benefit) => (
+                <View key={benefit} style={styles.benefitItem}>
+                  <Feather name="check" size={13} color={theme.accent} />
+                  <Text style={[styles.benefitText, { color: theme.textMuted }]}>{benefit}</Text>
+                </View>
+              ))}
+            </View>
             <View style={styles.footerLinks}>
               <TouchableOpacity onPress={() => void openUrl(TERMS_URL)} style={styles.footerLinkButton}>
                 <Text style={[styles.footerLink, { color: theme.textFaint }]}>Terms of Service</Text>
@@ -606,6 +678,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+  },
+  closeButtonSlot: {
+    width: 34,
+    height: 34,
   },
   closeButton: {
     minWidth: 32,
@@ -858,6 +934,24 @@ const styles = StyleSheet.create({
     lineHeight: 16,
     fontFamily: 'Inter_400Regular',
     textAlign: 'center',
+  },
+  benefitList: {
+    width: '100%',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    gap: 12,
+    marginTop: -4,
+  },
+  benefitItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  benefitText: {
+    fontSize: 11,
+    lineHeight: 16,
+    fontFamily: 'Inter_500Medium',
   },
   footerLinks: {
     flexDirection: 'row',

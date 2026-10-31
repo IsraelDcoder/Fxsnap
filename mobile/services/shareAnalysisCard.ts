@@ -1,6 +1,7 @@
 import type { AnalysisResult } from '@/context/AppContext';
 import { formatAnalysisDirection, resolveAnalysisDirection } from '@/services/analysisDirection';
 import { formatInstrumentPriceText } from '@/services/priceFormatting';
+import { calculateRiskRewardFromLevels, formatRiskReward } from '@/services/analysisResult';
 
 type ShareNavigator = Navigator & {
   canShare?: (data: ShareData) => boolean;
@@ -68,10 +69,19 @@ async function createAnalysisCardBlob(analysis: AnalysisResult, isPremium: boole
   const direction = analysis.status === 'invalid_image'
     ? 'INVALID'
     : formatAnalysisDirection(displayDirection, analysis.status === 'success' && analysis.tradeStatus === 'actionable');
-  const entry = formatInstrumentPriceText(analysis.tradeSetup?.entryZone || analysis.entry, analysis.pair);
-  const stopLoss = formatInstrumentPriceText(analysis.tradeSetup?.stopLoss || analysis.sl, analysis.pair);
-  const takeProfit = formatInstrumentPriceText(analysis.tradeSetup?.takeProfit || analysis.takeProfitLevels?.join(', ') || analysis.tp, analysis.pair);
-  const riskReward = analysis.tradeSetup?.riskReward ?? '—';
+  const entryValue = analysis.tradePlan?.entry ?? analysis.tradeSetup?.entryZone ?? analysis.entry;
+  const stopLossValue = analysis.tradePlan?.stopLoss ?? analysis.tradeSetup?.stopLoss ?? analysis.sl;
+  const takeProfitValue = analysis.tradePlan?.takeProfit1 ?? analysis.takeProfitLevels?.[0] ?? analysis.tradeSetup?.takeProfit ?? analysis.tp;
+  const entry = formatInstrumentPriceText(entryValue, analysis.pair);
+  const stopLoss = formatInstrumentPriceText(stopLossValue, analysis.pair);
+  const takeProfit = formatInstrumentPriceText(takeProfitValue, analysis.pair);
+  const calculatedRiskReward = calculateRiskRewardFromLevels(
+    entryValue,
+    stopLossValue,
+    takeProfitValue,
+    analysis.tradePlan?.direction ?? analysis.tradeSetup?.type,
+  );
+  const riskReward = calculatedRiskReward == null ? '—' : formatRiskReward(calculatedRiskReward);
   const insight = isPremium
     ? analysis.analysis?.notes || analysis.tradeTrigger || analysis.reasoning?.join(' ') || analysis.analysis?.structure || 'Analysis generated from the submitted chart.'
     : 'Unlock full analysis in FXSnap to view the AI reasoning.';

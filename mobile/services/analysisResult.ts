@@ -19,6 +19,20 @@ function isValidPrice(value: unknown): boolean {
   return [match[1], match[2]].filter(Boolean).every((part) => Number(part.replace(/,/g, '')) > 0);
 }
 
+function getPriceBounds(value: unknown): { min: number; max: number } | null {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) && value > 0 ? { min: value, max: value } : null;
+  }
+  if (typeof value !== 'string' || isUnavailableAnalysisValue(value)) return null;
+  const price = String.raw`(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?`;
+  const match = value.trim().match(new RegExp(`^(${price})(?:\\s*(?:-|–|—|to)\\s*(${price}))?$`, 'i'));
+  if (!match) return null;
+  const first = Number(match[1].replace(/,/g, ''));
+  const second = match[2] ? Number(match[2].replace(/,/g, '')) : first;
+  if (![first, second].every((part) => Number.isFinite(part) && part > 0)) return null;
+  return { min: Math.min(first, second), max: Math.max(first, second) };
+}
+
 function getRiskRewardRatio(value: unknown): number | null {
   if (typeof value === 'number') return Number.isFinite(value) && value > 0 ? value : null;
   if (typeof value !== 'string' || isUnavailableAnalysisValue(value)) return null;
@@ -32,16 +46,46 @@ function getRiskRewardRatio(value: unknown): number | null {
   return Number.isFinite(number) && number > 0 ? number : null;
 }
 
-export function hasValidatedTradeSetup(analysis: Pick<AnalysisResult, 'tradeSetup' | 'takeProfitLevels'>): boolean {
-  const target = (analysis.takeProfitLevels ?? []).find(isValidPrice) ?? analysis.tradeSetup?.takeProfit;
-  const riskReward = getRiskRewardRatio(analysis.tradeSetup?.riskReward);
-  return isValidPrice(analysis.tradeSetup?.entryZone)
-    && isValidPrice(analysis.tradeSetup?.stopLoss)
-    && isValidPrice(target)
-    && riskReward != null;
+export function calculateRiskRewardFromLevels(
+  entryValue: unknown,
+  stopValue: unknown,
+  targetValue: unknown,
+  direction: unknown,
+): number | null {
+  const entry = getPriceBounds(entryValue);
+  const stop = getPriceBounds(stopValue);
+  const target = getPriceBounds(targetValue);
+  const side = typeof direction === 'string' ? direction.trim().toUpperCase() : '';
+  if (!entry || !stop || !target) return null;
+
+  if (side === 'BUY') {
+    if (stop.max >= entry.min || target.min <= entry.max) return null;
+    const risk = entry.max - stop.min;
+    const reward = target.min - entry.max;
+    return risk > 0 && reward > 0 ? Math.round((reward / risk) * 100) / 100 : null;
+  }
+  if (side === 'SELL') {
+    if (stop.min <= entry.max || target.max >= entry.min) return null;
+    const risk = stop.max - entry.min;
+    const reward = entry.min - target.max;
+    return risk > 0 && reward > 0 ? Math.round((reward / risk) * 100) / 100 : null;
+  }
+  return null;
 }
 
-export function getMissingTradeLevelsExplanation(analysis: Pick<AnalysisResult, 'status' | 'tradeSetup' | 'takeProfitLevels' | 'candidateReview'>): string | null {
+export function hasValidatedTradeSetup(
+  analysis: Pick<AnalysisResult, 'tradeSetup' | 'takeProfitLevels' | 'tradePlan'>,
+): boolean {
+  const entry = analysis.tradePlan?.entry ?? analysis.tradeSetup?.entryZone;
+  const stop = analysis.tradePlan?.stopLoss ?? analysis.tradeSetup?.stopLoss;
+  const target = analysis.tradePlan?.takeProfit1
+    ?? (analysis.takeProfitLevels ?? []).find(isValidPrice)
+    ?? analysis.tradeSetup?.takeProfit;
+  const direction = analysis.tradePlan?.direction ?? analysis.tradeSetup?.type;
+  return calculateRiskRewardFromLevels(entry, stop, target, direction) != null;
+}
+
+export function getMissingTradeLevelsExplanation(analysis: Pick<AnalysisResult, 'status' | 'tradeSetup' | 'takeProfitLevels' | 'tradePlan' | 'candidateReview'>): string | null {
   if (analysis.status !== 'no_trade' && analysis.status !== 'success') return null;
   if (hasValidatedTradeSetup(analysis)) return null;
   if (analysis.tradeSetup?.type === 'buy' || analysis.tradeSetup?.type === 'sell') {
@@ -58,7 +102,12 @@ export function getMarketDevelopmentPlan(
   if (isConditionalCandidate) {
     const direction = analysis.tradeSetup!.type.toUpperCase();
     const target = (analysis.takeProfitLevels ?? []).find(isValidPrice) ?? analysis.tradeSetup!.takeProfit;
-    const ratio = getRiskRewardRatio(analysis.tradeSetup!.riskReward);
+    const ratio = calculateRiskRewardFromLevels(
+      analysis.tradeSetup!.entryZone,
+      analysis.tradeSetup!.stopLoss,
+      target,
+      direction,
+    );
     const hasCompleteCandidate = isValidPrice(analysis.tradeSetup!.entryZone)
       && isValidPrice(analysis.tradeSetup!.stopLoss)
       && isValidPrice(target)
