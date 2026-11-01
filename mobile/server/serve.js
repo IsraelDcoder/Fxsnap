@@ -707,14 +707,15 @@ function isTickAligned(price, rule) {
   return Math.abs(tickCount - Math.round(tickCount)) < 1e-6;
 }
 
-function getPriceConsistencyIssues(result, pairHint, now = Date.now()) {
+function getPriceConsistencyIssues(result, pairHint, now = Date.now(), priceOverride = null) {
   const chart = result?.chart || {};
   const setup = result?.trade_setup || {};
   const direction = setup.type;
   const issues = [];
   const symbol = chart.pair || result?.detectedPair || pairHint;
   const rule = chartInstrumentRule(symbol);
-  const currentPrice = exactPositivePrice(chart.latest_visible_price);
+  const screenshotPrice = exactPositivePrice(chart.latest_visible_price);
+  const currentPrice = priceOverride ?? screenshotPrice;
 
   if (!rule) issues.push('The chart instrument or its tick-size rules could not be verified.');
   if (!chart.is_chart || !['good', 'acceptable'].includes(chart.chart_quality)
@@ -722,6 +723,7 @@ function getPriceConsistencyIssues(result, pairHint, now = Date.now()) {
     issues.push('The chart does not show enough clear, recent candle information for a reliable setup.');
   }
   if (!chart.price_scale_visible || currentPrice == null
+    || screenshotPrice == null
     || !['visible_price_marker', 'latest_candle_scale_read'].includes(chart.current_price_source)) {
     issues.push('The current price cannot be reliably read from the screenshot; no older candle close or zone can substitute for it.');
   }
@@ -806,6 +808,132 @@ function getPriceConsistencyIssues(result, pairHint, now = Date.now()) {
     issues.push('The stop loss or TP1 is on the wrong side of the proposed entry.');
   }
   return Array.from(new Set(issues));
+}
+
+function calculateChartEvidenceScore(chart, analysis, support, resistance, latest) {
+  if (chart?.is_chart === false) return 0;
+  let score = chart?.is_chart === true ? 10 : 0;
+  score += chart?.chart_quality === 'good' ? 20
+    : chart?.chart_quality === 'acceptable' ? 14
+      : chart?.chart_quality === 'poor' ? 6 : 0;
+  if (chart?.candles_visible === true) score += 15;
+  if (chart?.has_enough_candles === true) score += 15;
+  if (chart?.price_scale_visible === true) score += 10;
+  if (latest != null && chart?.current_price_source !== 'unreadable') score += 10;
+  if (support.length) score += 5;
+  if (resistance.length) score += 5;
+  if (typeof (analysis?.market_structure || analysis?.structure) === 'string'
+    && (analysis.market_structure || analysis.structure).trim().length >= 12) score += 5;
+  if (chart?.current_candle_status === 'forming' || chart?.current_candle_status === 'completed') score += 5;
+  if (typeof chart?.latest_candle_timestamp === 'string'
+    && Number.isFinite(Date.parse(chart.latest_candle_timestamp))) score += 5;
+  return Math.max(0, Math.min(100, score));
+}
+
+function normalizedInstrumentSymbol(symbol) {
+  return String(symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+function getProviderSymbol(symbol) {
+  const normalized = normalizedInstrumentSymbol(symbol);
+  return /^[A-Z]{6}$/.test(normalized) ? `${normalized.slice(0, 3)}/${normalized.slice(3)}` : String(symbol).trim();
+}
+
+async function getLiveMarketData(result, pairHint, provider = marketProvider, now = Date.now()) {
+  const selectedSymbol = String(pairHint || '').trim();
+  const chartSymbol = result?.chart?.pair || result?.detectedPair;
+  if (!selectedSymbol) {
+    return { status: 'unavailable', price: null, timestamp: null, source: null, checkedAt: new Date(now).toISOString(), reason: 'Select the instrument before analysis to verify its live price.' };
+  }
+  if (chartSymbol && normalizedInstrumentSymbol(chartSymbol) !== normalizedInstrumentSymbol(selectedSymbol)) {
+    return { status: 'symbol_mismatch', price: null, timestamp: null, source: null, checkedAt: new Date(now).toISOString(), reason: 'The instrument selected in the app does not match the instrument identified on the screenshot.' };
+  }
+  if (!provider || typeof provider.getQuote !== 'function') {
+    return { status: 'unavailable', price: null, timestamp: null, source: null, checkedAt: new Date(now).toISOString(), reason: 'A live market-data provider is not configured; screenshot levels cannot be validated against a current quote.' };
+  }
+
+  try {
+    const quote = await provider.getQuote(getProviderSymbol(selectedSymbol));
+    const price = exactPositivePrice(quote?.price);
+    const timestamp = typeof quote?.timestamp === 'number'
+      ? quote.timestamp
+      : typeof quote?.timestamp === 'string' ? Date.parse(quote.timestamp) : Number.NaN;
+    if (price == null || !Number.isFinite(timestamp) || timestamp <= 0
+      || timestamp > now + 5_000 || now - timestamp > 90_000) {
+      return {
+        status: 'stale',
+        price,
+        timestamp: Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null,
+        source: 'Twelve Data',
+        checkedAt: new Date(now).toISOString(),
+        reason: 'The market quote is missing or older than 90 seconds; refresh and analyze again before considering a setup.',
+      };
+    }
+    return {
+      status: 'verified',
+      price,
+      timestamp: new Date(timestamp).toISOString(),
+      source: 'Twelve Data',
+      checkedAt: new Date(now).toISOString(),
+    };
+  } catch (error) {
+    console.warn('[Chart AI] Could not verify the current market quote.', {
+      symbol: normalizedInstrumentSymbol(selectedSymbol),
+      errorName: error instanceof Error ? error.name : 'UnknownError',
+    });
+    return {
+      status: 'unavailable',
+      price: null,
+      timestamp: null,
+      source: null,
+      checkedAt: new Date(now).toISOString(),
+      reason: 'The live market quote could not be verified; refresh and analyze again before considering a setup.',
+    };
+  }
+}
+
+function holdSetupForLiveQuoteValidation(result, issues, validationStatus = 'unverified') {
+  const reason = `No trade: the screenshot candidate was not validated against current market conditions. ${issues.join(' ')}`;
+  return {
+    ...result,
+    status: 'no_trade',
+    verdict: 'NO_TRADE',
+    conviction: null,
+    verdict_reason: reason,
+    trade_plan: null,
+    no_trade_reason: reason,
+    decision: 'NO_TRADE',
+    tradeDecision: 'NONE',
+    tradeType: 'none',
+    setupStatus: 'NO_SETUP',
+    tradeStatus: 'no_setup',
+    entryReadiness: 0,
+    candidateValidationStatus: validationStatus,
+    reasons: mergeUniqueStrings([...(result.reasons || []), reason]),
+    whyNotNow: mergeUniqueStrings([...(result.whyNotNow || []), reason]),
+    dataLimitations: mergeUniqueStrings([...(result.dataLimitations || []), ...issues]),
+  };
+}
+
+async function applyLiveMarketValidation(result, pairHint, provider = marketProvider, now = Date.now()) {
+  const liveMarketData = await getLiveMarketData(result, pairHint, provider, now);
+  const candidateDirection = result?.trade_setup?.type === 'buy' || result?.trade_setup?.type === 'sell';
+  let validated = { ...result, liveMarketData };
+  if (!candidateDirection) {
+    if (liveMarketData.status !== 'verified' && liveMarketData.reason) {
+      validated.dataLimitations = mergeUniqueStrings([...(validated.dataLimitations || []), liveMarketData.reason]);
+    }
+    return validated;
+  }
+
+  if (liveMarketData.status !== 'verified') {
+    return holdSetupForLiveQuoteValidation(validated, [liveMarketData.reason || 'A fresh live quote could not be verified.']);
+  }
+  const issues = getPriceConsistencyIssues(validated, pairHint, now, liveMarketData.price);
+  if (issues.length) {
+    return holdSetupForLiveQuoteValidation(validated, issues, 'rejected');
+  }
+  return validated;
 }
 
 function buildNoTradeVerdictFields(result, reason) {
@@ -2012,6 +2140,9 @@ function buildTradeTrigger(tradeStatus, derived) {
     return 'Wait for a breakout or retest to confirm the setup before entering.';
   }
   if (tradeStatus === 'waiting_for_confirmation') {
+    if (derived.setupDirection === 'buy' || derived.setupDirection === 'sell') {
+      return `Conditional ${derived.setupDirection.toUpperCase()} setup: wait for confirmation before taking a trade.`;
+    }
     return 'Wait for confirmation of the setup before taking a trade.';
   }
   return 'No actionable setup is available at this time.';
@@ -2024,7 +2155,9 @@ function buildExplainableOutcome(obs, evalRes) {
   const marketStructure = deriveMarketStructure(norm);
   const shortTermMomentum = deriveShortTermMomentum(norm);
   const priceLocation = derivePriceLocation(norm);
-  const setupDirection = deriveSetupDirection(norm);
+  const setupDirection = evalRes.candidate === true && ['buy', 'sell'].includes(evalRes.trade_setup?.type)
+    ? evalRes.trade_setup.type
+    : deriveSetupDirection(norm);
   const confirmationStatus = deriveConfirmationStatus(norm, norm.m15 || null);
   const setupStatus = determineSetupStatus(evalRes, { confirmationStatus });
   const tradeStatus = deriveTradeStatus(setupStatus, { priceLocation, setupDirection, confirmationStatus });
@@ -2086,9 +2219,9 @@ function buildExplainableOutcome(obs, evalRes) {
 
   const decision = tradeStatus === 'actionable'
     ? evalRes.trade_setup.type === 'buy' ? 'BUY' : 'SELL'
-    : evalRes.trade_setup && evalRes.trade_setup.type !== 'none'
-      ? (evalRes.trade_setup.type === 'buy' ? 'BUY' : 'SELL')
-      : 'BUY';
+    : evalRes.candidate === true && evalRes.trade_setup?.type !== 'none'
+      ? 'WAIT'
+      : 'NONE';
 
   const whyNotNow = Array.isArray(evalRes.failed_conditions) ? evalRes.failed_conditions.slice() : [];
   if (tradeStatus === 'waiting_for_pullback' && !whyNotNow.includes('Current price is near a structure boundary and the entry is not favorable.')) {
@@ -2151,8 +2284,7 @@ function applyMentorStrategy(normalized) {
     ...(evalRes.trade_setup || { ...DEFAULT_TRADE_SETUP }),
     take_profit_levels: validatedTakeProfitLevels(evalRes.trade_setup),
   };
-  response.confidence = typeof evalRes.strategy_score === 'number' ? evalRes.strategy_score : (normalized.confidence || 0);
-  response.confidenceMeaning = 'Evidence-coverage score; not a calibrated win probability.';
+  response.confidenceMeaning = 'Chart evidence coverage; not a calibrated win probability.';
   response.reasons = Array.isArray(normalized.reasons) ? Array.from(new Set([...normalized.reasons, ...(evalRes.failed_conditions || [])])) : Array.from(new Set([...(evalRes.failed_conditions || [])]));
   response.reasoning = mergeUniqueStrings([
     ...(Array.isArray(normalized.reasoning) ? normalized.reasoning : []),
@@ -2178,6 +2310,9 @@ function applyMentorStrategy(normalized) {
 
   // Attach explainable outcome components
   const explain = buildExplainableOutcome(obs, { ...evalRes, status: response.status, trade_setup: response.trade_setup });
+  response.confidence = typeof evalRes.strategy_score === 'number' && evalRes.strategy_score > 0
+    ? evalRes.strategy_score
+    : explain.marketBiasConfidence;
   response.analysis = response.analysis || {};
   response.marketBias = explain.marketBias;
   response.marketBiasConfidence = explain.marketBiasConfidence;
@@ -2210,16 +2345,6 @@ function applyMentorStrategy(normalized) {
   response.breakdown = explain.breakdown;
   // Expose RR parsing/validation issues for UI diagnostics
   response.rrIssues = Array.isArray(evalRes.rrIssues) ? Array.from(new Set(evalRes.rrIssues)) : [];
-
-  if (response.status === 'success' && !hasActionableTradeSetup(response.trade_setup)) {
-    response.status = 'success';
-    response.decision = response.trade_setup?.type === 'buy' ? 'BUY' : response.trade_setup?.type === 'sell' ? 'SELL' : 'BUY';
-    response.tradeDecision = response.decision;
-    response.setupStatus = 'ACTIVE';
-    response.tradeStatus = 'actionable';
-    response.entryReadiness = 100;
-    response.setupConfidence = Math.max(response.setupConfidence || 0, 1);
-  }
 
   if (response.status === 'no_trade' && response.reasons.length === 0) {
     const reason = 'No trade: the available evidence does not establish a complete, validated setup.';
@@ -2382,7 +2507,8 @@ function normalizeCompleteChartAnalysis(raw, input = {}) {
       },
       strategy: DEFAULT_STRATEGY,
       trade_setup: { ...DEFAULT_TRADE_SETUP, type: 'none' },
-      confidence: 0,
+      confidence: calculateChartEvidenceScore(chart, analysisRaw, support, resistance, latest),
+      confidenceMeaning: 'Chart evidence coverage; not a calibrated win probability.',
       reasons: [noTradeReason],
       reasoning: Array.isArray(raw.reasoning) ? raw.reasoning.slice(0, 5) : [noTradeReason],
       support_resistance: { support: supportText, resistance: resistanceText },
@@ -2409,8 +2535,7 @@ function normalizeCompleteChartAnalysis(raw, input = {}) {
   const setupText = setup.replace(/_/g, ' ');
   const structure = String(analysisRaw.market_structure || analysisRaw.structure || 'Visible swing structure frames the listed support and resistance levels.').trim();
   const description = `Price is ${positionText} in a ${setupText} structure, with a ${planDirection} setup. Support at ${support.join(', ')} and resistance at ${resistance.join(', ')} frame the setup. ${structure}`;
-  const suppliedConfidence = Number(raw.confidence);
-  const confidence = Number.isFinite(suppliedConfidence) ? Math.min(100, Math.max(0, suppliedConfidence)) : 65;
+  const confidence = calculateChartEvidenceScore(chartRaw, analysisRaw, support, resistance, latest);
   const conviction = ['HIGH', 'MEDIUM', 'LOW'].includes(raw.conviction) ? raw.conviction : 'MEDIUM';
   const verdict = raw.verdict === 'CONDITIONAL_PLAN' || plan.entry_type === 'trigger'
     ? 'CONDITIONAL_PLAN'
@@ -2464,6 +2589,7 @@ function normalizeCompleteChartAnalysis(raw, input = {}) {
     strategy: DEFAULT_STRATEGY,
     trade_setup: tradeSetup,
     confidence,
+    confidenceMeaning: 'Chart evidence coverage; not a calibrated win probability.',
     reasons: [verdictReason],
     reasoning: Array.isArray(raw.reasoning) ? raw.reasoning.slice(0, 5) : [description],
     support_resistance: { support: supportText, resistance: resistanceText },
@@ -4230,7 +4356,6 @@ async function analyzeChart(req, res) {
       return sendJson(res, 200, aiInvalidResponse(input, 'The analysis engine returned an invalid response. Please try again.'));
     }
     if (result.status === 'invalid_image') return sendJson(res, 200, result);
-
     if (result.status === 'success' && result.trade_plan) {
       try {
         const id = crypto.randomBytes(10).toString('hex');
@@ -4500,7 +4625,7 @@ const privacyTemplate = fs.existsSync(PRIVACY_TEMPLATE_PATH) ? fs.readFileSync(P
 const termsTemplate = fs.existsSync(TERMS_TEMPLATE_PATH) ? fs.readFileSync(TERMS_TEMPLATE_PATH, 'utf-8') : null;
 const appName = getAppName();
 
-function createRequestHandler() {
+function createRequestHandler({ marketDataProvider = marketProvider } = {}) {
   const handleSupportInboxRequest = createSupportInboxApi({
     getActor: async (req, res) => {
       const actor = await getCommunityActor(req, res);
@@ -4882,6 +5007,9 @@ module.exports.enforceValidationRules = enforceValidationRules;
 module.exports.hasRequiredAnalysisPayload = hasRequiredAnalysisPayload;
 module.exports.chartInstrumentRule = chartInstrumentRule;
 module.exports.getPriceConsistencyIssues = getPriceConsistencyIssues;
+module.exports.calculateChartEvidenceScore = calculateChartEvidenceScore;
+module.exports.getLiveMarketData = getLiveMarketData;
+module.exports.applyLiveMarketValidation = applyLiveMarketValidation;
 module.exports.holdSetupForPriceValidation = holdSetupForPriceValidation;
 module.exports.shouldRequestCandidateLevelFollowup = shouldRequestCandidateLevelFollowup;
 module.exports.buildCandidateLevelFollowupMessages = buildCandidateLevelFollowupMessages;

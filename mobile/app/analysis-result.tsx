@@ -323,6 +323,11 @@ export default function AnalysisResultScreen() {
     ...(currentAnalysis?.dataLimitations ?? []),
     ...(currentAnalysis?.whyNotNow ?? []),
   ].filter((note, index, notes) => notes.indexOf(note) === index);
+  const analysisLimitations = resultLimitations.length
+    ? resultLimitations
+    : currentAnalysis?.liveMarketData?.status === 'verified'
+      ? ['Chart structure and levels come from the screenshot. The provider quote is a time-stamped snapshot, not continuous monitoring.']
+      : ['Analysis is based on the uploaded screenshot; a current live market quote was not verified.'];
   const hasDirectionalBiasOnly = !hasDirectionalCandidate
     && canShowMarketRead
     && (marketReadDirection === 'BUY' || marketReadDirection === 'SELL');
@@ -440,7 +445,8 @@ export default function AnalysisResultScreen() {
       lines.push('FXSnap — Market Read');
       lines.push('');
       lines.push(`Pair: ${currentAnalysis.pair}`);
-      lines.push(`Evidence score (not win probability): ${currentAnalysis.confidence}%`);
+      lines.push(`Chart evidence score (not win probability): ${currentAnalysis.confidence > 0 ? `${currentAnalysis.confidence}%` : 'Not enough readable evidence'}`);
+      lines.push('Price context: screenshot only; no external quote or candle data was requested.');
       lines.push(`Directional bias: ${directionLabel}`);
       lines.push(`Trade signal: ${readinessText}`);
       if (!hasFullAnalysisAccess) lines.push('AI reasoning: Unlock full analysis in FXSnap.');
@@ -461,7 +467,7 @@ export default function AnalysisResultScreen() {
       lines.push('');
       lines.push(`Pair: ${currentAnalysis.pair}`);
       lines.push(`Direction: ${dir}`);
-      lines.push(`Evidence score (not win probability): ${currentAnalysis.confidence}%`);
+      lines.push(`Chart evidence score (not win probability): ${currentAnalysis.confidence > 0 ? `${currentAnalysis.confidence}%` : 'Not enough readable evidence'}`);
       lines.push(`Market Bias: ${currentAnalysis.marketBias || 'neutral'}`);
       lines.push(`Setup Status: ${currentAnalysis.setupStatus || 'NO_SETUP'}`);
       lines.push('');
@@ -747,7 +753,15 @@ export default function AnalysisResultScreen() {
                 <View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
                 <TradeLevelRow label="Visible price (screenshot)" value={screenshotPrice} />
                 <View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
-                <TradeLevelRow label="Evidence score (not win probability)" value={`${currentAnalysis.confidence}%`} />
+                <TradeLevelRow
+                  label="Price source"
+                  value="Uploaded screenshot only"
+                />
+                <View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} />
+                <TradeLevelRow
+                  label="Chart evidence score (not win probability)"
+                  value={currentAnalysis.confidence > 0 ? `${currentAnalysis.confidence}%` : 'Not enough evidence'}
+                />
               </View>
               <View style={styles.riskRewardLegend}>
                 <Text style={[styles.bodyMuted, { color: colors.textSecondary }]}>{canShowRiskReward ? 'Calculated from entry, stop and TP1' : riskRewardText}</Text>
@@ -780,7 +794,7 @@ export default function AnalysisResultScreen() {
                 <Feather name="info" size={16} color="#D99A2B" />
                 <Text style={[styles.reasoningTitle, { color: colors.text }]}>Limitations</Text>
               </View>
-              {(resultLimitations.length ? resultLimitations : ['Analysis is based on the uploaded screenshot, not live market data.']).slice(0, 3).map((note, index) => (
+              {analysisLimitations.slice(0, 3).map((note, index) => (
                 <View key={`${index}-${note}`} style={styles.reasoningRow}>
                   <View style={[styles.reasoningBullet, { backgroundColor: '#D99A2B' }]} />
                   <Text style={[styles.reasoningText, { color: colors.textSecondary }]}>{formatDevelopingNote(note)}</Text>

@@ -15,6 +15,7 @@ import {
   Text,
   TextInput,
   View,
+  useColorScheme,
   type ViewToken,
 } from 'react-native';
 import { KeyboardAvoidingView as KeyboardControllerAvoidingView } from 'react-native-keyboard-controller';
@@ -35,7 +36,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { Feather } from '@expo/vector-icons';
 import { FlashList, type FlashListRef } from '@shopify/flash-list';
-import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams, type ErrorBoundaryProps } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import * as Clipboard from 'expo-clipboard';
@@ -100,6 +101,8 @@ import {
 import CommunityPostCard from '@/components/CommunityPostCard';
 import CommunityPreviewNotice from '@/components/CommunityPreviewNotice';
 import { getCommunityPostImages } from '@/services/communityMediaPresentation';
+import { trackError } from '@/services/telemetry';
+import * as Sentry from '@sentry/react-native';
 
 type ComposerKind = 'text' | 'signal' | 'analysis' | 'poll';
 type ComposerIntent = 'post' | 'question' | 'trade' | 'poll' | 'image';
@@ -184,6 +187,48 @@ function apiErrorMessage(error: unknown) {
   if (!(error instanceof Error)) return 'The Community request failed. Please try again.';
   const requestId = (error as CommunityRequestError).requestId;
   return requestId ? `${error.message} Reference: ${requestId}` : error.message;
+}
+
+export function ErrorBoundary({ error, retry }: ErrorBoundaryProps) {
+  const isDark = useColorScheme() === 'dark';
+  useEffect(() => {
+    trackError(error, { component: 'CommunityScreen' });
+    Sentry.captureException(error, { tags: { screen: 'Community' } });
+  }, [error]);
+
+  const [retrying, setRetrying] = useState(false);
+  const handleRetry = async () => {
+    setRetrying(true);
+    try {
+      await retry();
+    } finally {
+      setRetrying(false);
+    }
+  };
+
+  return (
+    <View style={[styles.screenErrorBoundary, { backgroundColor: isDark ? '#111311' : '#F7F7F5' }]}>
+      <Feather name="alert-circle" size={30} color={isDark ? '#E5C84B' : '#9A7B00'} />
+      <Text style={[styles.screenErrorTitle, { color: isDark ? '#FFFFFF' : '#171A17' }]}>Community hit a snag</Text>
+      <Text style={[styles.screenErrorBody, { color: isDark ? '#B9C0BA' : '#59615B' }]}>
+        You can retry Community or return to the rest of the app.
+      </Text>
+      {__DEV__ ? <Text selectable style={[styles.screenErrorDetails, { color: isDark ? '#D5D5D5' : '#59615B' }]}>{error.message}</Text> : null}
+      <Pressable
+        onPress={() => void handleRetry()}
+        disabled={retrying}
+        style={styles.screenErrorPrimary}
+        accessibilityRole="button"
+      >
+        {retrying
+          ? <ActivityIndicator color="#101010" />
+          : <Text style={[styles.screenErrorPrimaryText, { color: isDark ? '#111311' : '#171A17' }]}>Try Community again</Text>}
+      </Pressable>
+      <Pressable onPress={() => router.replace('/')} style={styles.screenErrorSecondary} accessibilityRole="button">
+        <Text style={[styles.screenErrorSecondaryText, { color: isDark ? '#E5C84B' : '#806600' }]}>Go to Home</Text>
+      </Pressable>
+    </View>
+  );
 }
 
 function firstParam(value: string | string[] | undefined) {
@@ -278,8 +323,9 @@ export default function CommunityScreen() {
     };
   const reduceMotion = useReducedMotion();
   const insets = useSafeAreaInsets();
-  const params = useLocalSearchParams<{ postId?: string; shareAnalysisId?: string; category?: string }>();
+  const params = useLocalSearchParams<{ postId?: string; commentId?: string; shareAnalysisId?: string; category?: string }>();
   const postIdParam = firstParam(params.postId);
+  const commentIdParam = firstParam(params.commentId);
   const shareAnalysisId = firstParam(params.shareAnalysisId);
   const categoryParam = firstParam(params.category);
   const { currentAnalysis, savedAnalyses, isSubscribed } = useApp();
@@ -333,6 +379,9 @@ export default function CommunityScreen() {
   const [commentPost, setCommentPost] = useState<CommunityMessage | null>(null);
   const [comments, setComments] = useState<CommunityMessage[]>([]);
   const [commentsLoading, setCommentsLoading] = useState(false);
+  const [discussionError, setDiscussionError] = useState('');
+  const [focusedCommentId, setFocusedCommentId] = useState<string | null>(null);
+  const discussionScrollRef = useRef<ScrollView>(null);
   const [commentDraft, setCommentDraft] = useState('');
   const [replyTarget, setReplyTarget] = useState<CommunityMessage | null>(null);
   const [threadReplies, setThreadReplies] = useState<CommunityMessage[]>([]);
@@ -708,26 +757,75 @@ export default function CommunityScreen() {
   }, [profile, stage]);
 
   useEffect(() => {
-    if (stage !== 'feed' || !postIdParam || processedPostId.current === postIdParam) return;
-    processedPostId.current = postIdParam;
+    const requestKey = `${postIdParam || ''}:${commentIdParam || ''}`;
+    if (stage !== 'feed' || !postIdParam || processedPostId.current === requestKey) return;
+    processedPostId.current = requestKey;
     let active = true;
-    void getCommunityPost(postIdParam).then(({ post }) => {
-      if (!active) return;
-      setCommentPost(post);
-      setCommentsLoading(true);
-      setComments([]);
-      setThreadReplies([]);
-      return getCommunityComments(post.id);
-    }).then((result) => {
-      if (active && result) {
+    setDiscussionError('');
+    setCommentsLoading(true);
+    setThreadLoading(false);
+    setThreadReplies([]);
+    setReplyTarget(null);
+    setFocusedCommentId(null);
+    void (async () => {
+      try {
+        const { post: requestedPost } = await getCommunityPost(postIdParam);
+        let rootPost = requestedPost;
+        let ancestor = requestedPost;
+        let depth = 0;
+        while (ancestor.replyTo && depth < 4) {
+          const { post: parent } = await getCommunityPost(ancestor.replyTo.id);
+          ancestor = parent;
+          rootPost = parent;
+          depth += 1;
+          if (!active) return;
+        }
+        if (!active) return;
+        const targetId = commentIdParam || (requestedPost.id !== rootPost.id ? requestedPost.id : null);
+        setCommentPost(rootPost);
+        setComments([]);
+        const result = await getCommunityComments(rootPost.id);
+        if (!active) return;
         setComments(result.comments);
-        setCommentsLoading(false);
+        if (!targetId || targetId === rootPost.id) return;
+
+        try {
+          const { post: target } = targetId === requestedPost.id
+            ? { post: requestedPost }
+            : await getCommunityPost(targetId);
+          if (!active) return;
+          setFocusedCommentId(target.id);
+          if (target.replyTo?.id && target.replyTo.id !== rootPost.id) {
+            let parent = result.comments.find((item) => item.id === target.replyTo?.id);
+            if (!parent) {
+              const parentResult = await getCommunityPost(target.replyTo.id);
+              parent = parentResult.post;
+            }
+            if (!active) return;
+            const replies = await getCommunityReplies(rootPost.id, parent.id);
+            if (!active) return;
+            setThreadReplies(replies.comments.some((item) => item.id === target.id)
+              ? replies.comments
+              : [...replies.comments, target]);
+          } else {
+            setComments((previous) => previous.some((item) => item.id === target.id)
+              ? previous
+              : [...previous, target]);
+          }
+        } catch {
+          if (active) setDiscussionError('This notification’s reply is no longer available. The discussion is shown below.');
+        }
+      } catch (error) {
+        if (active) {
+          setDiscussionError(apiErrorMessage(error));
+          Alert.alert('Notification unavailable', apiErrorMessage(error));
+        }
+      } finally {
+        if (active) setCommentsLoading(false);
       }
-    }).catch((error) => {
-      if (active) Alert.alert('Post unavailable', apiErrorMessage(error));
-    });
+    })();
     return () => { active = false; };
-  }, [postIdParam, stage]);
+  }, [commentIdParam, postIdParam, stage]);
 
   const analysisForSharing = useMemo(() => {
     if (!shareAnalysisId) return null;
@@ -1498,6 +1596,14 @@ export default function CommunityScreen() {
     router.push('/community-notifications');
   };
 
+  const closeDiscussion = () => {
+    setCommentPost(null);
+    if (postIdParam) {
+      processedPostId.current = null;
+      router.replace('/community');
+    }
+  };
+
   const openHeaderMenu = () => {
     Alert.alert('Community', undefined, [
       { text: 'Create chart post', onPress: () => openComposer('text', 'chart_analysis') },
@@ -2177,18 +2283,18 @@ export default function CommunityScreen() {
         </NativeKeyboardAvoidingView>
       </Modal>
 
-      <Modal visible={Boolean(commentPost)} animationType="slide" onRequestClose={() => setCommentPost(null)}>
+      <Modal visible={Boolean(commentPost)} animationType="slide" onRequestClose={closeDiscussion}>
         <KeyboardControllerAvoidingView
           style={[styles.modalScreen, { backgroundColor: colors.background, paddingTop: insets.top }]}
           behavior="padding"
           keyboardVerticalOffset={insets.top}
         >
           <View style={[styles.modalHeader, { borderBottomColor: colors.cardBorder }]}>
-            <TouchableOpacity onPress={() => setCommentPost(null)} style={styles.headerIcon} accessibilityLabel="Close discussion"><Feather name="arrow-left" size={20} color={colors.text} /></TouchableOpacity>
+            <TouchableOpacity onPress={closeDiscussion} style={styles.headerIcon} accessibilityLabel="Close discussion"><Feather name="arrow-left" size={20} color={colors.text} /></TouchableOpacity>
             <Text style={[styles.modalTitle, { color: colors.text }]}>Post & discussion</Text>
             <View style={styles.headerIcon} />
           </View>
-          <ScrollView contentContainerStyle={styles.commentsContent} keyboardShouldPersistTaps="handled" keyboardDismissMode="interactive">
+          <ScrollView ref={discussionScrollRef} contentContainerStyle={styles.commentsContent} keyboardShouldPersistTaps="handled" keyboardDismissMode="interactive">
             {commentPost ? <CommunityPostCard
               post={commentPost}
               palette={colors}
@@ -2207,10 +2313,21 @@ export default function CommunityScreen() {
               onMore={(cardView) => showPostActions(commentPost, cardView)}
               onFollow={() => void handleFollow(commentPost)}
             /> : null}
+            {discussionError ? (
+              <View style={[styles.inlineError, { backgroundColor: `${colors.sell}10` }]}>
+                <Text style={[styles.errorText, { color: colors.sell }]}>{discussionError}</Text>
+              </View>
+            ) : null}
             <Text style={[styles.commentsHeading, { color: colors.text }]}>Trader discussion</Text>
             {commentsLoading ? <ActivityIndicator color={colors.buy} /> : comments.length ? comments.map((comment, index) => (
-              <Animated.View key={comment.id} entering={reduceMotion ? undefined : FadeInDown.delay(Math.min(index * 35, 140)).duration(240)}>
-                <CommentCard comment={comment} colors={colors} reactionBusy={reactionBusyIds.has(comment.id)} onReact={(reaction) => void handleReaction(comment, reaction)} onReply={() => void startReply(comment)} onMore={() => showPostActions(comment)} onAuthorPress={() => router.push({ pathname: '/community-member', params: { username: comment.authorUsername } })} />
+              <Animated.View
+                key={comment.id}
+                entering={reduceMotion ? undefined : FadeInDown.delay(Math.min(index * 35, 140)).duration(240)}
+                onLayout={focusedCommentId === comment.id ? (event) => {
+                  discussionScrollRef.current?.scrollTo({ y: Math.max(0, event.nativeEvent.layout.y - 90), animated: true });
+                } : undefined}
+              >
+                <CommentCard comment={comment} colors={colors} highlighted={focusedCommentId === comment.id} reactionBusy={reactionBusyIds.has(comment.id)} onReact={(reaction) => void handleReaction(comment, reaction)} onReply={() => void startReply(comment)} onMore={() => showPostActions(comment)} onAuthorPress={() => router.push({ pathname: '/community-member', params: { username: comment.authorUsername } })} />
               </Animated.View>
             )) : (
               <View style={styles.noComments}>
@@ -2218,8 +2335,14 @@ export default function CommunityScreen() {
               </View>
             )}
             {threadLoading ? <ActivityIndicator color={colors.buy} /> : threadReplies.map((reply, index) => (
-              <Animated.View key={reply.id} entering={reduceMotion ? undefined : FadeInDown.delay(Math.min(index * 35, 140)).duration(240)}>
-                <CommentCard comment={reply} colors={colors} nested reactionBusy={reactionBusyIds.has(reply.id)} onReact={(reaction) => void handleReaction(reply, reaction)} onReply={() => void startReply(reply)} onMore={() => showPostActions(reply)} onAuthorPress={() => router.push({ pathname: '/community-member', params: { username: reply.authorUsername } })} />
+              <Animated.View
+                key={reply.id}
+                entering={reduceMotion ? undefined : FadeInDown.delay(Math.min(index * 35, 140)).duration(240)}
+                onLayout={focusedCommentId === reply.id ? (event) => {
+                  discussionScrollRef.current?.scrollTo({ y: Math.max(0, event.nativeEvent.layout.y - 90), animated: true });
+                } : undefined}
+              >
+                <CommentCard comment={reply} colors={colors} nested highlighted={focusedCommentId === reply.id} reactionBusy={reactionBusyIds.has(reply.id)} onReact={(reaction) => void handleReaction(reply, reaction)} onReply={() => void startReply(reply)} onMore={() => showPostActions(reply)} onAuthorPress={() => router.push({ pathname: '/community-member', params: { username: reply.authorUsername } })} />
               </Animated.View>
             ))}
           </ScrollView>
@@ -2367,6 +2490,7 @@ function CommentCard({
   comment,
   colors,
   nested = false,
+  highlighted = false,
   reactionBusy = false,
   onReact,
   onReply,
@@ -2376,6 +2500,7 @@ function CommentCard({
   comment: CommunityMessage;
   colors: ReturnType<typeof useColors>;
   nested?: boolean;
+  highlighted?: boolean;
   reactionBusy?: boolean;
   onReact: (reaction: CommunityReaction) => void;
   onReply: () => void;
@@ -2397,7 +2522,11 @@ function CommentCard({
       delayLongPress={450}
       accessibilityRole="button"
       accessibilityLabel="Comment. Long press to react."
-      style={[styles.commentCard, { marginLeft: nested ? 25 : 0, backgroundColor: colors.card, borderColor: colors.cardBorder }]}
+      style={[
+        styles.commentCard,
+        highlighted && styles.highlightedCommentCard,
+        { marginLeft: nested ? 25 : 0, backgroundColor: colors.card, borderColor: highlighted ? colors.buy : colors.cardBorder },
+      ]}
     >
       <View style={styles.commentHeader}>
         {comment.authorPictureUrl ? (
@@ -2562,6 +2691,14 @@ function MarketTicker({ market, colors }: { market: CommunityMarketState; colors
 
 const styles = StyleSheet.create({
   screen: { flex: 1 },
+  screenErrorBoundary: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 14, padding: 28 },
+  screenErrorTitle: { fontSize: 22, fontWeight: '700', textAlign: 'center' },
+  screenErrorBody: { fontSize: 15, lineHeight: 22, textAlign: 'center', maxWidth: 340 },
+  screenErrorDetails: { fontSize: 12, lineHeight: 17, maxWidth: '100%' },
+  screenErrorPrimary: { minHeight: 48, minWidth: 210, alignItems: 'center', justifyContent: 'center', borderRadius: 13, paddingHorizontal: 18, backgroundColor: '#E5C84B' },
+  screenErrorPrimaryText: { color: '#111311', fontSize: 14, fontWeight: '700' },
+  screenErrorSecondary: { minHeight: 44, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 18 },
+  screenErrorSecondaryText: { color: '#E5C84B', fontSize: 14, fontWeight: '600' },
   header: { minHeight: 64, flexDirection: 'row', alignItems: 'center', gap: 9, paddingHorizontal: 14, borderBottomWidth: StyleSheet.hairlineWidth },
   onboardingHeader: { minHeight: 56, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14 },
   headerIcon: { width: 36, height: 40, alignItems: 'center', justifyContent: 'center', position: 'relative' },
@@ -2700,6 +2837,7 @@ const styles = StyleSheet.create({
   commentsContent: { padding: 13, paddingBottom: 18 },
   commentsHeading: { fontSize: 13, fontFamily: 'Inter_700Bold', marginTop: 4, marginBottom: 10 },
   commentCard: { borderWidth: 1, borderRadius: 13, padding: 10, marginBottom: 8, gap: 8 },
+  highlightedCommentCard: { borderWidth: 2 },
   commentFooter: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   commentReactionSummary: { flexDirection: 'row', alignItems: 'center', gap: 4, minHeight: 26, paddingHorizontal: 8, borderRadius: 13 },
   commentReactionEmoji: { fontSize: 17 },

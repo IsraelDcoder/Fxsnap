@@ -43,6 +43,14 @@ export interface ChartAnalysisResult {
   detectedPair?: string | null;
   timeframe?: string | null;
   latestVisiblePrice?: number;
+  liveMarketData?: {
+    status: 'verified' | 'stale' | 'unavailable' | 'symbol_mismatch';
+    price: number | null;
+    timestamp: string | null;
+    source: string | null;
+    checkedAt: string;
+    reason?: string;
+  };
   priceSeries?: number[];
   reasoning?: string[];
   supportResistance?: {
@@ -385,6 +393,20 @@ async function sendChartAnalysis(path: string, body: Record<string, unknown>): P
       detectedPair: payload.detectedPair ?? null,
       timeframe: payload.timeframe ?? null,
       latestVisiblePrice,
+      liveMarketData: payload.liveMarketData && typeof payload.liveMarketData === 'object'
+        ? {
+          status: ['verified', 'stale', 'unavailable', 'symbol_mismatch'].includes(payload.liveMarketData.status)
+            ? payload.liveMarketData.status
+            : 'unavailable',
+          price: typeof payload.liveMarketData.price === 'number' && Number.isFinite(payload.liveMarketData.price)
+            ? payload.liveMarketData.price
+            : null,
+          timestamp: typeof payload.liveMarketData.timestamp === 'string' ? payload.liveMarketData.timestamp : null,
+          source: typeof payload.liveMarketData.source === 'string' ? payload.liveMarketData.source : null,
+          checkedAt: typeof payload.liveMarketData.checkedAt === 'string' ? payload.liveMarketData.checkedAt : '',
+          reason: typeof payload.liveMarketData.reason === 'string' ? payload.liveMarketData.reason : undefined,
+        }
+        : undefined,
       priceSeries,
       reasoning: Array.isArray(payload.reasoning)
         ? payload.reasoning.map((item: unknown) => String(item).trim()).filter(Boolean).slice(0, 5)

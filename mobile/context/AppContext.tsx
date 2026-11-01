@@ -29,6 +29,14 @@ export interface AnalysisResult {
   timeframe?: string;
   takeProfitLevels?: string[];
   latestVisiblePrice?: number;
+  liveMarketData?: {
+    status: 'verified' | 'stale' | 'unavailable' | 'symbol_mismatch';
+    price: number | null;
+    timestamp: string | null;
+    source: string | null;
+    checkedAt: string;
+    reason?: string;
+  };
   priceSeries?: number[];
   reasoning?: string[];
   supportResistance?: {

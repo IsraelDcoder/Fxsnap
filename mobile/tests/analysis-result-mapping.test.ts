@@ -116,6 +116,25 @@ test('maps no-trade analysis content and every available level into the result m
   assert.deepEqual(result.supportResistance, { support: ['1.0950'], resistance: ['1.1100'] });
 });
 
+test('keeps chart evidence confidence separate from market-bias confidence and maps quote metadata', () => {
+  const liveMarketData = {
+    status: 'verified' as const,
+    price: 1.1027,
+    timestamp: '2025-01-01T12:00:00.000Z',
+    source: 'Twelve Data',
+    checkedAt: '2025-01-01T12:00:01.000Z',
+  };
+  const result = buildAnalysisResult(chartResult({
+    confidence: 72,
+    marketConfidence: 41,
+    liveMarketData,
+  }), 'EUR/USD', 'file:///chart.jpg');
+
+  assert.equal(result.confidence, 72);
+  assert.equal(result.marketConfidence, 41);
+  assert.deepEqual(result.liveMarketData, liveMarketData);
+});
+
 test('keeps candidate levels visible in the result model when trade direction is not established', () => {
   const result = buildAnalysisResult(chartResult({
     analysis: {

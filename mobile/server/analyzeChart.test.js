@@ -18,6 +18,9 @@ const {
   shouldRequestCandidateLevelFollowup,
   applyTwoSidedCandidateReview,
   getPriceConsistencyIssues,
+  calculateChartEvidenceScore,
+  getLiveMarketData,
+  applyLiveMarketValidation,
   applyCandidateLevelFollowup,
   recoverCandidateLevels,
   summarizeAnalysisPayload,
@@ -160,6 +163,103 @@ const consistentPriceSetup = {
 test('latest-price validation accepts a fresh setup and distinguishes a forming candle', () => {
   assert.deepEqual(getPriceConsistencyIssues(consistentPriceSetup, 'EURUSD'), []);
   assert.equal(consistentPriceSetup.chart.current_candle_status, 'forming');
+});
+
+test('readable no-trade charts receive a non-zero evidence score without inventing a setup', () => {
+  const result = normalizeCompleteChartAnalysis({
+    status: 'no_trade',
+    chart: {
+      is_chart: true,
+      chart_quality: 'good',
+      candles_visible: true,
+      has_enough_candles: true,
+      price_scale_visible: true,
+      latest_visible_price: '1.10000',
+      current_price_source: 'visible_price_marker',
+      current_candle_status: 'forming',
+      latest_candle_timestamp: new Date().toISOString(),
+    },
+    analysis: { trend: 'neutral', market_structure: 'Price is consolidating in a range.' },
+    levels: { support: ['1.09900'], resistance: ['1.10100'] },
+    confidence: 0,
+    verdict: 'NO_TRADE',
+  });
+
+  assert.ok(result.confidence > 0);
+  assert.match(result.confidenceMeaning, /not a calibrated win probability/i);
+  assert.equal(result.trade_plan, null);
+});
+
+test('live quote validation requires a fresh quote and rejects stale or mismatched setups', async () => {
+  const now = Date.now();
+  const candidate = {
+    ...consistentPriceSetup,
+    chart: {
+      ...consistentPriceSetup.chart,
+      latest_candle_timestamp: new Date(now).toISOString(),
+      candles_visible: true,
+      has_enough_candles: true,
+      price_scale_visible: true,
+    },
+    detectedPair: 'EURUSD',
+    status: 'success',
+    trade_plan: {
+      direction: 'BUY',
+      entry: 1.1,
+      stop_loss: 1.099,
+      take_profit_1: 1.102,
+      risk_reward: 2,
+    },
+  };
+  const provider = {
+    getQuote: async (symbol) => {
+      assert.equal(symbol, 'EUR/USD');
+      return { symbol, price: 1.1, timestamp: now };
+    },
+  };
+
+  const verified = await applyLiveMarketValidation(candidate, 'EURUSD', provider, now);
+  assert.equal(verified.liveMarketData.status, 'verified');
+  assert.equal(verified.status, 'success');
+
+  const stale = await applyLiveMarketValidation(candidate, 'EURUSD', {
+    getQuote: async (symbol) => ({ symbol, price: 1.1, timestamp: now - 120_000 }),
+  }, now);
+  assert.equal(stale.liveMarketData.status, 'stale');
+  assert.equal(stale.status, 'no_trade');
+  assert.equal(stale.trade_plan, null);
+  assert.equal(stale.tradeDecision, 'NONE');
+
+  const mismatch = await getLiveMarketData(candidate, 'GBPUSD', provider, now);
+  assert.equal(mismatch.status, 'symbol_mismatch');
+});
+
+test('live quote crossing stop or TP1 downgrades a screenshot setup to no-trade', async () => {
+  const now = Date.now();
+  const candidate = {
+    ...consistentPriceSetup,
+    chart: {
+      ...consistentPriceSetup.chart,
+      latest_candle_timestamp: new Date(now).toISOString(),
+    },
+    detectedPair: 'EURUSD',
+    status: 'success',
+    trade_plan: {
+      direction: 'BUY',
+      entry: 1.1,
+      stop_loss: 1.099,
+      take_profit_1: 1.102,
+      risk_reward: 2,
+    },
+  };
+  const invalidated = await applyLiveMarketValidation(candidate, 'EURUSD', {
+    getQuote: async (symbol) => ({ symbol, price: 1.098, timestamp: now }),
+  }, now);
+
+  assert.equal(invalidated.liveMarketData.status, 'verified');
+  assert.equal(invalidated.status, 'no_trade');
+  assert.equal(invalidated.trade_plan, null);
+  assert.match(invalidated.no_trade_reason, /crossed the setup stop/i);
 });
 
 test('latest-price validation rejects missed entries, distant entries, and invalidated or completed targets', () => {
@@ -1603,10 +1703,23 @@ test('authenticated chart upload returns a complete plan and reserves invalid_im
   const previousApiKey = process.env.OPENROUTER_API_KEY;
   const previousRevenueCatKey = process.env.REVENUECAT_SECRET_API_KEY;
   let providerCalls = 0;
+  let quoteCalls = 0;
   let revenueCatEntitlementActive = true;
   let providerResponse = {
     status: 'success',
-    chart: { is_chart: true, pair: 'EURUSD', timeframe: 'M15', latest_visible_price: 1.1 },
+    chart: {
+      is_chart: true,
+      pair: 'EURUSD',
+      timeframe: 'M15',
+      chart_quality: 'good',
+      price_scale_visible: true,
+      candles_visible: true,
+      has_enough_candles: true,
+      latest_visible_price: 1.1,
+      current_price_source: 'visible_price_marker',
+      current_candle_status: 'forming',
+      latest_candle_timestamp: new Date().toISOString(),
+    },
     analysis: { trend: 'bullish', structure: 'Higher highs and higher lows.' },
     levels: { support: [1.1, 1.099], resistance: [1.102, 1.103] },
     bias: 'BUY',
@@ -1614,7 +1727,11 @@ test('authenticated chart upload returns a complete plan and reserves invalid_im
     setup: 'trend_pullback',
     trade_plan: { direction: 'BUY', entry: 1.1, stop_loss: 1.099, take_profit_1: 1.102, take_profit_2: 1.103, risk_reward: 99 },
   };
-  const server = http.createServer(createRequestHandler());
+  const server = http.createServer(createRequestHandler({
+    marketDataProvider: {
+      getQuote: async () => { quoteCalls += 1; throw new Error('Screenshot analysis must not request external quotes.'); },
+    },
+  }));
 
   process.env.OPENROUTER_API_KEY = 'test-key';
   process.env.REVENUECAT_SECRET_API_KEY = 'test-revenuecat-key';
@@ -1680,6 +1797,7 @@ test('authenticated chart upload returns a complete plan and reserves invalid_im
     const response = await postAnalysis();
     assert.equal(response.statusCode, 200);
     assert.equal(providerCalls, 1);
+    assert.equal(quoteCalls, 0);
     assert.equal(response.body.status, 'success');
     assert.equal(response.body.trade_plan.direction, 'BUY');
     assert.equal(response.body.trade_setup.entry_zone, '1.1');
@@ -1700,12 +1818,14 @@ test('authenticated chart upload returns a complete plan and reserves invalid_im
     assert.equal(lowResolution.body.trade_plan, null);
     assert.equal(lowResolution.body.bias, 'NEUTRAL');
     assert.equal(providerCalls, 2);
+    assert.equal(quoteCalls, 0);
 
     providerResponse = { status: 'invalid_image', chart: { is_chart: false } };
     const nonChart = await postAnalysis();
     assert.equal(nonChart.body.status, 'invalid_image');
     assert.equal(nonChart.body.trade_plan, null);
     assert.equal(providerCalls, 3);
+    assert.equal(quoteCalls, 0);
   } finally {
     server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));
@@ -1792,6 +1912,28 @@ test('incomplete model success is returned as an explainable no-trade analysis',
   assert.equal(result.status, 'no_trade');
   assert.equal(result.trade_setup.type, 'none');
   assert.match(result.analysis.notes, /setup prices were omitted/i);
+});
+
+test('a successful directional chart read cannot become an actionable trade without a validated setup', () => {
+  const canonical = canonicalizeRawAnalysis({
+    status: 'success',
+    chart: { is_chart: true, chart_quality: 'good', price_scale_visible: true, candles_visible: true, has_enough_candles: true },
+    analysis: {
+      trend: 'bullish',
+      structure: 'Higher highs and higher lows.',
+      notes: 'Bullish structure is visible, but no complete entry, stop, and target are established.',
+    },
+    zones: { support: 1.1, resistance: 1.11, liquidity: 'not_clear' },
+    trade_setup: { type: 'none' },
+    confidence: 75,
+  });
+  const result = applyMentorStrategy(normalizeAnalysis(canonical));
+
+  assert.equal(result.trade_setup.type, 'none');
+  assert.notEqual(result.tradeStatus, 'actionable');
+  assert.notEqual(result.tradeDecision, 'BUY');
+  assert.notEqual(result.tradeDecision, 'SELL');
+  assert.notEqual(result.entryReadiness, 100);
 });
 
 test('text placeholders cannot pass as executable buy or sell levels', () => {
