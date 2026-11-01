@@ -6,6 +6,7 @@ Automated tests cover pure backtesting and signed API tokens. The following requ
 |---|---|---|---|
 | RevenueCat weekly purchase | Sandbox | License test track | Store products, RevenueCat offering, native development build |
 | RevenueCat yearly purchase | Sandbox | License test track | Yearly store product attached to the existing Premium entitlement and offering; confirm the advertised 86% saving matches configured store prices |
+| RevenueCat yearly exit offer | Not applicable | Eligible license tester | Close the paywall once; verify `exit_offer` annual package, `yearly-exit-50off` option, localized first-year/renewal prices, discounted Play confirmation, and Premium unlock |
 | Restore purchase | Sandbox | License test track | Existing test entitlement, new device/account |
 | Expiration/refund/revocation | Store sandbox controls | Play test subscription controls | RevenueCat webhook and entitlement endpoint |
 | Camera upload | Real device | Real device | Camera permissions, poor-light and denied-permission cases |

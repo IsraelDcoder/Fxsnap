@@ -21,16 +21,19 @@ Configure these exact product identifiers in Apple App Store Connect, Google Pla
 
 Create the existing `premium` entitlement and attach all three products, then set:
 
-- `EXPO_PUBLIC_REVENUECAT_IOS_API_KEY`
-- `EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY`
-- `EXPO_PUBLIC_REVENUECAT_ENTITLEMENT_ID`
+- `EXPO_PUBLIC_RC_IOS_KEY`
+- `EXPO_PUBLIC_RC_ANDROID_KEY`
+- `EXPO_PUBLIC_RC_ENTITLEMENT_ID`
 - `EXPO_PUBLIC_REVENUECAT_WEEKLY_PRODUCT_ID` if the weekly product uses a different identifier
 - `EXPO_PUBLIC_REVENUECAT_MONTHLY_PRODUCT_ID` if the monthly product uses a different identifier
 - `EXPO_PUBLIC_REVENUECAT_YEARLY_PRODUCT_ID` if the yearly product uses a different identifier
 - `REVENUECAT_SECRET_API_KEY` on the server only
 
 Set each country’s weekly, monthly, and yearly price tiers in App Store Connect and Google Play Console. The paywall reads localized prices from RevenueCat and shows “Save 86%” on the yearly plan.
-Test purchases and restores in Apple Sandbox and Google Play license-test tracks. Do not use the public paywall in production until the backend entitlement endpoint returns verified active state.
+
+For the Google Play exit offer, create a RevenueCat offering named `exit_offer` with the yearly product as its `$rc_annual` package. Configure the `yearly-exit-50off` Play offer on that product and verify the returned subscription-option ID ends in `yearly-exit-50off`. The Android app shows this exit screen only when RevenueCat returns that option; it displays the localized first-phase and renewal prices and purchases the discounted subscription option. It is not available in the web preview or iOS.
+
+Test purchases and restores in Apple Sandbox and Google Play license-test tracks. Test the discounted exit offer with an eligible Play license tester. Do not use the public paywall in production until the backend entitlement endpoint returns verified active state.
 
 ## Backend secrets
 

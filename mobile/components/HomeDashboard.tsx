@@ -38,6 +38,17 @@ import { getTradingSessionState, SESSION_DEFINITIONS } from '@/services/tradingS
 import { getDailyBriefState, type DailyBriefItem, type DailyBriefState } from '@/services/dailyBrief';
 import { getDeviceId } from '@/services/apiAuth';
 import type { ProtectedFeature } from '@/services/featureAccess';
+import Purchases, { type PurchasesPackage, type SubscriptionOption } from 'react-native-purchases';
+import { configureBilling } from '@/services/billing';
+import { hasRevenueCatEntitlement } from '@/services/revenuecatEntitlements';
+
+let exitOfferRequestedThisSession = false;
+
+function isPurchaseCancellation(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  return ('userCancelled' in error && error.userCancelled === true)
+    || ('code' in error && error.code === 'PURCHASE_CANCELLED');
+}
 
 export default function HomeDashboard({ previewMode = false }: { previewMode?: boolean }) {
   const { exitOffer } = useLocalSearchParams<{ exitOffer?: string }>();
@@ -46,10 +57,13 @@ export default function HomeDashboard({ previewMode = false }: { previewMode?: b
   const { width: viewportWidth } = useWindowDimensions();
   const compactHeader = viewportWidth < 360;
   const reduceMotion = useReducedMotion();
-  const { settings, savedBriefs, saveBriefCard, deleteBriefCard, checkFeatureAccess } = useApp();
+  const { settings, savedBriefs, saveBriefCard, deleteBriefCard, checkFeatureAccess, isSubscribed, isLoading: appLoading } = useApp();
   const [sessionModalVisible, setSessionModalVisible] = useState(false);
   const [exitOfferVisible, setExitOfferVisible] = useState(false);
-  const [exitOfferSecondsRemaining, setExitOfferSecondsRemaining] = useState(10 * 60 - 1);
+  const [exitOfferPackage, setExitOfferPackage] = useState<PurchasesPackage | null>(null);
+  const [exitOfferOption, setExitOfferOption] = useState<SubscriptionOption | null>(null);
+  const [exitOfferPurchaseError, setExitOfferPurchaseError] = useState('');
+  const [exitOfferPurchasing, setExitOfferPurchasing] = useState(false);
   const [toolsExpanded, setToolsExpanded] = useState(false);
   const [sessionState, setSessionState] = useState(getTradingSessionState());
   const [briefState, setBriefState] = useState<DailyBriefState | null>(null);
@@ -63,21 +77,74 @@ export default function HomeDashboard({ previewMode = false }: { previewMode?: b
   const briefRequestId = useRef(0);
 
   useEffect(() => {
-    if (exitOffer === '1') setExitOfferVisible(true);
-  }, [exitOffer]);
+    if (exitOffer !== '1' || appLoading || exitOfferRequestedThisSession) return;
+    exitOfferRequestedThisSession = true;
+    if (Platform.OS !== 'android' || previewMode || isSubscribed) return;
 
-  useEffect(() => {
-    if (!exitOfferVisible) return;
-    const timer = setInterval(() => {
-      setExitOfferSecondsRemaining((remaining) => Math.max(0, remaining - 1));
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [exitOfferVisible]);
+    let active = true;
+    void (async () => {
+      try {
+        if (!(await configureBilling())) {
+          console.error('[Exit offer] RevenueCat is not configured on this device.');
+          return;
+        }
+        const offerings = await Purchases.getOfferings();
+        const offering = offerings.all.exit_offer;
+        const offerPackage = offering?.annual
+          ?? offering?.availablePackages.find((item) => item.identifier === '$rc_annual')
+          ?? null;
+        const discountedOption = offerPackage?.product.subscriptionOptions?.find(
+          (option) => option.id.endsWith('yearly-exit-50off'),
+        ) ?? null;
+        const discountedPrice = discountedOption?.pricingPhases[0]?.price.formatted;
+        const fullYearlyPrice = offerPackage?.product.priceString;
+
+        if (!offerPackage || !discountedOption || !discountedPrice || !fullYearlyPrice) {
+          console.error('[Exit offer] The configured annual discounted option is unavailable.');
+          return;
+        }
+        if (!active) return;
+        setExitOfferPackage(offerPackage);
+        setExitOfferOption(discountedOption);
+        setExitOfferVisible(true);
+      } catch (error) {
+        console.error('[Exit offer] Could not load the RevenueCat exit offer.', error);
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [appLoading, exitOffer, isSubscribed, previewMode]);
 
   const closeExitOffer = () => {
     setExitOfferVisible(false);
     router.replace('/(tabs)/home');
   };
+
+  const purchaseExitOffer = async () => {
+    if (!exitOfferOption || exitOfferPurchasing) return;
+    setExitOfferPurchasing(true);
+    setExitOfferPurchaseError('');
+    try {
+      const purchase = await Purchases.purchaseSubscriptionOption(exitOfferOption);
+      if (hasRevenueCatEntitlement(purchase.customerInfo.entitlements.active)) {
+        setExitOfferVisible(false);
+        router.replace('/(tabs)/home');
+      } else {
+        setExitOfferPurchaseError('The purchase completed but Premium access could not be confirmed. Please restore purchases or contact support.');
+      }
+    } catch (error) {
+      if (isPurchaseCancellation(error)) return;
+      console.error('[Exit offer] Discounted subscription purchase failed.', error);
+      setExitOfferPurchaseError(error instanceof Error ? error.message : 'Purchase failed. Please try again.');
+    } finally {
+      setExitOfferPurchasing(false);
+    }
+  };
+
+  const discountedExitPrice = exitOfferOption?.pricingPhases[0]?.price.formatted;
+  const fullYearlyPrice = exitOfferPackage?.product.priceString;
 
   const firstName = settings.displayName.trim().split(/\s+/)[0] || 'Trader';
   const greeting = getTimeGreeting();
@@ -477,24 +544,29 @@ export default function HomeDashboard({ previewMode = false }: { previewMode?: b
             <Text style={[styles.exitOfferCopy, { color: colors.textSecondary }]}>
               Keep your full FXSnap Pro toolkit and lock in the best-value plan.
             </Text>
-            <View style={[styles.exitOfferTimer, { backgroundColor: `${colors.buy}16`, borderColor: `${colors.buy}55` }]}>
-              <Feather name="clock" size={16} color={colors.buy} />
-              <Text style={[styles.exitOfferTimerText, { color: colors.buy }]}>
-                Offer expires in {String(Math.floor(exitOfferSecondsRemaining / 60)).padStart(2, '0')}:{String(exitOfferSecondsRemaining % 60).padStart(2, '0')}
-              </Text>
-            </View>
+            <Text style={[styles.exitOfferPrice, { color: colors.text }]}>
+              {discountedExitPrice} for the first year, then {fullYearlyPrice} per year. Auto-renews unless canceled.
+            </Text>
             <TouchableOpacity
-              onPress={closeExitOffer}
+              onPress={() => void purchaseExitOffer()}
               style={[styles.exitOfferButton, { backgroundColor: colors.text }]}
               accessibilityRole="button"
-              accessibilityLabel="Continue with the special offer"
-              accessibilityHint="This preview offer does not start a purchase"
+              accessibilityLabel="Get 50% off the first year"
+              accessibilityHint="Starts a Google Play subscription at the discounted first-year price"
+              disabled={exitOfferPurchasing}
             >
-              <Text style={[styles.exitOfferButtonText, { color: colors.background }]}>Continue with offer</Text>
-              <Feather name="arrow-right" size={19} color={colors.background} />
+              <Text style={[styles.exitOfferButtonText, { color: colors.background }]}>
+                {exitOfferPurchasing ? 'Processing purchase…' : `Get 50% off · ${discountedExitPrice}`}
+              </Text>
+              {!exitOfferPurchasing ? <Feather name="arrow-right" size={19} color={colors.background} /> : null}
             </TouchableOpacity>
+            {exitOfferPurchaseError ? (
+              <Text accessibilityRole="alert" style={[styles.exitOfferError, { color: colors.sell }]}>
+                {exitOfferPurchaseError}
+              </Text>
+            ) : null}
             <Text style={[styles.exitOfferFinePrint, { color: colors.textMuted }]}>
-              Offer preview · Purchase activation will be added with the discounted store product.
+              Discount applies to the first yearly billing period only. The subscription renews at the then-current annual price until canceled.
             </Text>
           </Animated.View>
         </View>
@@ -1120,10 +1192,10 @@ const styles = StyleSheet.create({
   exitOfferEyebrow: { fontSize: 11, lineHeight: 16, letterSpacing: 1.5, fontFamily: 'Inter_800ExtraBold', textAlign: 'center' },
   exitOfferTitle: { fontSize: 25, lineHeight: 31, fontFamily: 'Inter_800ExtraBold', textAlign: 'center' },
   exitOfferCopy: { fontSize: 13, lineHeight: 19, fontFamily: 'Inter_400Regular', textAlign: 'center' },
-  exitOfferTimer: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, borderRadius: 14, paddingHorizontal: 14, marginTop: 4 },
-  exitOfferTimerText: { fontSize: 13, lineHeight: 18, fontFamily: 'Inter_700Bold' },
+  exitOfferPrice: { fontSize: 14, lineHeight: 20, fontFamily: 'Inter_700Bold', textAlign: 'center' },
   exitOfferButton: { width: '100%', minHeight: 54, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 17, paddingHorizontal: 18, marginTop: 2 },
   exitOfferButtonText: { fontSize: 15, lineHeight: 21, fontFamily: 'Inter_700Bold' },
+  exitOfferError: { fontSize: 12, lineHeight: 17, fontFamily: 'Inter_500Medium', textAlign: 'center' },
   exitOfferFinePrint: { fontSize: 10, lineHeight: 14, fontFamily: 'Inter_400Regular', textAlign: 'center' },
   modalHeading: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
   modalSubtitle: { marginTop: 4, fontSize: 12, fontFamily: 'Inter_400Regular' },
