@@ -139,7 +139,6 @@ function RootLayoutNav({ fontsReady }: { fontsReady: boolean }) {
     isSubscribed,
     billingAvailable,
     billingStatusReady,
-    checkFeatureAccess,
   } = useApp();
   const colors = useColors();
   const pathname = usePathname();
@@ -196,23 +195,8 @@ function RootLayoutNav({ fontsReady }: { fontsReady: boolean }) {
       if (!isCommunityPath) setCommunityAccessVerifiedPath(null);
       return;
     }
-    let active = true;
-    setCommunityAccessVerifiedPath(null);
-    void checkFeatureAccess('COMMUNITY', pathname).then((access) => {
-      if (!active) return;
-      if (access.error) {
-        console.error('[ACCESS] Community subscription check failed.', access.error);
-        router.replace({ pathname: '/paywall', params: { source: 'subscription-required' } });
-        return;
-      }
-      if (access.allowed) setCommunityAccessVerifiedPath(pathname);
-    }).catch((error: unknown) => {
-      if (!active) return;
-      console.error('[ACCESS] Could not verify Community subscription.', error);
-      router.replace({ pathname: '/paywall', params: { source: 'subscription-required' } });
-    });
-    return () => { active = false; };
-  }, [checkFeatureAccess, isCommunityPath, isLoading, pathname]);
+    setCommunityAccessVerifiedPath(pathname);
+  }, [isCommunityPath, isLoading, pathname]);
 
   useEffect(() => {
     if (isLoading || (billingAvailable && !billingStatusReady)) return;
