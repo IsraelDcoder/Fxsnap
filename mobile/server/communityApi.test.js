@@ -417,6 +417,14 @@ function makeHarness({
       messages.push(message);
       return makeResponse(201, [message]);
     }
+    if (table === 'fxsnap_community_messages' && method === 'PATCH') {
+      const id = parsed.searchParams.get('id')?.replace(/^eq\./, '');
+      const onlyActive = parsed.searchParams.get('removed_at') === 'is.null';
+      const message = messages.find((item) => item.id === id && (!onlyActive || !item.removed_at));
+      if (!message) return makeResponse(200, []);
+      Object.assign(message, JSON.parse(options.body));
+      return makeResponse(200, [message]);
+    }
     if (table === 'fxsnap_community_reactions' && method === 'GET') {
       const messageFilter = parsed.searchParams.get('message_id') || '';
       const accountFilter = parsed.searchParams.get('account_id') || '';
@@ -1668,6 +1676,102 @@ test('admin may claim the reserved official username when no account owns it', a
     assert.equal(joined.statusCode, 201);
     assert.equal(joined.body.profile.username, 'fxsnap_official');
     assert.equal(joined.body.profile.isAdmin, true);
+  } finally {
+    process.env.FXSNAP_COMMUNITY_ADMIN_SUPABASE_USER_IDS = previous;
+  }
+});
+
+test('admin message removal soft-deletes the post and only reports success after an affected row', async () => {
+  const adminId = '00000000-0000-4000-8000-000000000012';
+  const messageId = '00000000-0000-4000-8000-000000000041';
+  const message = {
+    id: messageId,
+    account_id: ACCOUNT_ID,
+    author_username: 'chartpro',
+    kind: 'text',
+    category: 'learning',
+    body: 'A moderated post',
+    payload: {},
+    reply_to_id: null,
+    pinned_at: null,
+    removed_at: null,
+    created_at: new Date().toISOString(),
+    client_message_id: '00000000-0000-4000-8000-000000000042',
+  };
+  const previous = process.env.FXSNAP_COMMUNITY_ADMIN_SUPABASE_USER_IDS;
+  process.env.FXSNAP_COMMUNITY_ADMIN_SUPABASE_USER_IDS = adminId;
+  try {
+    const adminHarness = makeHarness({
+      actor: { accountId: 'usr_official-admin', deviceId: 'community-test-device-1234', supabaseUserId: adminId },
+      initialProfiles: [{
+        account_id: 'usr_official-admin',
+        supabase_user_id: adminId,
+        username: 'fxsnap_official',
+        accepted_rules_version: RULES_VERSION,
+        status: 'active',
+        muted_until: null,
+        joined_at: new Date().toISOString(),
+      }],
+      initialMessages: [{ ...message }],
+    });
+    const removed = await adminHarness.call('/api/admin/community/moderation', {
+      method: 'POST',
+      body: { action: 'remove_message', messageId },
+    });
+    assert.equal(removed.statusCode, 200, JSON.stringify(removed.body));
+    assert.ok(adminHarness.messages[0].removed_at);
+    assert.equal(adminHarness.requests.some((request) => (
+      request.table === 'fxsnap_community_messages'
+      && request.method === 'PATCH'
+      && request.query.includes('removed_at=is.null')
+    )), true);
+    const refreshedFeed = await adminHarness.call('/api/community/messages?feed=latest');
+    assert.equal(refreshedFeed.statusCode, 200, JSON.stringify(refreshedFeed.body));
+    assert.equal(refreshedFeed.body.messages.some((item) => item.id === messageId), false);
+
+    const unauthorizedHarness = makeHarness({
+      initialProfiles: [{
+        account_id: ACCOUNT_ID,
+        supabase_user_id: MEMBER_ID,
+        username: 'chartpro',
+        accepted_rules_version: RULES_VERSION,
+        status: 'active',
+        muted_until: null,
+        joined_at: new Date().toISOString(),
+      }],
+      initialMessages: [{ ...message }],
+    });
+    const rejected = await unauthorizedHarness.call('/api/admin/community/moderation', {
+      method: 'POST',
+      body: { action: 'remove_message', messageId },
+    });
+    assert.equal(rejected.statusCode, 403);
+    assert.equal(unauthorizedHarness.messages[0].removed_at, null);
+
+    const noUpdateHarness = makeHarness({
+      actor: { accountId: 'usr_official-admin', deviceId: 'community-test-device-1234', supabaseUserId: adminId },
+      initialProfiles: [{
+        account_id: 'usr_official-admin',
+        supabase_user_id: adminId,
+        username: 'fxsnap_official',
+        accepted_rules_version: RULES_VERSION,
+        status: 'active',
+        muted_until: null,
+        joined_at: new Date().toISOString(),
+      }],
+      initialMessages: [{ ...message }],
+      databaseFailure: (request) => request.table === 'fxsnap_community_messages'
+        && request.method === 'PATCH'
+        ? { status: 200, body: [] }
+        : null,
+    });
+    const noUpdate = await noUpdateHarness.call('/api/admin/community/moderation', {
+      method: 'POST',
+      body: { action: 'remove_message', messageId },
+    });
+    assert.equal(noUpdate.statusCode, 404);
+    assert.equal(noUpdate.body.accepted, undefined);
+    assert.equal(noUpdateHarness.messages[0].removed_at, null);
   } finally {
     process.env.FXSNAP_COMMUNITY_ADMIN_SUPABASE_USER_IDS = previous;
   }

@@ -1896,8 +1896,16 @@ function createCommunityApi({
           });
         } else if (input.data.action === 'remove_message') {
           if (!message) return sendJson(res, 400, { error: 'Choose the message to remove.' });
-          await patchRows('fxsnap_community_messages', `id=eq.${encodeURIComponent(message.id)}`, { removed_at: now });
+          const removedRows = parseRows(await patchRows(
+            'fxsnap_community_messages',
+            `id=eq.${encodeURIComponent(message.id)}&removed_at=is.null`,
+            { removed_at: now },
+          ));
+          if (!removedRows.length) {
+            return sendJson(res, 404, { error: 'Community message was already removed or could not be found.' });
+          }
           details.messageId = message.id;
+          console.info('[Community moderation] Removed message.', { messageId: message.id });
         } else if (input.data.action === 'pin' || input.data.action === 'unpin') {
           if (!message) return sendJson(res, 400, { error: 'Choose the message to pin or unpin.' });
           await patchRows('fxsnap_community_messages', `id=eq.${encodeURIComponent(message.id)}`, {
