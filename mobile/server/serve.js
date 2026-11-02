@@ -4533,7 +4533,6 @@ function createRequestHandler() {
     sendJson,
     readJsonBody,
     saveCommunityUsername,
-    requirePremiumSubscription: (deviceId, res) => requirePremiumSubscription(deviceId, res),
   });
   return (req, res) => {
     const url = new URL(req.url || '/', `http://${req.headers.host}`);

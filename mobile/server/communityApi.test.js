@@ -32,7 +32,6 @@ function makeHarness({
   initialConversations = [],
   initialSupportMessages = [],
   databaseFailure = null,
-  requirePremiumSubscription = async () => true,
 } = {}) {
   const profiles = [...initialProfiles];
   const messages = [...initialMessages];
@@ -328,7 +327,6 @@ function makeHarness({
     },
     readJsonBody: async (request) => request.body || {},
     saveCommunityUsername: async (_accountId, username) => { savedNames.push(username); },
-    requirePremiumSubscription,
     dispatchCommunityPush: async (objectId) => { pushedCommunityEvents.push(objectId); },
   });
 
@@ -353,20 +351,25 @@ function makeHarness({
   };
 }
 
-test('community API requests require a verified premium subscription before accessing stored community data', async () => {
+test('community API requests allow linked accounts without a premium subscription', async () => {
   const harness = makeHarness({
-    requirePremiumSubscription: async (_deviceId, response) => {
-      response.statusCode = 402;
-      response.body = { code: 'PREMIUM_REQUIRED' };
-      return false;
-    },
+    initialProfiles: [{
+      account_id: ACCOUNT_ID,
+      supabase_user_id: MEMBER_ID,
+      username: 'chartpro',
+      picture_url: null,
+      accepted_rules_version: RULES_VERSION,
+      status: 'active',
+      muted_until: null,
+      joined_at: new Date().toISOString(),
+    }],
   });
 
-  const response = await harness.call('/api/community/bootstrap');
+  const bootstrap = await harness.call('/api/community/bootstrap');
+  const feed = await harness.call('/api/community/messages?feed=latest&limit=30');
 
-  assert.equal(response.statusCode, 402);
-  assert.deepEqual(response.body, { code: 'PREMIUM_REQUIRED' });
-  assert.equal(harness.requests.length, 0);
+  assert.equal(bootstrap.statusCode, 200, JSON.stringify(bootstrap.body));
+  assert.equal(feed.statusCode, 200, JSON.stringify(feed.body));
 });
 
 test('members can load and publish replies in a post discussion', async () => {
@@ -1269,7 +1272,6 @@ test('members can edit and remove only their own text content', async () => {
         response.body = body;
       },
       readJsonBody: async (request) => request.body || {},
-      requirePremiumSubscription: async () => true,
     });
   }
 
