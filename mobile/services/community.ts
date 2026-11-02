@@ -161,8 +161,6 @@ export interface CommunityAnalysisSnapshot {
   imageUrl?: string | null;
 }
 
-const COMMUNITY_REQUEST_TIMEOUT_MS = 15_000;
-
 function newId() {
   const cryptoApi = globalThis.crypto;
   if (cryptoApi?.randomUUID) return cryptoApi.randomUUID();
@@ -171,66 +169,43 @@ function newId() {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const controller = new AbortController();
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  const timeoutError = new Error('Community is taking too long to respond. Check your connection and try again.');
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timeout = setTimeout(() => {
-      controller.abort();
-      reject(timeoutError);
-    }, COMMUNITY_REQUEST_TIMEOUT_MS);
-  });
-
-  try {
-    const operation = async () => {
-      if (__DEV__) {
-        const previewResponse = await handleCommunityPreviewRequest(path, {
-          ...init,
-          signal: controller.signal,
-        });
-        const previewPayload: unknown = await previewResponse.json();
-        if (!previewResponse.ok) {
-          const message = previewPayload && typeof previewPayload === 'object' && 'error' in previewPayload
-            && typeof previewPayload.error === 'string'
-            ? previewPayload.error
-            : `Community preview request failed (${previewResponse.status}).`;
-          throw new Error(message);
-        }
-        return previewPayload as T;
-      }
-      if (Platform.OS === 'web') {
-        throw new Error('FXSnap Community is currently available in the mobile app.');
-      }
-      const headers = await getFxsnapAccountApiHeaders();
-      const response = await fetch(`${API_BASE_URL}${path}`, {
-        ...init,
-        signal: controller.signal,
-        headers: {
-          ...headers,
-          ...(init?.headers || {}),
-        },
-      });
-      const payload: unknown = await response.json().catch(() => null);
-      if (!response.ok) {
-        const message = payload && typeof payload === 'object' && 'error' in payload && typeof payload.error === 'string'
-          ? payload.error
-          : `Community request failed (${response.status}).`;
-        const error: CommunityRequestError = new Error(message);
-        error.status = response.status;
-        error.onboardingRequired = Boolean(payload && typeof payload === 'object' && 'onboardingRequired' in payload && payload.onboardingRequired === true);
-        error.requestId = payload && typeof payload === 'object' && 'requestId' in payload && typeof payload.requestId === 'string'
-          ? payload.requestId
-          : undefined;
-        throw error;
-      }
-      return payload as T;
-    };
-
-    return await Promise.race([operation(), timeoutPromise]);
-  } finally {
-    if (timeout) clearTimeout(timeout);
-    controller.abort();
+  if (__DEV__) {
+    const previewResponse = await handleCommunityPreviewRequest(path, init);
+    const previewPayload: unknown = await previewResponse.json();
+    if (!previewResponse.ok) {
+      const message = previewPayload && typeof previewPayload === 'object' && 'error' in previewPayload
+        && typeof previewPayload.error === 'string'
+        ? previewPayload.error
+        : `Community preview request failed (${previewResponse.status}).`;
+      throw new Error(message);
+    }
+    return previewPayload as T;
   }
+  if (Platform.OS === 'web') {
+    throw new Error('FXSnap Community is currently available in the mobile app.');
+  }
+  const headers = await getFxsnapAccountApiHeaders();
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    ...init,
+    headers: {
+      ...headers,
+      ...(init?.headers || {}),
+    },
+  });
+  const payload: unknown = await response.json().catch(() => null);
+  if (!response.ok) {
+    const message = payload && typeof payload === 'object' && 'error' in payload && typeof payload.error === 'string'
+      ? payload.error
+      : `Community request failed (${response.status}).`;
+    const error: CommunityRequestError = new Error(message);
+    error.status = response.status;
+    error.onboardingRequired = Boolean(payload && typeof payload === 'object' && 'onboardingRequired' in payload && payload.onboardingRequired === true);
+    error.requestId = payload && typeof payload === 'object' && 'requestId' in payload && typeof payload.requestId === 'string'
+      ? payload.requestId
+      : undefined;
+    throw error;
+  }
+  return payload as T;
 }
 
 function json(body: unknown): RequestInit {

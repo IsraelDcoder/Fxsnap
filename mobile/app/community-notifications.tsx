@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, StyleSheet, Text, View, useColorScheme } from 'react-native';
-import { router, type ErrorBoundaryProps } from 'expo-router';
+import { ActivityIndicator, Alert, FlatList, StyleSheet, Text, View } from 'react-native';
+import { router } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import { AnimatedTouchableOpacity as TouchableOpacity } from '@/components/AnimatedTouchableOpacity';
 import { AmbientBackdrop } from '@/components/AmbientBackdrop';
@@ -15,9 +15,6 @@ import {
   type CommunityNotification,
 } from '@/services/community';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { trackError } from '@/services/telemetry';
-import * as Sentry from '@sentry/react-native';
-import { getCommunityNotificationDestination } from '@/services/communityNotificationNavigation';
 
 type NotificationFilter = 'all' | 'mentions' | 'replies' | 'reactions' | 'updates';
 const FILTERS: Array<{ id: NotificationFilter; label: string }> = [
@@ -43,44 +40,6 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : 'Notifications could not be loaded.';
 }
 
-export function ErrorBoundary({ error, retry }: ErrorBoundaryProps) {
-  const isDark = useColorScheme() === 'dark';
-  const [retrying, setRetrying] = useState(false);
-
-  useEffect(() => {
-    trackError(error, { component: 'CommunityNotificationsScreen' });
-    Sentry.captureException(error, { tags: { screen: 'CommunityNotifications' } });
-  }, [error]);
-
-  const handleRetry = async () => {
-    setRetrying(true);
-    try {
-      await retry();
-    } finally {
-      setRetrying(false);
-    }
-  };
-
-  return (
-    <View style={[styles.errorBoundary, { backgroundColor: isDark ? '#111311' : '#F7F7F5' }]}>
-      <Feather name="alert-circle" size={30} color={isDark ? '#E5C84B' : '#9A7B00'} />
-      <Text style={[styles.errorBoundaryTitle, { color: isDark ? '#FFFFFF' : '#171A17' }]}>Notifications hit a snag</Text>
-      <Text style={[styles.errorBoundaryBody, { color: isDark ? '#B9C0BA' : '#59615B' }]}>
-        Retry notifications or return to the rest of the app.
-      </Text>
-      {__DEV__ ? <Text selectable style={[styles.errorBoundaryDetails, { color: isDark ? '#D5D5D5' : '#59615B' }]}>{error.message}</Text> : null}
-      <TouchableOpacity onPress={() => void handleRetry()} disabled={retrying} style={styles.errorBoundaryPrimary} accessibilityRole="button">
-        {retrying
-          ? <ActivityIndicator color="#111311" />
-          : <Text style={[styles.errorBoundaryPrimaryText, { color: isDark ? '#111311' : '#171A17' }]}>Try again</Text>}
-      </TouchableOpacity>
-      <TouchableOpacity onPress={() => router.replace('/')} style={styles.errorBoundarySecondary} accessibilityRole="button">
-        <Text style={[styles.errorBoundarySecondaryText, { color: isDark ? '#E5C84B' : '#806600' }]}>Go to Home</Text>
-      </TouchableOpacity>
-    </View>
-  );
-}
-
 export default function CommunityNotificationsScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
@@ -88,7 +47,6 @@ export default function CommunityNotificationsScreen() {
   const [filter, setFilter] = useState<NotificationFilter>('all');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [openingNotificationId, setOpeningNotificationId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setError('');
@@ -131,9 +89,7 @@ export default function CommunityNotificationsScreen() {
     return item.kind === 'reaction';
   }), [filter, notifications]);
 
-  const open = async (item: CommunityNotification) => {
-    if (openingNotificationId) return;
-    setOpeningNotificationId(item.id);
+  const open = (item: CommunityNotification) => {
     if (!item.read_at) {
       const readAt = new Date().toISOString();
       setNotifications((previous) => previous.map((notification) => notification.id === item.id
@@ -143,28 +99,22 @@ export default function CommunityNotificationsScreen() {
         ? markSystemAnnouncementRead(item.id)
         : markCommunityNotificationRead(item.id);
       void markRead.catch((failure: unknown) => {
-        console.warn('[Community notifications] Could not mark notification read.', {
-          notificationId: item.id,
-          error: errorMessage(failure),
-        });
         setNotifications((previous) => previous.map((notification) => notification.id === item.id
           ? { ...notification, read_at: null }
           : notification));
+        Alert.alert('Could not mark notification read', errorMessage(failure));
       });
     }
-    try {
-      const destination = getCommunityNotificationDestination(item);
-      if (!destination) {
-        Alert.alert('Notification unavailable', 'This notification no longer has a link to its Community discussion.');
-      } else if (destination.pathname === '/community-support') {
-        router.push('/community-support');
-      } else {
-        router.push(destination);
-      }
-    } catch (failure) {
-      Alert.alert('Could not open notification', errorMessage(failure));
-    } finally {
-      setOpeningNotificationId(null);
+    if (item.kind === 'system_announcement') {
+      router.push({ pathname: '/system-announcement', params: { id: item.id } });
+    } else if (item.kind === 'support_reply') {
+      router.push('/community-support');
+    } else if (item.post_id) {
+      router.push({ pathname: '/community', params: { postId: item.post_id } });
+    } else if (item.object_id) {
+      router.push({ pathname: '/community', params: { postId: item.object_id } });
+    } else {
+      setFilter('all');
     }
   };
 
@@ -217,14 +167,11 @@ export default function CommunityNotificationsScreen() {
           renderItem={({ item }) => (
             <TouchableOpacity
               onPress={() => void open(item)}
-              disabled={openingNotificationId !== null}
               style={[styles.row, { borderBottomColor: colors.cardBorder }]}
               accessibilityRole="button"
             >
               <View style={[styles.icon, { backgroundColor: item.read_at ? colors.surface : `${colors.buy}18` }]}>
-                {openingNotificationId === item.id
-                  ? <ActivityIndicator size="small" color={colors.buy} />
-                  : <Feather name={iconFor(item.kind)} size={18} color={item.read_at ? colors.textMuted : colors.buy} />}
+                <Feather name={iconFor(item.kind)} size={18} color={item.read_at ? colors.textMuted : colors.buy} />
               </View>
               <View style={styles.copy}>
                 <Text style={[styles.message, { color: colors.text }]}>
@@ -252,14 +199,6 @@ export default function CommunityNotificationsScreen() {
 
 const styles = StyleSheet.create({
   screen: { flex: 1 },
-  errorBoundary: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 14, padding: 28 },
-  errorBoundaryTitle: { fontSize: 22, fontWeight: '700', textAlign: 'center' },
-  errorBoundaryBody: { fontSize: 15, lineHeight: 22, textAlign: 'center', maxWidth: 340 },
-  errorBoundaryDetails: { fontSize: 12, lineHeight: 17, maxWidth: '100%' },
-  errorBoundaryPrimary: { minHeight: 48, minWidth: 210, alignItems: 'center', justifyContent: 'center', borderRadius: 13, paddingHorizontal: 18, backgroundColor: '#E5C84B' },
-  errorBoundaryPrimaryText: { fontSize: 14, fontWeight: '700' },
-  errorBoundarySecondary: { minHeight: 44, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 18 },
-  errorBoundarySecondaryText: { fontSize: 14, fontWeight: '600' },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12, paddingBottom: 10, borderBottomWidth: StyleSheet.hairlineWidth },
   back: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
   title: { flex: 1, textAlign: 'center', fontSize: 16, fontFamily: 'Inter_700Bold' },
