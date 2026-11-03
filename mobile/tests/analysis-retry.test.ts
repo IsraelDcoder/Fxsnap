@@ -12,6 +12,7 @@ test('failed chart analysis retry keeps the uploaded image in transient app memo
     imageMimeType: 'image/png',
     imageUri: 'file:///chart.png',
     pair: 'GBPUSD',
+    timeframe: '15m',
   };
 
   storeAnalysisRetryRequest(request);

@@ -28,6 +28,15 @@ function chartResult(overrides: Partial<ChartAnalysisResult> = {}): ChartAnalysi
     marketBiasConfidence: 64,
     marketConfidence: 64,
     latestVisiblePrice: 1.1025,
+    rightmostCandle: {
+      identified: true,
+      direction: 'bullish',
+      open: 1.1010,
+      high: 1.1030,
+      low: 1.1005,
+      close: 1.1025,
+      reading: 'The latest candle closed bullish near resistance.',
+    },
     entryReadiness: 0,
     tradeStatus: 'no_setup',
     setupStatus: 'NO_SETUP',
@@ -102,6 +111,15 @@ test('maps no-trade analysis content and every available level into the result m
   assert.equal(result.marketBias, 'bullish');
   assert.equal(result.confidence, 64);
   assert.equal(result.latestVisiblePrice, 1.1025);
+  assert.deepEqual(result.rightmostCandle, {
+    identified: true,
+    direction: 'bullish',
+    open: 1.1010,
+    high: 1.1030,
+    low: 1.1005,
+    close: 1.1025,
+    reading: 'The latest candle closed bullish near resistance.',
+  });
   assert.equal(result.entryReadiness, 0);
   assert.deepEqual(result.takeProfitLevels, ['1.1100', '1.1200']);
   assert.deepEqual(result.tradeSetup, {
@@ -124,15 +142,26 @@ test('keeps chart evidence confidence separate from market-bias confidence and m
     source: 'Twelve Data',
     checkedAt: '2025-01-01T12:00:01.000Z',
   };
+  const signalMetadata = {
+    candle_open_time: '2025-01-01T11:45:00.000Z',
+    candle_close_time: '2025-01-01T12:00:00.000Z',
+    data_timestamp: '2025-01-01T12:00:00.000Z',
+    timeframe: 'M15',
+    price_at_signal: 1.1027,
+    is_candle_forming: true,
+    data_source: 'Twelve Data',
+  };
   const result = buildAnalysisResult(chartResult({
     confidence: 72,
     marketConfidence: 41,
     liveMarketData,
+    signalMetadata,
   }), 'EUR/USD', 'file:///chart.jpg');
 
   assert.equal(result.confidence, 72);
   assert.equal(result.marketConfidence, 41);
   assert.deepEqual(result.liveMarketData, liveMarketData);
+  assert.deepEqual(result.signalMetadata, signalMetadata);
 });
 
 test('keeps candidate levels visible in the result model when trade direction is not established', () => {

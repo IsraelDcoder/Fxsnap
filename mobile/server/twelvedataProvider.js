@@ -7,6 +7,15 @@ const MarketDataProvider = require('./marketProvider');
 
 const API_BASE = 'https://api.twelvedata.com';
 
+function parseProviderTimestamp(value) {
+  const text = String(value || '').trim();
+  if (!text) return Number.NaN;
+  const utcText = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2})?$/.test(text)
+    ? `${text.replace(' ', 'T')}${text.length === 16 ? ':00' : ''}Z`
+    : text;
+  return Date.parse(utcText);
+}
+
 function ensureFetch() {
   if (typeof fetch === 'undefined') {
     // Node 18+ exposes global fetch. If not available, surface a clear error.
@@ -57,7 +66,7 @@ class TwelveDataProvider extends MarketDataProvider {
     const priceNum = rawPrice != null ? Number(rawPrice) : null;
     const rawTimestamp = json?.timestamp != null
       ? Number(json.timestamp) * 1000
-      : json?.datetime != null ? Date.parse(String(json.datetime)) : Number.NaN;
+      : json?.datetime != null ? parseProviderTimestamp(json.datetime) : Number.NaN;
     return {
       symbol: s,
       price: Number.isFinite(priceNum) ? priceNum : null,
@@ -69,7 +78,7 @@ class TwelveDataProvider extends MarketDataProvider {
   async getCandles(symbol, interval = '1min', limit = 100) {
     const s = String(symbol || '').trim();
     if (!s) throw new Error('symbol required');
-    const json = await this._fetch('/time_series', { symbol: s, interval, outputsize: limit });
+    const json = await this._fetch('/time_series', { symbol: s, interval, outputsize: limit, timezone: 'UTC' });
     const values = json && (json.values || json.data || []) ? (json.values || json.data || []) : [];
     return values.map((v) => ({
       time: v.datetime || v.timestamp || null,

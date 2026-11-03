@@ -120,6 +120,15 @@ const DEFAULT_CHART = {
   current_price_source: 'unreadable',
   current_candle_status: 'unknown',
   latest_candle_timestamp: null,
+  rightmost_candle: {
+    identified: false,
+    direction: 'unclear',
+    open: null,
+    high: null,
+    low: null,
+    close: null,
+    reading: '',
+  },
 };
 const DEFAULT_ANALYSIS = {
   trend: 'neutral',
@@ -315,6 +324,15 @@ const TradeAnalysisSchema = z.object({
     current_price_source: z.enum(['visible_price_marker', 'latest_candle_scale_read', 'unreadable']),
     current_candle_status: z.enum(['forming', 'completed', 'unknown']),
     latest_candle_timestamp: z.string().trim().max(40).nullable(),
+    rightmost_candle: z.object({
+      identified: z.boolean(),
+      direction: z.enum(['bullish', 'bearish', 'doji', 'unclear']),
+      open: z.union([z.string().trim().max(40), z.number().finite()]).nullable(),
+      high: z.union([z.string().trim().max(40), z.number().finite()]).nullable(),
+      low: z.union([z.string().trim().max(40), z.number().finite()]).nullable(),
+      close: z.union([z.string().trim().max(40), z.number().finite()]).nullable(),
+      reading: z.string().trim().max(240),
+    }).optional(),
   }),
   analysis: z.object({
     trend: z.enum(['bullish', 'bearish', 'neutral']),
@@ -755,6 +773,10 @@ function getPriceConsistencyIssues(result, pairHint, now = Date.now(), priceOver
   }
 
   if (currentPrice == null || !rule) return issues;
+  if (screenshotPrice != null && priceOverride != null
+    && Math.abs(screenshotPrice - priceOverride) > rule.tickSize * 10) {
+    issues.push('Live data stale: the screenshot price differs from the current provider quote by more than 10 ticks.');
+  }
   const entry = parsePriceOrRange(setup.entry_zone);
   const stop = parsePriceOrRange(setup.stop_loss);
   const targets = parseTakeProfitLevels(setup.take_profit_levels, setup.take_profit);
@@ -839,55 +861,182 @@ function getProviderSymbol(symbol) {
   return /^[A-Z]{6}$/.test(normalized) ? `${normalized.slice(0, 3)}/${normalized.slice(3)}` : String(symbol).trim();
 }
 
-async function getLiveMarketData(result, pairHint, provider = marketProvider, now = Date.now()) {
+function timeframeDetails(timeframe) {
+  const normalized = String(timeframe || '').trim().toUpperCase().replace(/\s+/g, '');
+  const minuteMatch = normalized.match(/^(\d+)(?:M|MIN)$/) || normalized.match(/^M(\d+)$/);
+  const hourMatch = normalized.match(/^(\d+)(?:H|HR|HOUR)$/) || normalized.match(/^H(\d+)$/);
+  const dayMatch = normalized.match(/^(?:D(\d+)|(\d+)D|DAILY)$/);
+  const amount = Number(minuteMatch?.[1] || hourMatch?.[1] || dayMatch?.[1] || dayMatch?.[2] || (normalized === 'DAILY' ? 1 : NaN));
+  if (!Number.isInteger(amount) || amount <= 0) return null;
+  const minutes = minuteMatch ? amount : hourMatch ? amount * 60 : amount * 1440;
+  const providerInterval = minuteMatch ? `${amount}min` : hourMatch ? `${amount}h` : `${amount}day`;
+  return { normalized, minutes, seconds: minutes * 60, providerInterval };
+}
+
+function currentCandleWindow(timeframe, now = Date.now()) {
+  const details = timeframeDetails(timeframe);
+  if (!details) return null;
+  const durationMs = details.seconds * 1000;
+  const openMs = Math.floor(now / durationMs) * durationMs;
+  return {
+    details,
+    openMs,
+    closeMs: openMs + durationMs,
+    openTime: new Date(openMs).toISOString(),
+    closeTime: new Date(openMs + durationMs).toISOString(),
+  };
+}
+
+function sameTimeframe(first, second) {
+  const firstDetails = timeframeDetails(first);
+  const secondDetails = timeframeDetails(second);
+  return Boolean(firstDetails && secondDetails && firstDetails.seconds === secondDetails.seconds);
+}
+
+function parseProviderCandleTime(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value < 10_000_000_000 ? value * 1000 : value;
+  }
+  if (typeof value !== 'string' || !value.trim()) return Number.NaN;
+  const text = value.trim();
+  const utcText = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2})?$/.test(text)
+    ? `${text.replace(' ', 'T')}${text.length === 16 ? ':00' : ''}Z`
+    : text;
+  return Date.parse(utcText);
+}
+
+function signalMetadata(liveMarketData, now, timeframe) {
+  const window = liveMarketData?.status === 'verified'
+    ? currentCandleWindow(timeframe, now)
+    : null;
+  return {
+    candle_open_time: window?.openTime || null,
+    candle_close_time: window?.closeTime || null,
+    data_timestamp: window ? liveMarketData?.timestamp || null : null,
+    timeframe: timeframe || null,
+    price_at_signal: window ? liveMarketData.price : null,
+    is_candle_forming: window ? now < window.closeMs : null,
+    data_source: window ? liveMarketData?.source || null : 'AI chart analysis (uploaded screenshot; live data unverified)',
+  };
+}
+
+function getCurrentCandleIssues(result, timeframe, liveMarketData, now) {
+  const window = currentCandleWindow(timeframe, now);
+  if (!window) return ['Live data stale: the selected timeframe cannot be verified against a current candle.'];
+  const latestTimestamp = parseProviderCandleTime(liveMarketData?.candleTimestamp);
+  if (!Number.isFinite(latestTimestamp) || latestTimestamp !== window.openMs) {
+    return ['Live data stale: the provider has no candle for the current UTC timeframe window.'];
+  }
+  const chartTimestamp = parseProviderCandleTime(result?.chart?.latest_candle_timestamp);
+  if (!Number.isFinite(chartTimestamp) || chartTimestamp !== window.openMs) {
+    return ['Live data stale: the screenshot does not show the current timeframe candle. Refresh the chart and try again.'];
+  }
+  if (result?.chart?.current_candle_status !== 'forming' || now >= window.closeMs) {
+    return ['Live data stale: the current candle is not verified as forming. Refresh the chart and try again.'];
+  }
+  return [];
+}
+
+async function getLiveMarketData(result, pairHint, provider = marketProvider, now = Date.now(), timeframe = null) {
   const selectedSymbol = String(pairHint || '').trim();
   const chartSymbol = result?.chart?.pair || result?.detectedPair;
+  const selectedTimeframe = timeframe || result?.chart?.timeframe || result?.timeframe;
+  const window = currentCandleWindow(selectedTimeframe, now);
   if (!selectedSymbol) {
-    return { status: 'unavailable', price: null, timestamp: null, source: null, checkedAt: new Date(now).toISOString(), reason: 'Select the instrument before analysis to verify its live price.' };
+    return { status: 'unavailable', price: null, timestamp: null, candleTimestamp: null, source: null, checkedAt: new Date(now).toISOString(), reason: 'Select the instrument before analysis to verify its live price.' };
   }
   if (chartSymbol && normalizedInstrumentSymbol(chartSymbol) !== normalizedInstrumentSymbol(selectedSymbol)) {
-    return { status: 'symbol_mismatch', price: null, timestamp: null, source: null, checkedAt: new Date(now).toISOString(), reason: 'The instrument selected in the app does not match the instrument identified on the screenshot.' };
+    return { status: 'symbol_mismatch', price: null, timestamp: null, candleTimestamp: null, source: null, checkedAt: new Date(now).toISOString(), reason: 'The instrument selected in the app does not match the instrument identified on the screenshot.' };
   }
-  if (!provider || typeof provider.getQuote !== 'function') {
-    return { status: 'unavailable', price: null, timestamp: null, source: null, checkedAt: new Date(now).toISOString(), reason: 'A live market-data provider is not configured; screenshot levels cannot be validated against a current quote.' };
+  if (!window) {
+    return { status: 'unavailable', price: null, timestamp: null, candleTimestamp: null, source: null, checkedAt: new Date(now).toISOString(), reason: 'Live data stale: the selected timeframe is unsupported for current-candle verification.' };
+  }
+  if (!provider || typeof provider.getQuote !== 'function' || typeof provider.getCandles !== 'function') {
+    return { status: 'unavailable', price: null, timestamp: null, candleTimestamp: null, source: null, checkedAt: new Date(now).toISOString(), reason: 'Live data stale: a live quote and current-candle provider are required to validate this setup.' };
   }
 
   try {
-    const quote = await provider.getQuote(getProviderSymbol(selectedSymbol));
+    const providerSymbol = getProviderSymbol(selectedSymbol);
+    const [quote, candles] = await Promise.all([
+      provider.getQuote(providerSymbol),
+      provider.getCandles(providerSymbol, window.details.providerInterval, 3),
+    ]);
     const price = exactPositivePrice(quote?.price);
     const timestamp = typeof quote?.timestamp === 'number'
       ? quote.timestamp
       : typeof quote?.timestamp === 'string' ? Date.parse(quote.timestamp) : Number.NaN;
+    const returnedSymbol = quote?.symbol == null ? providerSymbol : String(quote.symbol);
+    if (normalizedInstrumentSymbol(returnedSymbol) !== normalizedInstrumentSymbol(selectedSymbol)) {
+      return {
+        status: 'symbol_mismatch',
+        price,
+        timestamp: Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null,
+        candleTimestamp: null,
+        source: 'Twelve Data',
+        checkedAt: new Date(now).toISOString(),
+        reason: 'Live data stale: the provider returned a quote for a different symbol.',
+      };
+    }
+    const currentCandle = Array.isArray(candles)
+      ? candles
+        .map((candle) => ({ candle, timestamp: parseProviderCandleTime(candle?.time ?? candle?.datetime ?? candle?.timestamp ?? candle?.t) }))
+        .filter((item) => Number.isFinite(item.timestamp))
+        .sort((a, b) => b.timestamp - a.timestamp)[0]
+      : null;
+    const candleTimestamp = currentCandle?.timestamp;
+    const candleOpen = exactPositivePrice(currentCandle?.candle?.open ?? currentCandle?.candle?.o);
+    const candleHigh = exactPositivePrice(currentCandle?.candle?.high ?? currentCandle?.candle?.h);
+    const candleLow = exactPositivePrice(currentCandle?.candle?.low ?? currentCandle?.candle?.l);
+    const source = provider?.dataSourceName || (provider?.constructor?.name === 'TwelveDataProvider' ? 'Twelve Data' : provider?.constructor?.name || 'Market data provider');
     if (price == null || !Number.isFinite(timestamp) || timestamp <= 0
-      || timestamp > now + 5_000 || now - timestamp > 90_000) {
+      || timestamp > now + 5_000 || now - timestamp > 30_000) {
       return {
         status: 'stale',
         price,
         timestamp: Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null,
-        source: 'Twelve Data',
+        candleTimestamp: Number.isFinite(candleTimestamp) ? new Date(candleTimestamp).toISOString() : null,
+        source,
         checkedAt: new Date(now).toISOString(),
-        reason: 'The market quote is missing or older than 90 seconds; refresh and analyze again before considering a setup.',
+        reason: 'Live data stale: the market quote is missing or older than 30 seconds; refresh and analyze again.',
+      };
+    }
+    const instrumentRule = chartInstrumentRule(selectedSymbol);
+    if (!currentCandle || candleTimestamp !== window.openMs
+      || candleOpen == null || candleHigh == null || candleLow == null
+      || candleHigh < candleLow
+      || (instrumentRule && (price < candleLow - instrumentRule.tickSize || price > candleHigh + instrumentRule.tickSize))) {
+      return {
+        status: 'stale',
+        price,
+        timestamp: new Date(timestamp).toISOString(),
+        candleTimestamp: Number.isFinite(candleTimestamp) ? new Date(candleTimestamp).toISOString() : null,
+        source,
+        checkedAt: new Date(now).toISOString(),
+        reason: 'Live data stale: the provider candle does not cover the current timeframe or live price.',
       };
     }
     return {
       status: 'verified',
       price,
       timestamp: new Date(timestamp).toISOString(),
-      source: 'Twelve Data',
+      candleTimestamp: new Date(candleTimestamp).toISOString(),
+      source,
       checkedAt: new Date(now).toISOString(),
     };
   } catch (error) {
     console.warn('[Chart AI] Could not verify the current market quote.', {
       symbol: normalizedInstrumentSymbol(selectedSymbol),
+      timeframe: selectedTimeframe,
       errorName: error instanceof Error ? error.name : 'UnknownError',
     });
     return {
       status: 'unavailable',
       price: null,
       timestamp: null,
+      candleTimestamp: null,
       source: null,
       checkedAt: new Date(now).toISOString(),
-      reason: 'The live market quote could not be verified; refresh and analyze again before considering a setup.',
+      reason: 'Live data stale: the current market quote or candle could not be verified; refresh and analyze again.',
     };
   }
 }
@@ -901,6 +1050,7 @@ function holdSetupForLiveQuoteValidation(result, issues, validationStatus = 'unv
     conviction: null,
     verdict_reason: reason,
     trade_plan: null,
+    trade_setup: { ...result.trade_setup, type: 'none', entry_zone: 'none', stop_loss: 'none', take_profit: 'none', take_profit_levels: [], risk_reward: null },
     no_trade_reason: reason,
     decision: 'NO_TRADE',
     tradeDecision: 'NONE',
@@ -915,21 +1065,94 @@ function holdSetupForLiveQuoteValidation(result, issues, validationStatus = 'unv
   };
 }
 
-async function applyLiveMarketValidation(result, pairHint, provider = marketProvider, now = Date.now()) {
-  const liveMarketData = await getLiveMarketData(result, pairHint, provider, now);
+function markAiOnlyCandidate(result, liveDataReason) {
+  const reason = 'AI-only chart setup: live market data is unavailable. These levels come from the uploaded screenshot and are not live-verified; check the current price and candle on your broker before considering an entry.';
+  const trade = result.trade_setup || {};
+  const hasCompleteLevels = Boolean(
+    parsePriceOrRange(trade.entry_zone)
+    && parsePriceOrRange(trade.stop_loss)
+    && parseTakeProfitLevels(trade.take_profit_levels, trade.take_profit)
+      .some((level) => parsePriceOrRange(level)),
+  );
+  return {
+    ...result,
+    status: 'no_trade',
+    verdict: 'CONDITIONAL_PLAN',
+    verdict_reason: reason,
+    trade_plan: null,
+    tradeStatus: hasCompleteLevels ? 'waiting_for_confirmation' : 'waiting_for_trigger',
+    setupStatus: hasCompleteLevels ? 'AI_ONLY_CONDITIONAL' : 'AI_ONLY_INCOMPLETE',
+    tradeDecision: 'WAIT',
+    decision: 'WAIT',
+    entryReadiness: 0,
+    entryStatus: trade.entry_status || 'unverified',
+    tradeTrigger: mergeUniqueStrings([
+      ...(result.tradeTrigger ? [result.tradeTrigger] : []),
+      reason,
+    ]).join(' '),
+    no_trade_reason: reason,
+    candidateValidationStatus: 'live_unavailable',
+    liveMarketData: result.liveMarketData,
+    signalMetadata: {
+      ...result.signalMetadata,
+      candle_open_time: null,
+      candle_close_time: null,
+      data_timestamp: null,
+      timeframe: result.signalMetadata?.timeframe || result.timeframe || null,
+      price_at_signal: null,
+      is_candle_forming: null,
+      data_source: 'AI chart analysis (uploaded screenshot; live data unverified)',
+    },
+    dataLimitations: mergeUniqueStrings([
+      ...(result.dataLimitations || []),
+      liveDataReason || 'Current quote and candle could not be verified.',
+      reason,
+    ]),
+    whyNotNow: mergeUniqueStrings([...(result.whyNotNow || []), reason]),
+  };
+}
+
+async function applyLiveMarketValidation(result, pairHint, provider = marketProvider, now = Date.now(), timeframe = null) {
+  const selectedTimeframe = timeframe || result?.chart?.timeframe || result?.timeframe || null;
+  const liveMarketData = await getLiveMarketData(result, pairHint, provider, now, selectedTimeframe);
+  const metadata = signalMetadata(liveMarketData, now, selectedTimeframe);
+  const candleIssues = getCurrentCandleIssues(result, selectedTimeframe, liveMarketData, now);
+  const symbol = normalizedInstrumentSymbol(pairHint || result?.detectedPair || '');
+  console.info('[Chart AI] Live signal audit', {
+    now: new Date(now).toISOString(),
+    currentCandleOpen: metadata.candle_open_time,
+    currentCandleClose: metadata.candle_close_time,
+    lastTickTimestamp: liveMarketData.timestamp,
+    lastPrice: liveMarketData.price,
+    cache: 'miss',
+    dataSource: liveMarketData.source,
+    symbol,
+    timeframe: selectedTimeframe,
+  });
   const candidateDirection = result?.trade_setup?.type === 'buy' || result?.trade_setup?.type === 'sell';
-  let validated = { ...result, liveMarketData };
+  let validated = {
+    ...result,
+    liveMarketData,
+    signalMetadata: metadata,
+  };
   if (!candidateDirection) {
     if (liveMarketData.status !== 'verified' && liveMarketData.reason) {
       validated.dataLimitations = mergeUniqueStrings([...(validated.dataLimitations || []), liveMarketData.reason]);
     }
+    if (candleIssues.length) validated.dataLimitations = mergeUniqueStrings([...(validated.dataLimitations || []), ...candleIssues]);
     return validated;
   }
 
   if (liveMarketData.status !== 'verified') {
+    if (liveMarketData.status !== 'symbol_mismatch') {
+      return markAiOnlyCandidate(validated, liveMarketData.reason);
+    }
     return holdSetupForLiveQuoteValidation(validated, [liveMarketData.reason || 'A fresh live quote could not be verified.']);
   }
-  const issues = getPriceConsistencyIssues(validated, pairHint, now, liveMarketData.price);
+  const issues = [
+    ...getPriceConsistencyIssues(validated, pairHint, now, liveMarketData.price),
+    ...candleIssues,
+  ];
   if (issues.length) {
     return holdSetupForLiveQuoteValidation(validated, issues, 'rejected');
   }
@@ -1323,6 +1546,27 @@ function normalizeVerdictFields(raw, normalized) {
   };
 }
 
+function normalizeRightmostCandle(value) {
+  const candle = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const open = numericPrice(candle.open);
+  const high = numericPrice(candle.high);
+  const low = numericPrice(candle.low);
+  const close = numericPrice(candle.close);
+  const explicitDirection = canonicalizeEnumOr(candle.direction, {}, ['bullish', 'bearish', 'doji', 'unclear'], 'unclear');
+  const direction = open != null && close != null
+    ? close > open ? 'bullish' : close < open ? 'bearish' : 'doji'
+    : explicitDirection;
+  return {
+    identified: parseBoolean(candle.identified, false),
+    direction,
+    open,
+    high,
+    low,
+    close,
+    reading: boundedString(candle.reading, '', 240),
+  };
+}
+
 function canonicalizeRawAnalysis(raw) {
   if (typeof raw === 'string') raw = parseJsonPayload(raw);
   if (!raw || typeof raw !== 'object') return null;
@@ -1511,6 +1755,7 @@ function canonicalizeRawAnalysis(raw) {
       current_price_source: currentPriceSource,
       current_candle_status: currentCandleStatus,
       latest_candle_timestamp: ensureNullableString(chartRaw.latest_candle_timestamp),
+      rightmost_candle: normalizeRightmostCandle(chartRaw.rightmost_candle),
     },
     analysis: {
       ...DEFAULT_ANALYSIS,
@@ -2358,9 +2603,16 @@ function applyMentorStrategy(normalized) {
 }
 
 function getTraderSystemPrompt() {
-  return `You are FXSnap's chart analyst. You receive ONE screenshot of a trading chart. Return valid JSON only, with no markdown or prose. For a readable chart with a supported directional setup, return bias, levels, price_position, setup, verdict: "TRADE_PLAN", conviction, verdict_reason, a complete trade_plan, and no_trade_reason: null. Select BUY or SELL from the visible evidence; never default to BUY, invent a side, or reverse direction just to make a plan fit the levels. If the chart is blurred, the current price is unreadable, the evidence is genuinely mixed, or no defensible setup exists, return verdict: "NO_TRADE", trade_plan: null, and a clear no_trade_reason. Never invent missing chart data. Do not claim a screenshot price is live. Use the rightmost/current price marker or candle, never a historical candle as the current price.
+  return `You are FXSnap's chart-image analyst. Analyze only the uploaded screenshot; never imply access to live quotes, market feeds, cached prices, or external data. Return one valid JSON object, no markdown, using this shape:
+{"status":"success|no_trade|invalid_image","chart":{"is_chart":true,"pair":"visible label or null","timeframe":"visible label or app-selected timeframe","chart_quality":"good|acceptable|poor","price_scale_visible":true,"candles_visible":true,"has_enough_candles":true,"latest_visible_price":"number or null","current_price_source":"visible_price_marker|latest_candle_scale_read|unreadable","current_candle_status":"forming|completed|unknown","latest_candle_timestamp":"exact visible UTC timestamp or null","rightmost_candle":{"identified":true,"direction":"bullish|bearish|doji|unclear","open":null,"high":null,"low":null,"close":null,"reading":"visible candle body/wick and its implication, or exact reason it cannot be classified"}},"analysis":{"trend":"bullish|bearish|neutral","structure":"concise visible structure","market_structure":"higher highs/lows, range, break/retest, or other visible evidence","notes":"reasoning and limitations"},"levels":{"support":["visible numeric levels"],"resistance":["visible numeric levels"]},"bias":"bullish|bearish|neutral","price_position":"at_support|at_resistance|mid_range|breaking_up|breaking_down|extended","setup":"trend_pullback|range_edge|range_middle|breakout_retest|rejection_at_level|trend_continuation|no_setup","trade_plan":null,"verdict":"TRADE_PLAN|CONDITIONAL_PLAN|NO_TRADE","verdict_reason":"specific chart evidence","no_trade_reason":"specific limitation, or null","reasoning":["brief evidence-based points"]}.
 
-Return only one parseable JSON object. For non-chart images, return the existing invalid_image response only.`;
+Identify the spatially rightmost candle first and set chart.rightmost_candle.identified=true only if you can point to it unambiguously. Report its OHLC only where visually readable; otherwise use null. Classify its candle direction from close versus open (bullish, bearish, doji, or unclear), describe body/wicks and the latest candle's immediate implication in reading, and use that candle together with nearby support/resistance and preceding structure to form the short-term prediction. Anchor short-term direction, prediction, and setup freshness to this candle; use earlier candles only for context. Explicitly state whether the last candle confirms, weakens, or conflicts with the broader structure and explain why in analysis.notes and reasoning. Do not equate one candle's color with a guaranteed reversal or continuation. If the rightmost candle cannot be identified, say so. If the screenshot price is unreadable, do not claim a fresh or actionable entry. Report the visible current price in chart.latest_visible_price, never as a live quote. Check whether entry is missed, stop invalidated, or TP1 already reached.
+
+Read the visible instrument and timeframe; use the app-selected timeframe only when the chart label is unreadable. Missing timestamps or forming/closed status do not invalidate a readable chart: report unknown/null rather than guess.
+
+For a supported plan, replace trade_plan with {"direction":"BUY|SELL","entry_type":"market|trigger","trigger_event":"entry condition","entry":0,"stop_loss":0,"take_profit_1":0,"take_profit_2":null,"risk_reward":0}. Choose BUY or SELL only when supported by visible structure and levels. A missing breakout or reversal on the rightmost candle is not, by itself, a reason to return NO_TRADE: when visible support/resistance supports a range-edge or trend-pullback setup, provide the complete level-based plan: entry at the supported boundary, stop beyond a visible invalidation swing, and target at an opposing visible level. Use a limit-zone entry at support/resistance when that is the strategy; do not require an additional breakout/reversal candle to provide its levels. Use a trigger entry only when the chart shows a distinct trigger setup. Explain the level evidence and invalidation. Analyze structure and mark numeric support/resistance whenever readable, even when no complete plan is defensible. Do not invent prices, levels, buffers, direction, or risk/reward; the server recalculates risk/reward.
+
+Use NO_TRADE with trade_plan:null only when the chart/price/required levels are unreadable, the setup is missed or invalidated, evidence genuinely conflicts, or no defensible support/resistance setup exists. Do not require a breakout/reversal candle when visible levels support a limit-zone plan. Still return all readable chart analysis and explain the precise limitation. For a non-chart image, return invalid_image.`;
 }
 
 function normalizeCompleteChartAnalysis(raw, input = {}) {
@@ -2417,22 +2669,16 @@ function normalizeCompleteChartAnalysis(raw, input = {}) {
   const setup = ['trend_pullback', 'range_edge', 'range_middle', 'breakout_retest', 'rejection_at_level', 'trend_continuation', 'no_setup'].includes(raw.setup)
     ? raw.setup
     : position === 'at_support' || position === 'at_resistance' ? 'range_edge' : 'trend_continuation';
-  const nearest = (levels, reference, predicate) => levels
-    .filter((price) => !predicate || predicate(price))
-    .sort((a, b) => Math.abs(a - reference) - Math.abs(b - reference))[0];
   const buildPlan = (side) => {
-    const entryCandidates = side === 'BUY' ? support : resistance;
     const targetCandidates = side === 'BUY' ? resistance : support;
     const requestedEntryRaw = suppliedPlan.entry ?? legacyPlan.entry_zone;
     const requestedEntry = numericPrice(typeof requestedEntryRaw === 'string' ? requestedEntryRaw.replace(/,/g, '') : requestedEntryRaw);
-    const entry = requestedEntry != null && entryCandidates.includes(requestedEntry)
-      ? requestedEntry
-      : nearest(entryCandidates, latest ?? entryCandidates[0] ?? 0);
-    if (entry == null) return null;
-    const target = targetCandidates
-      .filter((price) => side === 'BUY' ? price > entry : price < entry)
-      .sort((a, b) => side === 'BUY' ? a - b : b - a)[0];
-    if (target == null) return null;
+    const entry = requestedEntry;
+    const requestedTargetRaw = suppliedPlan.take_profit_1 ?? legacyPlan.take_profit;
+    const target = numericPrice(typeof requestedTargetRaw === 'string' ? requestedTargetRaw.replace(/,/g, '') : requestedTargetRaw);
+    if (entry == null || target == null
+      || (![...support, ...resistance].includes(entry) && latest !== entry)
+      || !targetCandidates.includes(target)) return null;
     const invalidation = (side === 'BUY' ? support : resistance)
       .filter((price) => side === 'BUY' ? price <= entry : price >= entry)
       .sort((a, b) => Math.abs(entry - a) - Math.abs(entry - b))[0];
@@ -2442,16 +2688,20 @@ function normalizeCompleteChartAnalysis(raw, input = {}) {
     const suppliedStop = numericPrice(typeof suppliedStopRaw === 'string' ? suppliedStopRaw.replace(/,/g, '') : suppliedStopRaw);
     const suppliedStopValid = suppliedStop != null
       && (side === 'BUY' ? suppliedStop < invalidation : suppliedStop > invalidation)
-      && Math.abs(suppliedStop - invalidation) <= invalidation * 0.01;
+      && (side === 'BUY' ? suppliedStop < entry : suppliedStop > entry);
     if (!suppliedStopValid) return null;
     const stop = suppliedStop;
     const risk = Math.abs(entry - stop);
     const reward = Math.abs(target - entry);
     if (!(risk > 0 && reward > 0)
       || (side === 'BUY' ? !(stop < entry && entry < target) : !(target < entry && entry < stop))) return null;
-    const target2 = targetCandidates
-      .filter((price) => side === 'BUY' ? price > target : price < target)
-      .sort((a, b) => side === 'BUY' ? a - b : b - a)[0] ?? null;
+    const requestedTarget2Raw = suppliedPlan.take_profit_2 ?? legacyPlan.take_profit_2;
+    const requestedTarget2 = numericPrice(typeof requestedTarget2Raw === 'string' ? requestedTarget2Raw.replace(/,/g, '') : requestedTarget2Raw);
+    const target2 = requestedTarget2 != null
+      && targetCandidates.includes(requestedTarget2)
+      && (side === 'BUY' ? requestedTarget2 > target : requestedTarget2 < target)
+      ? requestedTarget2
+      : null;
     return {
       direction: side,
       entry_type: suppliedPlan.entry_type === 'trigger' ? 'trigger' : 'market',
@@ -2471,9 +2721,33 @@ function normalizeCompleteChartAnalysis(raw, input = {}) {
   const explicitNoTrade = String(raw.verdict ?? '').toUpperCase() === 'NO_TRADE'
     || String(raw.status ?? '').toLowerCase() === 'no_trade';
   let plan = !explicitNoTrade && direction ? buildPlan(direction) : null;
+  let rightmostPriceIssue = null;
+  if (plan && latest == null) {
+    rightmostPriceIssue = 'The rightmost candle price is unreadable, so setup freshness cannot be checked from the screenshot.';
+    plan = null;
+  } else if (plan && latest != null) {
+    const rule = chartInstrumentRule(pair);
+    const entryDistance = Math.abs(plan.entry - latest);
+    const invalidated = plan.direction === 'BUY'
+      ? latest <= plan.stop_loss
+      : latest >= plan.stop_loss;
+    const targetReached = plan.direction === 'BUY'
+      ? latest >= plan.take_profit_1
+      : latest <= plan.take_profit_1;
+    if (rule && entryDistance / rule.tickSize > rule.maxEntryDistanceTicks) {
+      rightmostPriceIssue = 'The proposed entry is too far from the rightmost candle price; the setup is stale in the uploaded screenshot.';
+      plan = null;
+    } else if (invalidated) {
+      rightmostPriceIssue = 'The rightmost candle price has crossed the setup stop/invalidation level.';
+      plan = null;
+    } else if (targetReached) {
+      rightmostPriceIssue = 'The rightmost candle price has already reached TP1, so the entry is no longer fresh.';
+      plan = null;
+    }
+  }
   const rawBias = normalizeDirection(biasText);
   const trend = rawBias === 'BUY' ? 'bullish' : rawBias === 'SELL' ? 'bearish' : 'neutral';
-  const noTradeReason = String(raw.no_trade_reason || raw.verdict_reason || '').trim()
+  const noTradeReason = rightmostPriceIssue || String(raw.no_trade_reason || raw.verdict_reason || '').trim()
     || (explicitNoTrade ? 'The chart does not support a defensible trade setup.' : 'The chart does not provide enough evidence for a defensible BUY or SELL setup.');
   if (!plan) {
     const chart = {
@@ -2485,6 +2759,7 @@ function normalizeCompleteChartAnalysis(raw, input = {}) {
       latest_visible_price: latest == null ? null : String(latest),
       current_price_source: ['visible_price_marker', 'latest_candle_scale_read', 'unreadable'].includes(chartRaw.current_price_source)
         ? chartRaw.current_price_source : latest == null ? 'unreadable' : 'latest_candle_scale_read',
+      rightmost_candle: normalizeRightmostCandle(chartRaw.rightmost_candle),
     };
     return {
       status: 'no_trade',
@@ -2551,6 +2826,7 @@ function normalizeCompleteChartAnalysis(raw, input = {}) {
     latest_visible_price: latest == null ? null : String(latest),
     current_price_source: ['visible_price_marker', 'latest_candle_scale_read', 'unreadable'].includes(chartRaw.current_price_source)
       ? chartRaw.current_price_source : latest == null ? 'unreadable' : 'latest_candle_scale_read',
+    rightmost_candle: normalizeRightmostCandle(chartRaw.rightmost_candle),
   };
   const tradeSetup = {
     ...DEFAULT_TRADE_SETUP,
@@ -3406,15 +3682,16 @@ async function generateStrategy(req, res) {
   }
 }
 
-async function allowRequest(req, deviceId) {
+async function allowRequest(req, deviceId, bucket = 'api') {
   const ip = deviceId || req.socket.remoteAddress || 'unknown';
-  const redisCount = await persistentStore.increment(`fxsnap:rate:${ip}`, 60);
+  const redisCount = await persistentStore.increment(`fxsnap:rate:${bucket}:${ip}`, 60);
   if (redisCount !== null) return redisCount <= 30;
   const now = Date.now();
-  const record = requestCounts.get(ip) || { started: now, count: 0 };
+  const rateKey = `${bucket}:${ip}`;
+  const record = requestCounts.get(rateKey) || { started: now, count: 0 };
   if (now - record.started > 60_000) { record.started = now; record.count = 0; }
   record.count += 1;
-  requestCounts.set(ip, record);
+  requestCounts.set(rateKey, record);
   return record.count <= 30;
 }
 
@@ -3543,22 +3820,18 @@ async function callVisionModel(messages, timeoutMs = 30000, retryWithoutJsonMode
  * defined by GEMINI_VISION_MODEL_PRIMARY and GEMINI_VISION_MODEL_FALLBACK.
  */
 /** OpenRouter vision analysis — single-pass disciplined chart analysis. */
-async function callOpenRouterTrader(imageBase64, mimeType, pair, timeoutMs = 45000) {
+async function callOpenRouterTrader(imageBase64, mimeType, pair, timeoutMs = 45000, timeframe = null) {
   const messages = [
     { role: 'system', content: getTraderSystemPrompt() },
-    { role: 'user', content: [{ type: 'text', text: `Analyze the uploaded trading chart image. App-selected instrument hint (unverified; do not let this override chart evidence): ${pair || 'not provided'}. Identify the instrument only if its label is visible. The chart may show forex, cryptocurrency, a metal, an index, or a commodity; do not assume forex-specific price-scale or pip conventions.` }, { type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageBase64}` } }] },
+    { role: 'user', content: [{ type: 'text', text: `Analyze the uploaded trading chart image. Anchor every conclusion to its rightmost visible candle and current screenshot price; use earlier candles only for context. App-selected instrument hint (unverified; do not let this override chart evidence): ${pair || 'not provided'}. App-selected timeframe: ${timeframe || 'not provided'}. Confirm the selected timeframe against the chart label; never substitute a different timeframe silently. Identify the instrument only if its label is visible. The chart may show forex, cryptocurrency, a metal, an index, or a commodity; do not assume forex-specific price-scale or pip conventions.` }, { type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageBase64}` } }] },
   ];
-  return callVisionModel(messages, timeoutMs);
+  return callVisionModel(messages, timeoutMs, true);
 }
 
 function shouldRequestCandidateLevelFollowup(result) {
   if (!result
     || result.status !== 'no_trade'
-    || result.chart?.is_chart !== true
-    || !['good', 'acceptable'].includes(result.chart?.chart_quality)
-    || !result.chart?.price_scale_visible
-    || !result.chart?.candles_visible
-    || !result.chart?.has_enough_candles) return false;
+    || result.chart?.is_chart !== true) return false;
 
   const trade = result.trade_setup || {};
   const targets = parseTakeProfitLevels(trade.take_profit_levels, trade.take_profit);
@@ -3601,7 +3874,7 @@ function buildCandidateLevelFollowupMessages(imageBase64, mimeType, pair, result
   return [
     {
       role: 'system',
-      content: `Evaluate BUY and SELL separately using visible chart evidence; first-pass analysis is context, not proof. When support and resistance are both clear and numeric, provide complete conditional candidates from the boundaries: buy at/near support, SL beyond its visible swing, TP at resistance; sell at/near resistance, SL beyond its visible swing, TP at support. Use the nearer boundary when price is between them. Do not return unsupported just because trend, consolidation or entry trigger is unclear; mark setup_status=unclear (or valid if structure holds), entry_status=waiting_for_trigger. State the specific visible confirmation to wait for in entry_trigger; do not invent a trigger. These are setup directions, not instructions to enter immediately. Only reject a side if levels/defensible SL are genuinely unreadable, structure is invalidated/missed, or multi-timeframe evidence conflicts. No invented prices/buffers. A candidate is conditional, not an actionable trade; retain BUY/SELL setup direction while the trigger is pending. For multi-timeframe mode require aligned H4/M15 evidence and M15 trigger before calling a setup actionable, but retain candidate levels and direction while confirmation is pending. When both candidates have equal evidence, prefer the direction supported by the established bias; otherwise prefer the valid entry zone nearer the latest visible price. If both remain equally supported and equally near, do not invent a preference; the server will retain the ambiguity. The server validates actionability and recalculates R:R. Return only:
+      content: `Evaluate BUY and SELL support/resistance setups from the visible chart. A missing last-candle breakout/reversal does not disqualify a level-based plan. For a BUY, use visible support as the limit-zone entry, the next visible invalidation swing below as stop, and opposing resistance as TP1; for a SELL, use resistance, the visible invalidation swing above, and support. Prefer the side supported by trend/structure and nearer to price. Return a candidate whenever numeric entry, stop, and TP1 are chart-supported and correctly ordered; do not require a separate candle trigger for a limit-zone plan. Reject a side only when required levels are unreadable, price has invalidated the setup, or timeframe evidence conflicts. Invent no level or buffer. Keep candidate levels complete and calculate R:R on the server. Multi-timeframe candidates require aligned H4/M15 evidence. On ties prefer established bias, then nearer valid entry; if still tied, remain ambiguous. Return only:
 {"status":"reviewed","buy":{"status":"candidate|unsupported","entry_zone":"price/range or omit","stop_loss":"price or omit","take_profit_levels":["TP1","optional TP2"],"setup_status":"valid|missed|invalidated|unclear","entry_status":"waiting_for_trigger|trigger_observed|missed|unverified","entry_type":"limit_zone|breakout|rejection|other|unspecified","entry_trigger":"specific visible trigger to wait for, or omit if unavailable","evidence":{"trend":"buy|sell|neutral|unavailable","structure":"buy|sell|neutral|unavailable","zone":"support|resistance|neutral|unavailable","trigger":"buy|sell|neutral|unavailable","higher_timeframe":"buy|sell|neutral|unavailable","liquidity":"buy|sell|neutral|unavailable","rsi":"buy|sell|neutral|unavailable"},"reason":"visible evidence or why unsupported"},"sell":{"status":"candidate|unsupported","entry_zone":"price/range or omit","stop_loss":"price or omit","take_profit_levels":["TP1","optional TP2"],"setup_status":"valid|missed|invalidated|unclear","entry_status":"waiting_for_trigger|trigger_observed|missed|unverified","entry_type":"limit_zone|breakout|rejection|other|unspecified","entry_trigger":"specific visible trigger to wait for, or omit if unavailable","evidence":{"trend":"buy|sell|neutral|unavailable","structure":"buy|sell|neutral|unavailable","zone":"support|resistance|neutral|unavailable","trigger":"buy|sell|neutral|unavailable","higher_timeframe":"buy|sell|neutral|unavailable","liquidity":"buy|sell|neutral|unavailable","rsi":"buy|sell|neutral|unavailable"},"reason":"visible evidence or why unsupported"}}`,
     },
     {
@@ -3708,6 +3981,9 @@ async function retryPriceConsistencyOnce(result, pairHint, retryMessages, isMult
         };
       }
       return result;
+    }
+    if (issues.some((issue) => /entry has already been missed|crossed the setup stop|already reached TP1|timestamp is stale/i.test(issue))) {
+      return holdSetupForPriceValidation(result, issues);
     }
     const reason = `Candidate levels are shown for analysis only; the setup is not validated as a fresh opportunity. ${issues.join(' ')}`;
     const cannotVerifyFreshness = issues.some((issue) => /current price cannot be reliably read|rightmost candle could not be distinguished|timestamp is unreadable|timestamp is not a reliable|timestamp is stale or in the future|instrument or its tick-size rules could not be verified/i.test(issue));
@@ -3919,11 +4195,13 @@ function applyCandidateLevelFollowup(result, rawFollowup) {
     setupStatus: isVisuallyValid ? 'DEVELOPING' : 'NO_SETUP',
     entryReadiness: 0,
     setupConfidence: 0,
-    tradeTrigger: candidate.entry_trigger
-      ? candidate.entry_status === 'trigger_observed'
-        ? `The screenshot shows this trigger: ${candidate.entry_trigger}. Verify it against current market data before acting.`
-        : `Wait for this chart-supported trigger: ${candidate.entry_trigger}.`
-      : 'Candidate levels are for analysis only; this result is not a validated or actionable trade setup.',
+    tradeTrigger: candidate.entry_status === 'trigger_observed'
+      ? `The screenshot shows this trigger: ${candidate.entry_trigger}. Verify it against current market data before acting.`
+      : candidate.entry_type === 'limit_zone' && entry && stop && acceptedTargets[0]
+        ? `Limit-entry plan at ${entry}, stop ${stop}, TP1 ${acceptedTargets[0]}; based on the visible support/resistance levels.`
+        : candidate.entry_trigger
+          ? `Wait for this chart-supported trigger: ${candidate.entry_trigger}.`
+          : 'Candidate levels are for analysis only; this result is not a validated or actionable trade setup.',
     reasoning: mergeUniqueStrings([...(result.reasoning || []), candidateReason]).slice(0, 5),
     reasons: mergeUniqueStrings([
       ...(Array.isArray(result.reasons) ? result.reasons : []),
@@ -4015,6 +4293,67 @@ function twoSidedGeometryIssue(candidate, direction, result) {
   return null;
 }
 
+function repairCandidateFromVisibleLevels(candidate, direction, result) {
+  const support = Array.isArray(result?.levels?.support) ? result.levels.support : [];
+  const resistance = Array.isArray(result?.levels?.resistance) ? result.levels.resistance : [];
+  const entryLevels = direction === 'buy' ? support : resistance;
+  const stopLevels = direction === 'buy' ? support : resistance;
+  const targetLevels = direction === 'buy' ? resistance : support;
+  const entryRange = parsePriceOrRange(candidate.entry_zone);
+  const latest = numericPrice(result?.chart?.latest_visible_price);
+  const rule = chartInstrumentRule(result?.chart?.pair || result?.detectedPair);
+  const matchesVisibleLevel = (value, levels) => {
+    const range = parsePriceOrRange(value);
+    if (!range) return false;
+    return levels.some((level) => Math.abs(Number(level) - range.mid) <= (rule?.tickSize || 0));
+  };
+  const entry = entryRange && matchesVisibleLevel(candidate.entry_zone, entryLevels)
+    ? candidate.entry_zone
+    : latest == null
+      ? null
+      : entryLevels
+        .map(Number)
+        .filter((level) => Number.isFinite(level)
+          && (direction === 'buy' ? level <= latest : level >= latest))
+        .sort((a, b) => Math.abs(a - latest) - Math.abs(b - latest))[0];
+  if (entry == null) return candidate;
+
+  const resolvedEntry = parsePriceOrRange(entry);
+  const isBeyondEntry = (value, side) => {
+    const range = parsePriceOrRange(value);
+    if (!range || !resolvedEntry) return false;
+    return side === 'stop'
+      ? direction === 'buy' ? range.max < resolvedEntry.min : range.min > resolvedEntry.max
+      : direction === 'buy' ? range.min > resolvedEntry.max : range.max < resolvedEntry.min;
+  };
+  const stop = isBeyondEntry(candidate.stop_loss, 'stop')
+    && matchesVisibleLevel(candidate.stop_loss, stopLevels)
+    ? candidate.stop_loss
+    : stopLevels
+      .map(Number)
+      .filter((level) => Number.isFinite(level)
+        && (direction === 'buy' ? level < resolvedEntry.min : level > resolvedEntry.max))
+      .sort((a, b) => Math.abs(Number(entry) - a) - Math.abs(Number(entry) - b))[0];
+  const visibleTargets = targetLevels
+    .map(Number)
+    .filter((level) => Number.isFinite(level)
+      && (direction === 'buy' ? level > resolvedEntry.max : level < resolvedEntry.min))
+    .sort((a, b) => direction === 'buy' ? a - b : b - a);
+  const requestedTargets = (candidate.take_profit_levels || [])
+    .filter((level) => isBeyondEntry(level, 'target') && matchesVisibleLevel(level, targetLevels));
+  const takeProfitLevels = requestedTargets.length
+    ? requestedTargets
+    : visibleTargets.length ? [String(visibleTargets[0])] : [];
+  if (stop == null || !takeProfitLevels.length) return candidate;
+  return {
+    ...candidate,
+    entry_zone: String(entry),
+    stop_loss: String(stop),
+    take_profit_levels: takeProfitLevels,
+    reason: `${candidate.reason} Invalid or missing levels were replaced only with the nearest visible support/resistance levels.`,
+  };
+}
+
 function applyTwoSidedCandidateReview(result, rawReview) {
   const parsed = TwoSidedCandidateReviewSchema.safeParse(rawReview);
   if (!parsed.success) {
@@ -4028,20 +4367,21 @@ function applyTwoSidedCandidateReview(result, rawReview) {
   }
 
   const evaluatedCandidates = ['buy', 'sell'].map((direction) => {
-    const candidate = parsed.data[direction];
+    let candidate = parsed.data[direction];
     const evidenceScore = directionalEvidenceScore(candidate, direction);
-    const directionalPatternPresent = candidate.evidence.structure === direction
-      || candidate.evidence.trigger === direction
-      || candidate.evidence.zone === (direction === 'buy' ? 'support' : 'resistance');
     const candidateHasEntryTrigger = candidate.entry_status === 'trigger_observed'
       && candidate.evidence.trigger === direction;
-    const geometryIssue = twoSidedGeometryIssue(candidate, direction, result);
+    let geometryIssue = twoSidedGeometryIssue(candidate, direction, result);
+    if (candidate.status === 'candidate' && geometryIssue) {
+      candidate = repairCandidateFromVisibleLevels(candidate, direction, result);
+      geometryIssue = twoSidedGeometryIssue(candidate, direction, result);
+    }
     const timeframeAllowsDirection = !result.multiTimeframe
       || (result.multiTimeframe.alignment === 'aligned'
         && result.multiTimeframe.h4?.trend === direction
         && result.multiTimeframe.m15?.trend === direction
         && Boolean(result.multiTimeframe.m15?.confirmation?.trim()));
-    if (candidate.status !== 'candidate' || evidenceScore <= 0 || !directionalPatternPresent
+    if (candidate.status !== 'candidate' || evidenceScore < 0
       || candidate.setup_status === 'missed' || candidate.setup_status === 'invalidated'
       || candidate.entry_status === 'missed' || !timeframeAllowsDirection || geometryIssue) {
       return {
@@ -4083,6 +4423,15 @@ function applyTwoSidedCandidateReview(result, rawReview) {
     const entry = parsePriceOrRange(setup.entry_zone);
     const stop = parsePriceOrRange(setup.stop_loss);
     const target = parsePriceOrRange(setup.take_profit);
+    if (!entry || !stop || !target) {
+      return {
+        direction,
+        candidate,
+        evidenceScore,
+        result: null,
+        rejectionReason: 'The candidate does not include supported entry, stop, and TP1 levels.',
+      };
+    }
     let geometryIssues = [];
     let riskReward = null;
     if (entry && stop && target) {
@@ -4101,6 +4450,8 @@ function applyTwoSidedCandidateReview(result, rawReview) {
 
     const candidateReadinessReason = candidate.setup_status !== 'valid'
       ? 'The candidate setup validity is not confirmed.'
+      : candidate.entry_type === 'limit_zone'
+        ? `Limit-entry plan at ${setup.entry_zone}, stop ${setup.stop_loss}, TP1 ${setup.take_profit}.`
       : !candidateHasEntryTrigger
         ? 'The candidate is conditional; its entry trigger has not been observed.'
         : null;
@@ -4121,7 +4472,9 @@ function applyTwoSidedCandidateReview(result, rawReview) {
         tradeTrigger: candidate.entry_trigger
           ? candidate.entry_status === 'trigger_observed'
             ? `The screenshot shows this trigger: ${candidate.entry_trigger}. Verify it against current market data before acting.`
-            : `Wait for this chart-supported trigger: ${candidate.entry_trigger}.`
+            : candidate.entry_type === 'limit_zone'
+              ? `Limit-entry plan at ${setup.entry_zone}: ${candidate.entry_trigger}.`
+              : `Wait for this chart-supported trigger: ${candidate.entry_trigger}.`
           : candidateReadinessReason || 'Entry trigger observed; screenshot and price checks passed.',
       },
     };
@@ -4209,7 +4562,7 @@ async function recoverCandidateLevels(result, requestFollowup) {
 }
 
 function buildMultiTimeframeMessages(pair, charts) {
-  const instructions = `${getTraderSystemPrompt()}\n\nMULTI-TIMEFRAME MODE — analyze the two labeled images together in this single response. Do not treat them as separate requests or invent an intermediate timeframe. The 4H image establishes higher-timeframe trend and structure. The 15M image is for entry location and confirmation. Explain whether the 15M setup agrees with the 4H context. The chart latest_visible_price, current_price_source, current_candle_status, and latest_candle_timestamp fields must describe the 15M entry chart. If either image is not a readable chart, set its chartValid to false and status to invalid_image. If directional evidence conflicts or is unclear, set status to no_trade, trade_setup.type to none, and multiTimeframe.alignment accordingly. Never force a trade.\n\nAccuracy gate: only set alignment to "aligned" when both images are readable, the 4H chart has explicit structural evidence, the 15M chart has explicit structural evidence, and the 15M chart contains an explicit confirmation signal (for example a bullish or bearish engulfing, pin bar, break of structure with retest, or other clearly visible entry confirmation). Do not infer alignment from generic trend labels alone. If evidence is missing, use "unclear" and return no_trade.`;
+  const instructions = `${getTraderSystemPrompt()}\n\nMULTI-TIMEFRAME MODE — analyze the two labeled images together in this single response. Do not treat them as separate requests or invent an intermediate timeframe. The 4H image establishes higher-timeframe trend and structure. The 15M image is for entry location and confirmation. Explain whether the 15M setup agrees with the 4H context. The chart latest_visible_price, current_price_source, current_candle_status, and latest_candle_timestamp fields must describe the 15M entry chart, with latest_candle_timestamp equal to the exact UTC ISO-8601 open time of its rightmost candle. If either image is not a readable chart, set its chartValid to false and status to invalid_image. If directional evidence conflicts or is unclear, set status to no_trade, trade_setup.type to none, and multiTimeframe.alignment accordingly. Never force a trade.\n\nAccuracy gate: only set alignment to "aligned" when both images are readable, the 4H chart has explicit structural evidence, the 15M chart has explicit structural evidence, and the 15M chart contains an explicit confirmation signal (for example a bullish or bearish engulfing, pin bar, break of structure with retest, or other clearly visible entry confirmation). Do not infer alignment from generic trend labels alone. If evidence is missing, use "unclear" and return no_trade.`;
   return [
     { role: 'system', content: instructions },
     {
@@ -4338,7 +4691,7 @@ async function analyzeChart(req, res) {
 
     let raw;
     try {
-      raw = await callOpenRouterTrader(imageBase64, mime, input.pair || 'unknown', 45000);
+      raw = await callOpenRouterTrader(imageBase64, mime, input.pair || 'unknown', 45000, input.timeframe || null);
     } catch (error) {
       const detail = sanitizeDiagnosticText(error instanceof Error ? error.message : 'Unknown provider error.');
       if (error?.code === 'AI_INVALID_RESPONSE') {
@@ -4348,7 +4701,7 @@ async function analyzeChart(req, res) {
       return sendJson(res, 200, aiUnavailableResponse(input, `Chart AI could not analyze the image. ${detail}`));
     }
 
-    const result = normalizeCompleteChartAnalysis(raw, input);
+    let result = normalizeCompleteChartAnalysis(raw, input);
     if (!result) {
       console.error('[Chart AI] Provider returned a response without numeric support, resistance, and a usable plan.', {
         payload: summarizeAnalysisPayload(raw),
@@ -4356,6 +4709,32 @@ async function analyzeChart(req, res) {
       return sendJson(res, 200, aiInvalidResponse(input, 'The analysis engine returned an invalid response. Please try again.'));
     }
     if (result.status === 'invalid_image') return sendJson(res, 200, result);
+    let timeframeMismatch = false;
+    if (input.timeframe) {
+      const detectedTimeframe = result.chart.timeframe || result.timeframe;
+      if (detectedTimeframe && !sameTimeframe(detectedTimeframe, input.timeframe)) {
+        timeframeMismatch = true;
+        result = holdSetupForLiveQuoteValidation(result, [
+          `The chart label shows ${detectedTimeframe}, but ${input.timeframe} was selected. Select the interval shown on the chart and analyze again.`,
+        ], 'rejected');
+      }
+      result.timeframe = input.timeframe;
+      result.chart.timeframe = input.timeframe;
+    }
+    if (!timeframeMismatch && shouldRequestCandidateLevelFollowup(result)) {
+      result = await recoverCandidateLevels(result, () => callVisionModel(
+        buildCandidateLevelFollowupMessages(imageBase64, mime, input.pair || result.detectedPair, result),
+        45000,
+        true,
+      ));
+      if (result.levelFollowupStatus === 'completed') {
+        result = await retryPriceConsistencyOnce(
+          result,
+          input.pair || result.detectedPair,
+          (issues) => buildPriceConsistencyRetryMessages(imageBase64, mime, input.pair || result.detectedPair, result, issues),
+        );
+      }
+    }
     if (result.status === 'success' && result.trade_plan) {
       try {
         const id = crypto.randomBytes(10).toString('hex');
@@ -4369,6 +4748,7 @@ async function analyzeChart(req, res) {
           tp: result.trade_plan.take_profit_1,
           rr: result.trade_plan.risk_reward,
           confidence: result.confidence,
+          signalMetadata: result.signalMetadata,
           strategyVersion: 'chart-level-plan-v1',
           provider: raw.provider || 'openrouter',
           generatedAt: new Date().toISOString(),
@@ -4378,6 +4758,10 @@ async function analyzeChart(req, res) {
       }
     }
 
+    result.dataLimitations = mergeUniqueStrings([
+      ...(result.dataLimitations || []),
+      'AI analysis is based on the uploaded chart. Current market data is not used to generate this result.',
+    ]);
     return sendJson(res, 200, result);
   } catch (error) {
     const detail = sanitizeDiagnosticText(error instanceof Error ? error.message : 'Unknown analysis error.');
@@ -4437,14 +4821,6 @@ async function analyzeMultiTimeframeCharts(req, res) {
     finalResult.timeframe = 'H4 + M15';
     finalResult.chart.timeframe = 'H4 + M15';
     enforceMultiTimeframeAlignment(finalResult);
-    if (finalResult.multiTimeframe?.alignment === 'aligned'
-      && shouldRequestCandidateLevelFollowup(finalResult)) {
-      finalResult = await recoverCandidateLevels(finalResult, () => callVisionModel(
-        buildCandidateLevelFollowupMessages('', '', input.pair, finalResult, input.charts),
-        30000,
-        true,
-      ));
-    }
     finalResult = await retryPriceConsistencyOnce(
       finalResult,
       input.pair,
@@ -4464,6 +4840,7 @@ async function analyzeMultiTimeframeCharts(req, res) {
           tp: finalResult.trade_setup.take_profit,
           rr: finalResult.trade_setup.risk_reward,
           confidence: finalResult.confidence,
+          signalMetadata: finalResult.signalMetadata,
           strategyVersion: 'multi-timeframe-h4-m15-v1',
           provider: 'openrouter',
           generatedAt: new Date().toISOString(),
@@ -4472,6 +4849,10 @@ async function analyzeMultiTimeframeCharts(req, res) {
         console.error('[Multi-timeframe AI] Failed to persist generated signal:', error);
       }
     }
+    finalResult.dataLimitations = mergeUniqueStrings([
+      ...(finalResult.dataLimitations || []),
+      'AI analysis is based on the uploaded charts. Current market data is not used to generate this result.',
+    ]);
     finalResult = sanitizeVerdictText(finalResult, finalResult.verdict_reason || 'The plan must be assessed using its named trigger and visible levels.');
     finalResult.tradeTrigger = finalResult.verdict_reason || finalResult.tradeTrigger;
     return sendJson(res, 200, finalResult);
@@ -4484,7 +4865,7 @@ async function analyzeMultiTimeframeCharts(req, res) {
 
 async function receiveEvent(req, res) {
   const deviceId = requireAuth(req, res); if (!deviceId) return;
-  if (!(await allowRequest(req, deviceId))) return sendJson(res, 429, { error: 'Too many requests.' });
+  if (!(await allowRequest(req, deviceId, 'events'))) return sendJson(res, 429, { error: 'Too many requests.' });
   try {
     const event = await readJsonBody(req);
     if (typeof event.name !== 'string' || event.name.length > 80) return sendJson(res, 400, { error: 'Invalid event.' });
@@ -4786,10 +5167,12 @@ function createRequestHandler({ marketDataProvider = marketProvider } = {}) {
     if (pathname === '/api/support-chat') return sendJson(res, 410, { error: 'The automated support chat has been retired. Use the private in-app support conversation.' });
     // Market endpoints (demo/skeleton)
     if (pathname === '/market/quotes' && req.method === 'GET') {
+      res.setHeader('cache-control', 'no-store');
       const symbolsParam = url.searchParams.get('symbols') || '';
       const symbols = symbolsParam ? symbolsParam.split(',').map((s) => s.trim()).filter(Boolean) : undefined;
-      const source = marketProvider || marketService;
-      return Promise.resolve(source.getQuotes(symbols)).then((quotes) => sendJson(res, 200, { quotes, dataSource: marketProvider ? 'provider' : 'simulated' })).catch((err) => sendJson(res, 500, { error: err.message }));
+      const source = marketDataProvider || marketService;
+      const requestedSymbols = source === marketDataProvider ? symbols?.map(getProviderSymbol) : symbols;
+      return Promise.resolve(source.getQuotes(requestedSymbols)).then((quotes) => sendJson(res, 200, { quotes, dataSource: marketDataProvider ? 'provider' : 'simulated' })).catch((err) => sendJson(res, 500, { error: err.message }));
     }
     if (pathname === '/market/calendar' && req.method === 'GET') {
       const forceRefresh = url.searchParams.has('refresh');
@@ -4832,12 +5215,14 @@ function createRequestHandler({ marketDataProvider = marketProvider } = {}) {
       }
     }
     if (pathname === '/market/candles' && req.method === 'GET') {
+      res.setHeader('cache-control', 'no-store');
       const symbol = url.searchParams.get('symbol');
       const interval = url.searchParams.get('interval') || '1min';
       const limit = Math.min(500, Number(url.searchParams.get('limit') || '100'));
       if (!symbol) return sendJson(res, 400, { error: 'symbol required' });
-      const source = marketProvider || marketService;
-      return Promise.resolve(source.getCandles(symbol, interval, limit)).then((candles) => sendJson(res, 200, { symbol, interval, candles, dataSource: marketProvider ? 'provider' : 'simulated' })).catch((err) => sendJson(res, 500, { error: err.message }));
+      const source = marketDataProvider || marketService;
+      const providerSymbol = source === marketDataProvider ? getProviderSymbol(symbol) : symbol;
+      return Promise.resolve(source.getCandles(providerSymbol, interval, limit)).then((candles) => sendJson(res, 200, { symbol, interval, candles, dataSource: marketDataProvider ? 'provider' : 'simulated' })).catch((err) => sendJson(res, 500, { error: err.message }));
     }
     if (pathname === '/market/news' && req.method === 'GET') {
       const symbol = String(url.searchParams.get('symbol') || '').trim();
@@ -5010,6 +5395,11 @@ module.exports.getPriceConsistencyIssues = getPriceConsistencyIssues;
 module.exports.calculateChartEvidenceScore = calculateChartEvidenceScore;
 module.exports.getLiveMarketData = getLiveMarketData;
 module.exports.applyLiveMarketValidation = applyLiveMarketValidation;
+module.exports.timeframeDetails = timeframeDetails;
+module.exports.currentCandleWindow = currentCandleWindow;
+module.exports.sameTimeframe = sameTimeframe;
+module.exports.parseProviderCandleTime = parseProviderCandleTime;
+module.exports.getProviderSymbol = getProviderSymbol;
 module.exports.holdSetupForPriceValidation = holdSetupForPriceValidation;
 module.exports.shouldRequestCandidateLevelFollowup = shouldRequestCandidateLevelFollowup;
 module.exports.buildCandidateLevelFollowupMessages = buildCandidateLevelFollowupMessages;
@@ -5025,3 +5415,4 @@ module.exports.CandidateLevelFollowupSchema = CandidateLevelFollowupSchema;
 module.exports.summarizeAnalysisPayload = summarizeAnalysisPayload;
 module.exports.sanitizeDiagnosticText = sanitizeDiagnosticText;
 module.exports.isDevelopmentAnalysisPremiumBypassEnabled = isDevelopmentAnalysisPremiumBypassEnabled;
+module.exports.allowRequest = allowRequest;

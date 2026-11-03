@@ -289,6 +289,18 @@ export default function AnalysisResultScreen() {
   const screenshotPrice = currentAnalysis?.latestVisiblePrice == null
     ? 'Not readable'
     : formatInstrumentPriceText(currentAnalysis.latestVisiblePrice, pair);
+  const rightmostCandle = currentAnalysis?.rightmostCandle;
+  const rightmostOhlc = rightmostCandle
+    ? ([
+      ['O', rightmostCandle.open],
+      ['H', rightmostCandle.high],
+      ['L', rightmostCandle.low],
+      ['C', rightmostCandle.close],
+    ] as const)
+      .filter((entry): entry is readonly ['O' | 'H' | 'L' | 'C', number] => entry[1] != null)
+      .map(([label, price]) => `${label} ${formatInstrumentPriceText(price, pair)}`)
+      .join('  ·  ')
+    : '';
   const chartPaths = buildSmoothChartPaths(currentAnalysis?.priceSeries);
   const reasoning = currentAnalysis ? currentAnalysis.reasoning?.length ? currentAnalysis.reasoning.slice(0, 5) : [
     currentAnalysis.analysis?.trend && currentAnalysis.analysis.trend !== 'neutral' ? `Trend: ${currentAnalysis.analysis.trend}.` : '',
@@ -323,11 +335,18 @@ export default function AnalysisResultScreen() {
     ...(currentAnalysis?.dataLimitations ?? []),
     ...(currentAnalysis?.whyNotNow ?? []),
   ].filter((note, index, notes) => notes.indexOf(note) === index);
-  const analysisLimitations = resultLimitations.length
-    ? resultLimitations
-    : currentAnalysis?.liveMarketData?.status === 'verified'
-      ? ['Chart structure and levels come from the screenshot. The provider quote is a time-stamped snapshot, not continuous monitoring.']
-      : ['Analysis is based on the uploaded screenshot; a current live market quote was not verified.'];
+  const signalMetadata = currentAnalysis?.signalMetadata;
+  const signalDataSummary = signalMetadata?.timeframe
+    ? `Signal data: ${signalMetadata.timeframe || 'timeframe unverified'} candle ${signalMetadata.candle_open_time || 'unverified'}–${signalMetadata.candle_close_time || 'unverified'} UTC; price ${signalMetadata.price_at_signal ?? 'unavailable'} at ${signalMetadata.data_timestamp || 'unverified'} from ${signalMetadata.data_source || 'unverified'}; ${signalMetadata.is_candle_forming === true ? 'forming candle' : signalMetadata.is_candle_forming === false ? 'closed candle' : 'candle state unverified'}.`
+    : null;
+  const analysisLimitations = [
+    ...(signalDataSummary ? [signalDataSummary] : []),
+    ...(resultLimitations.length
+      ? resultLimitations
+      : currentAnalysis?.liveMarketData?.status === 'verified'
+        ? ['Chart structure and levels come from the screenshot. The provider quote is a time-stamped snapshot, not continuous monitoring.']
+        : ['AI analysis is based on the uploaded screenshot. Current market data is not used to generate this result.']),
+  ];
   const hasDirectionalBiasOnly = !hasDirectionalCandidate
     && canShowMarketRead
     && (marketReadDirection === 'BUY' || marketReadDirection === 'SELL');
@@ -804,6 +823,29 @@ export default function AnalysisResultScreen() {
           </>
         ) : (
           <>
+            <View style={[styles.levelsCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+              <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>RIGHTMOST CANDLE</Text>
+              <View style={styles.patternDetail}>
+                <Text style={[styles.patternLabel, { color: colors.textSecondary }]}>Candle read</Text>
+                <Text style={[styles.patternTrend, {
+                  color: rightmostCandle?.direction === 'bullish'
+                    ? colors.buy
+                    : rightmostCandle?.direction === 'bearish'
+                      ? colors.sell
+                      : colors.text,
+                }]}>
+                  {rightmostCandle?.identified ? rightmostCandle.direction.toUpperCase() : 'Not clearly identified'}
+                </Text>
+              </View>
+              {rightmostCandle?.identified && rightmostCandle.reading ? (
+                <Text style={[styles.patternStructure, { color: colors.textSecondary }]}>
+                  {formatDevelopingNote(rightmostCandle.reading)}
+                </Text>
+              ) : null}
+              {rightmostCandle?.identified && rightmostOhlc ? (
+                <Text style={[styles.patternStructure, { color: colors.textSecondary }]}>{rightmostOhlc}</Text>
+              ) : null}
+            </View>
             <View style={[styles.levelsCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}><Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>SUPPORT & RESISTANCE</Text><TradeLevelRow label="Support" value={supportLevels} color="#39E58C" /><View style={[styles.tableDivider, { backgroundColor: colors.cardBorder }]} /><TradeLevelRow label="Resistance" value={resistanceLevels} color="#FF7777" /></View>
             <View style={[styles.levelsCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
               <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>TREND & PATTERN</Text>

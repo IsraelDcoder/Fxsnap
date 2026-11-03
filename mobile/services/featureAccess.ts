@@ -3,8 +3,18 @@ export const PREMIUM_FEATURE_ROUTES = new Set(['/analysis', '/strategy']);
 export type ProtectedFeature = 'AI_ANALYSIS' | 'TRADE_SETUP' | 'STRATEGY_GENERATOR' | 'COMMUNITY';
 export type FeatureAccessDecision = { allowed: boolean; requiresPaywall: boolean };
 
-export function canViewFullAnalysis(isSubscribed: boolean): boolean {
-  return isSubscribed;
+export function isDevelopmentAnalysisPremiumBypassEnabled(
+  environment = process.env,
+  developmentBuild = typeof __DEV__ !== 'undefined' && __DEV__,
+): boolean {
+  return developmentBuild && environment.EXPO_PUBLIC_DEV_PREMIUM_BYPASS === 'true';
+}
+
+export function canViewFullAnalysis(
+  isSubscribed: boolean,
+  developmentBypass = isDevelopmentAnalysisPremiumBypassEnabled(),
+): boolean {
+  return isSubscribed || developmentBypass;
 }
 
 export function isPremiumFeatureRoute(path: string): boolean {
@@ -15,9 +25,15 @@ export function isCommunityFeatureRoute(path: string): boolean {
   return path === '/community' || path.startsWith('/community-') || path.startsWith('/community/');
 }
 
-export function getFeatureAccessDecision(feature: string, isSubscribed: boolean): FeatureAccessDecision {
+export function getFeatureAccessDecision(
+  feature: string,
+  isSubscribed: boolean,
+  developmentBypass = isDevelopmentAnalysisPremiumBypassEnabled(),
+): FeatureAccessDecision {
   if (feature === 'COMMUNITY') return { allowed: true, requiresPaywall: false };
-  if (isSubscribed) return { allowed: true, requiresPaywall: false };
+  if (isSubscribed || (feature !== 'STRATEGY_GENERATOR' && developmentBypass)) {
+    return { allowed: true, requiresPaywall: false };
+  }
   if (feature === 'AI_ANALYSIS' || feature === 'TRADE_SETUP' || feature === 'STRATEGY_GENERATOR') {
     return { allowed: false, requiresPaywall: true };
   }

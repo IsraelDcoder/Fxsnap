@@ -3,6 +3,7 @@ export interface AnalysisRetryRequest {
   imageMimeType: string;
   imageUri: string;
   pair: string;
+  timeframe: string;
 }
 
 let retryRequest: AnalysisRetryRequest | null = null;

@@ -29,6 +29,15 @@ export interface AnalysisResult {
   timeframe?: string;
   takeProfitLevels?: string[];
   latestVisiblePrice?: number;
+  rightmostCandle?: {
+    identified: boolean;
+    direction: 'bullish' | 'bearish' | 'doji' | 'unclear';
+    open: number | null;
+    high: number | null;
+    low: number | null;
+    close: number | null;
+    reading: string;
+  };
   liveMarketData?: {
     status: 'verified' | 'stale' | 'unavailable' | 'symbol_mismatch';
     price: number | null;
@@ -36,6 +45,15 @@ export interface AnalysisResult {
     source: string | null;
     checkedAt: string;
     reason?: string;
+  };
+  signalMetadata?: {
+    candle_open_time: string | null;
+    candle_close_time: string | null;
+    data_timestamp: string | null;
+    timeframe: string | null;
+    price_at_signal: number | null;
+    is_candle_forming: boolean | null;
+    data_source: string | null;
   };
   priceSeries?: number[];
   reasoning?: string[];

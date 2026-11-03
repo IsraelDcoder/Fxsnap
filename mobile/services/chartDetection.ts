@@ -43,6 +43,15 @@ export interface ChartAnalysisResult {
   detectedPair?: string | null;
   timeframe?: string | null;
   latestVisiblePrice?: number;
+  rightmostCandle?: {
+    identified: boolean;
+    direction: 'bullish' | 'bearish' | 'doji' | 'unclear';
+    open: number | null;
+    high: number | null;
+    low: number | null;
+    close: number | null;
+    reading: string;
+  };
   liveMarketData?: {
     status: 'verified' | 'stale' | 'unavailable' | 'symbol_mismatch';
     price: number | null;
@@ -50,6 +59,15 @@ export interface ChartAnalysisResult {
     source: string | null;
     checkedAt: string;
     reason?: string;
+  };
+  signalMetadata?: {
+    candle_open_time: string | null;
+    candle_close_time: string | null;
+    data_timestamp: string | null;
+    timeframe: string | null;
+    price_at_signal: number | null;
+    is_candle_forming: boolean | null;
+    data_source: string | null;
   };
   priceSeries?: number[];
   reasoning?: string[];
@@ -308,6 +326,14 @@ export function normalizeLatestVisiblePrice(payload: unknown): number | undefine
   return Number.isFinite(price) && price > 0 ? price : undefined;
 }
 
+function normalizeVisibleCandlePrice(value: unknown): number | null {
+  if (typeof value !== 'number' && typeof value !== 'string') return null;
+  const raw = typeof value === 'string' ? value.trim().replace(/,/g, '') : value;
+  if (raw === '') return null;
+  const price = typeof raw === 'number' ? raw : /^\d+(?:\.\d+)?$/.test(raw) ? Number(raw) : Number.NaN;
+  return Number.isFinite(price) && price > 0 ? price : null;
+}
+
 /**
  * Send a chart image to the backend for strict, disciplined price-action
  * analysis. The server enforces the full system prompt + validation layer and
@@ -317,9 +343,10 @@ export function normalizeLatestVisiblePrice(payload: unknown): number | undefine
 export async function analyzeChartImage(
   imageBase64: string,
   mimeType = 'image/jpeg',
-  pair?: string
+  pair?: string,
+  timeframe?: string,
 ): Promise<ChartAnalysisResult> {
-  return sendChartAnalysis('/analyze-chart', { imageBase64, mimeType, pair });
+  return sendChartAnalysis('/analyze-chart', { imageBase64, mimeType, pair, timeframe });
 }
 
 export async function analyzeMultiTimeframeCharts(
@@ -393,6 +420,19 @@ async function sendChartAnalysis(path: string, body: Record<string, unknown>): P
       detectedPair: payload.detectedPair ?? null,
       timeframe: payload.timeframe ?? null,
       latestVisiblePrice,
+      rightmostCandle: payload.chart?.rightmost_candle && typeof payload.chart.rightmost_candle === 'object'
+        ? {
+          identified: payload.chart.rightmost_candle.identified === true,
+          direction: ['bullish', 'bearish', 'doji', 'unclear'].includes(payload.chart.rightmost_candle.direction)
+            ? payload.chart.rightmost_candle.direction
+            : 'unclear',
+          open: normalizeVisibleCandlePrice(payload.chart.rightmost_candle.open),
+          high: normalizeVisibleCandlePrice(payload.chart.rightmost_candle.high),
+          low: normalizeVisibleCandlePrice(payload.chart.rightmost_candle.low),
+          close: normalizeVisibleCandlePrice(payload.chart.rightmost_candle.close),
+          reading: typeof payload.chart.rightmost_candle.reading === 'string' ? payload.chart.rightmost_candle.reading : '',
+        }
+        : undefined,
       liveMarketData: payload.liveMarketData && typeof payload.liveMarketData === 'object'
         ? {
           status: ['verified', 'stale', 'unavailable', 'symbol_mismatch'].includes(payload.liveMarketData.status)
@@ -405,6 +445,19 @@ async function sendChartAnalysis(path: string, body: Record<string, unknown>): P
           source: typeof payload.liveMarketData.source === 'string' ? payload.liveMarketData.source : null,
           checkedAt: typeof payload.liveMarketData.checkedAt === 'string' ? payload.liveMarketData.checkedAt : '',
           reason: typeof payload.liveMarketData.reason === 'string' ? payload.liveMarketData.reason : undefined,
+        }
+        : undefined,
+      signalMetadata: payload.signalMetadata && typeof payload.signalMetadata === 'object'
+        ? {
+          candle_open_time: typeof payload.signalMetadata.candle_open_time === 'string' ? payload.signalMetadata.candle_open_time : null,
+          candle_close_time: typeof payload.signalMetadata.candle_close_time === 'string' ? payload.signalMetadata.candle_close_time : null,
+          data_timestamp: typeof payload.signalMetadata.data_timestamp === 'string' ? payload.signalMetadata.data_timestamp : null,
+          timeframe: typeof payload.signalMetadata.timeframe === 'string' ? payload.signalMetadata.timeframe : null,
+          price_at_signal: typeof payload.signalMetadata.price_at_signal === 'number' && Number.isFinite(payload.signalMetadata.price_at_signal)
+            ? payload.signalMetadata.price_at_signal
+            : null,
+          is_candle_forming: typeof payload.signalMetadata.is_candle_forming === 'boolean' ? payload.signalMetadata.is_candle_forming : null,
+          data_source: typeof payload.signalMetadata.data_source === 'string' ? payload.signalMetadata.data_source : null,
         }
         : undefined,
       priceSeries,

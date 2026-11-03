@@ -32,6 +32,9 @@ import { buildAnalysisResult } from '@/services/analysisResult';
 type Stage = 'pick' | 'preview' | 'analyzing' | 'ready';
 type AnalysisMode = 'quick' | 'multiTimeframe';
 type TimeframeChart = MultiTimeframeChartImage & { uri: string };
+type QuickTimeframe = '1m' | '5m' | '15m' | '30m' | '1H' | '4H' | '1D';
+
+const QUICK_TIMEFRAMES: QuickTimeframe[] = ['1m', '5m', '15m', '30m', '1H', '4H', '1D'];
 
 const ANALYSIS_STEPS = [
   { title: 'Cooking your analysis', detail: 'Reading the newest visible candles and current price action.' },
@@ -119,6 +122,9 @@ export default function AnalysisScreen() {
   const [imageBase64, setImageBase64] = useState<string | null>(retryRequest?.imageBase64 ?? null);
   const [imageMimeType, setImageMimeType] = useState(retryRequest?.imageMimeType ?? 'image/jpeg');
   const [selectedPair, setSelectedPair] = useState<string | null>(retryRequest?.pair ?? null);
+  const [quickTimeframe, setQuickTimeframe] = useState<QuickTimeframe | null>(
+    () => QUICK_TIMEFRAMES.find((timeframe) => timeframe === retryRequest?.timeframe) ?? null,
+  );
   const [retryingExistingChart, setRetryingExistingChart] = useState(Boolean(retryRequest));
   const [timeframeCharts, setTimeframeCharts] = useState<{ h4: TimeframeChart | null; m15: TimeframeChart | null }>({ h4: null, m15: null });
   const [activeTimeframe, setActiveTimeframe] = useState<'h4' | 'm15'>('m15');
@@ -190,6 +196,7 @@ export default function AnalysisScreen() {
       clearAnalysisRetryRequest();
       setRetryingExistingChart(false);
       setSelectedPair(null);
+      setQuickTimeframe(null);
       setImageUri(result.assets[0].uri);
       setImageBase64(result.assets[0].base64 || null);
       setImageMimeType(result.assets[0].mimeType || 'image/jpeg');
@@ -216,6 +223,7 @@ export default function AnalysisScreen() {
       clearAnalysisRetryRequest();
       setRetryingExistingChart(false);
       setSelectedPair(null);
+      setQuickTimeframe(null);
       setImageUri(result.assets[0].uri);
       setImageBase64(result.assets[0].base64 || null);
       setImageMimeType(result.assets[0].mimeType || 'image/jpeg');
@@ -317,6 +325,10 @@ export default function AnalysisScreen() {
       setAnalysisError('Unable to read the image for AI analysis. Please choose the chart again.');
       return;
     }
+    if (mode === 'quick' && !quickTimeframe) {
+      setAnalysisError('Select the chart timeframe before analyzing so the live candle can be verified.');
+      return;
+    }
 
     if (retryingExistingChart && selectedPair) {
       await handlePairSelected(selectedPair);
@@ -372,6 +384,11 @@ export default function AnalysisScreen() {
 
   const handlePairSelected = async (pair: string) => {
     if (isLoading) return;
+    const selectedQuickTimeframe = quickTimeframe;
+    if (mode === 'quick' && !selectedQuickTimeframe) {
+      setAnalysisError('Select the chart timeframe before analyzing so the live candle can be verified.');
+      return;
+    }
     const requiredFeature = mode === 'multiTimeframe' ? 'TRADE_SETUP' : 'AI_ANALYSIS';
     if (!(await checkAccessBeforeAnalysis(requiredFeature))) return;
     if (mode === 'quick' && (!imageBase64 || !imageUri)) return;
@@ -388,6 +405,7 @@ export default function AnalysisScreen() {
         imageMimeType,
         imageUri,
         pair,
+        timeframe: selectedQuickTimeframe!,
       });
     }
 
@@ -414,7 +432,7 @@ export default function AnalysisScreen() {
 
     try {
       console.log('[ANALYSIS] Preparing request');
-      const chart = await analyzeChartImage(imageBase64, imageMimeType, pair);
+      const chart = await analyzeChartImage(imageBase64, imageMimeType, pair, selectedQuickTimeframe!);
       await finishAnalysis(chart, pair, sourceImageUri, analysisStartedAt);
       console.log('[ANALYSIS] Result received', {
         pair,
@@ -580,6 +598,42 @@ export default function AnalysisScreen() {
             </View>
           ) : null}
 
+          {mode === 'quick' ? (
+            <View style={styles.quickTimeframeSection}>
+              <Text style={[styles.quickTimeframeTitle, { color: colors.text }]}>Chart timeframe</Text>
+              <Text style={[styles.quickTimeframeHint, { color: colors.textSecondary }]}>
+                Select the interval shown on the uploaded chart.
+              </Text>
+              <View style={styles.quickTimeframeOptions}>
+                {QUICK_TIMEFRAMES.map((timeframe) => {
+                  const selected = quickTimeframe === timeframe;
+                  return (
+                    <TouchableOpacity
+                      key={timeframe}
+                      accessibilityRole="radio"
+                      accessibilityState={{ selected }}
+                      onPress={() => {
+                        setQuickTimeframe(timeframe);
+                        setAnalysisError(null);
+                      }}
+                      style={[
+                        styles.quickTimeframeOption,
+                        {
+                          backgroundColor: selected ? colors.primary : colors.card,
+                          borderColor: selected ? colors.primary : colors.cardBorder,
+                        },
+                      ]}
+                    >
+                      <Text style={[styles.quickTimeframeOptionText, { color: selected ? colors.primaryForeground : colors.text }]}>
+                        {timeframe}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
+          ) : null}
+
           {mode === 'multiTimeframe' ? (
             <View style={styles.multiControls}>
               <TouchableOpacity
@@ -696,6 +750,12 @@ const styles = StyleSheet.create({
   timeframeTileTitle: { fontSize: 15, lineHeight: 20, fontFamily: 'Inter_700Bold' },
   timeframeTileDrop: { flex: 1, minHeight: 68, borderRadius: 12, borderWidth: 1.5, borderStyle: 'dashed', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', gap: 1 },
   timeframeTilePrompt: { fontSize: 12, lineHeight: 17, fontFamily: 'Inter_500Medium' },
+  quickTimeframeSection: { gap: 6, paddingVertical: 2 },
+  quickTimeframeTitle: { fontSize: 14, fontFamily: 'Inter_600SemiBold' },
+  quickTimeframeHint: { fontSize: 12, lineHeight: 17, fontFamily: 'Inter_400Regular' },
+  quickTimeframeOptions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingTop: 2 },
+  quickTimeframeOption: { minWidth: 42, minHeight: 36, paddingHorizontal: 10, borderWidth: 1, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  quickTimeframeOptionText: { fontSize: 12, fontFamily: 'Inter_600SemiBold' },
   timeframeTileImage: { width: '100%', height: '100%' },
   multiControls: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   pairSelectorCompact: { flex: 1, minHeight: 40, borderWidth: 1, borderRadius: 12, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },

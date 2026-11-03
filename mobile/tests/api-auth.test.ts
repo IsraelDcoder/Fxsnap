@@ -8,7 +8,7 @@ const { API_BASE_URL, resolveApiBaseUrl, normalizeServerAnalysisAccess } = requi
 const { normalizeChartAnalysisError } = require('../services/chartDetection.ts');
 const { hasRevenueCatEntitlement } = require('../services/revenuecatEntitlements.ts');
 const { normalizePaywallRemoteConfig } = require('../services/paywallConfig.ts');
-const { canViewFullAnalysis, getFeatureAccessDecision, isCommunityFeatureRoute, isPremiumFeatureRoute, shouldGuardFeatureRoute } = require('../services/featureAccess.ts');
+const { canViewFullAnalysis, getFeatureAccessDecision, isDevelopmentAnalysisPremiumBypassEnabled, isCommunityFeatureRoute, isPremiumFeatureRoute, shouldGuardFeatureRoute } = require('../services/featureAccess.ts');
 const { getInstrument, INSTRUMENTS, INSTRUMENT_GROUPS } = require('../services/instruments.ts');
 
 test('signed anonymous tokens round-trip and reject tampering', () => {
@@ -155,15 +155,17 @@ test('analysis, trade setup, and strategy generation all require an active subsc
   assert.deepEqual(getFeatureAccessDecision('LIVE_CHARTS', false), { allowed: true, requiresPaywall: false });
 });
 
-test('development bypass configuration cannot grant access without a subscription', () => {
+test('analysis premium bypass is opt-in and only active in development builds', () => {
   const previousBypass = process.env.EXPO_PUBLIC_DEV_PREMIUM_BYPASS;
   try {
     process.env.EXPO_PUBLIC_DEV_PREMIUM_BYPASS = 'true';
-    assert.deepEqual(getFeatureAccessDecision('AI_ANALYSIS', false), { allowed: false, requiresPaywall: true });
-    assert.deepEqual(getFeatureAccessDecision('TRADE_SETUP', false), { allowed: false, requiresPaywall: true });
-    assert.deepEqual(getFeatureAccessDecision('STRATEGY_GENERATOR', false), { allowed: false, requiresPaywall: true });
-    assert.deepEqual(getFeatureAccessDecision('COMMUNITY', false), { allowed: true, requiresPaywall: false });
-    assert.equal(canViewFullAnalysis(false), false);
+    assert.equal(isDevelopmentAnalysisPremiumBypassEnabled(process.env, false), false);
+    const developmentBypass = isDevelopmentAnalysisPremiumBypassEnabled(process.env, true);
+    assert.deepEqual(getFeatureAccessDecision('AI_ANALYSIS', false, developmentBypass), { allowed: true, requiresPaywall: false });
+    assert.deepEqual(getFeatureAccessDecision('TRADE_SETUP', false, developmentBypass), { allowed: true, requiresPaywall: false });
+    assert.deepEqual(getFeatureAccessDecision('STRATEGY_GENERATOR', false, developmentBypass), { allowed: false, requiresPaywall: true });
+    assert.deepEqual(getFeatureAccessDecision('COMMUNITY', false, developmentBypass), { allowed: true, requiresPaywall: false });
+    assert.equal(canViewFullAnalysis(false, developmentBypass), true);
   } finally {
     if (previousBypass === undefined) delete process.env.EXPO_PUBLIC_DEV_PREMIUM_BYPASS;
     else process.env.EXPO_PUBLIC_DEV_PREMIUM_BYPASS = previousBypass;
