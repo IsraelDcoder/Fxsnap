@@ -16,6 +16,8 @@ function createService(url = 'wss://fxsnap-test.livekit.cloud') {
 
 test('LiveKit listener tokens are short-lived and subscribe-only', async () => {
   const service = createService();
+  assert.equal(service.participantIdentity('opaque-account-id'), service.participantIdentity('opaque-account-id'));
+  assert.match(service.participantIdentity('opaque-account-id'), /^fxs-[a-f0-9]{32}$/);
   const result = await service.createParticipantToken({
     roomName: 'fxsnap-event-123',
     accountId: 'opaque-account-id',

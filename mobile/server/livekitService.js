@@ -105,6 +105,7 @@ function createLiveKitService(env = process.env) {
   }
 
   return {
+    participantIdentity,
     createRoom,
     deleteRoom,
     createParticipantToken,

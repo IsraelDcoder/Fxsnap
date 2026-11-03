@@ -18,6 +18,7 @@ import { Feather } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import * as Haptics from 'expo-haptics';
+import * as Notifications from 'expo-notifications';
 import { router } from 'expo-router';
 import Animated, {
   cancelAnimation,
@@ -55,6 +56,7 @@ import {
   requestAndRegisterPushNotifications,
   saveNotificationPreferences,
 } from '@/services/notifications';
+import { getNotificationEnableErrorMessage } from '@/services/notificationErrors';
 import { useApp } from '@/context/AppContext';
 
 const PRIVACY_URL = `${API_BASE_URL}/privacy`;
@@ -306,13 +308,32 @@ export default function OnboardingFlow() {
   const lastTrackedMascotRef = useRef<string | null>(null);
   const firstScreenStartedAtRef = useRef<number | null>(null);
   const appStateRef = useRef(AppState.currentState);
-  const notificationPromptHandledRef = useRef(false);
+  const [pushPermissionGranted, setPushPermissionGranted] = useState(false);
+  const [pushPermissionCanAskAgain, setPushPermissionCanAskAgain] = useState(true);
+  const [pushNotificationsReady, setPushNotificationsReady] = useState(false);
+  const [notificationBusy, setNotificationBusy] = useState(false);
   const step = state.currentStep;
   const compact = windowWidth < 370;
   const mascotMood = getMascotMood(step);
   const cta = getOnboardingCta(step);
   const completeWelcomeHeadline = useCallback(() => {
     setWelcomeHeadlineComplete(true);
+  }, []);
+
+  const refreshPushNotificationStatus = useCallback(async () => {
+    if (Platform.OS === 'web') return;
+    try {
+      const [permission, preferences] = await Promise.all([
+        Notifications.getPermissionsAsync(),
+        getNotificationPreferences(),
+      ]);
+      setPushPermissionGranted(permission.granted);
+      setPushPermissionCanAskAgain(permission.canAskAgain);
+      setPushNotificationsReady(permission.granted && preferences.enabled);
+    } catch (permissionError) {
+      console.error('[Onboarding] Could not check push notification permission.', permissionError);
+      setError('Could not check notification permission. Please try again.');
+    }
   }, []);
 
   const restoreProgress = useCallback(async () => {
@@ -377,6 +398,15 @@ export default function OnboardingFlow() {
     });
     return () => subscription.remove();
   }, [loading]);
+
+  useEffect(() => {
+    if (loading || step !== 2 || Platform.OS === 'web') return undefined;
+    void refreshPushNotificationStatus();
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') void refreshPushNotificationStatus();
+    });
+    return () => subscription.remove();
+  }, [loading, refreshPushNotificationStatus, step]);
 
   useEffect(() => {
     const mascotTrackingKey = `${step}:${mascotMood}`;
@@ -456,40 +486,41 @@ export default function OnboardingFlow() {
     },
   }), [handleBack, moveTo, step, transitioning]);
 
-  const requestAppNotifications = async () => {
-    if (Platform.OS === 'web' || notificationPromptHandledRef.current) return;
-    notificationPromptHandledRef.current = true;
-    let preferences;
+  const enablePushNotifications = async () => {
+    if (Platform.OS === 'web' || notificationBusy) return;
+    setNotificationBusy(true);
+    setError('');
     try {
-      preferences = await getNotificationPreferences();
-    } catch (preferencesError) {
-      console.error('[Onboarding] Could not load notification preferences.', preferencesError);
-      return;
-    }
-    if (preferences.enabled) return;
-    const proceed = await new Promise<boolean>((resolve) => {
-      Alert.alert(
-        'Stay up to date with FXSnap',
-        'Allow notifications for app updates like your Daily Brief, trading reminders, weekly overview, Community activity, and important announcements. You can change notification preferences in Settings at any time.',
-        [
-          { text: 'Not now', style: 'cancel', onPress: () => resolve(false) },
-          { text: 'Continue', onPress: () => resolve(true) },
-        ],
-        { cancelable: true, onDismiss: () => resolve(false) },
-      );
-    });
-    if (!proceed) return;
-
-    const nextPreferences = {
-      ...preferences,
-      enabled: true,
-    };
-    try {
+      const preferences = await getNotificationPreferences();
+      const nextPreferences = { ...preferences, enabled: true };
       const registration = await requestAndRegisterPushNotifications(nextPreferences, true);
-      if (!registration.granted) return;
+      const permission = await Notifications.getPermissionsAsync();
+      setPushPermissionGranted(permission.granted);
+      setPushPermissionCanAskAgain(permission.canAskAgain);
+      if (!registration.granted) {
+        setPushNotificationsReady(false);
+        setError(permission.canAskAgain
+          ? 'Notifications are still turned off. Allow them to continue.'
+          : 'Enable notifications for FXSnap in your device settings to continue.');
+        return;
+      }
       await saveNotificationPreferences(nextPreferences);
+      setPushNotificationsReady(true);
+      trackEvent('onboarding_push_notifications_enabled', { version: ONBOARDING_VERSION });
     } catch (notificationError) {
       console.error('[Onboarding] Could not enable push notifications.', notificationError);
+      setError(getNotificationEnableErrorMessage(notificationError));
+    } finally {
+      setNotificationBusy(false);
+    }
+  };
+
+  const openNotificationSettings = async () => {
+    try {
+      await Linking.openSettings();
+    } catch (settingsError) {
+      console.error('[Onboarding] Could not open notification settings.', settingsError);
+      setError('Could not open device settings. Please enable notifications for FXSnap manually.');
     }
   };
 
@@ -535,11 +566,14 @@ export default function OnboardingFlow() {
 
   const continueToPaywall = async () => {
     if (transitioning || transitionLockRef.current) return;
+    if (Platform.OS !== 'web' && !pushNotificationsReady) {
+      setError('Enable push notifications before continuing to plans.');
+      return;
+    }
     transitionLockRef.current = true;
     setTransitioning(true);
     setError('');
     try {
-      await requestAppNotifications();
       const currentStep = stateRef.current.currentStep;
       const saved = await persist({ ...stateRef.current, currentStep });
       if (!saved) return;
@@ -721,7 +755,60 @@ export default function OnboardingFlow() {
               <Text style={[styles.insightDemoBody, { color: colors.textSecondary }]}>
                 See chart context, potential levels, and reasoning in one view.
               </Text>
-              <AnalysisInsightPreview maxHeight={Math.min(windowHeight * 0.53, 460)} />
+              {Platform.OS === 'web' ? (
+                <View style={[styles.notificationCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+                  <Feather name="smartphone" size={19} color={colors.buy} />
+                  <View style={styles.notificationCopy}>
+                    <Text style={[styles.notificationTitle, { color: colors.text }]}>Push notifications</Text>
+                    <Text style={[styles.notificationBody, { color: colors.textSecondary }]}>
+                      Enable push notifications in the FXSnap mobile app to receive important updates.
+                    </Text>
+                  </View>
+                </View>
+              ) : (
+                <View style={[styles.notificationCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+                  <Feather
+                    name={pushNotificationsReady ? 'check-circle' : 'bell'}
+                    size={19}
+                    color={pushNotificationsReady ? colors.buy : colors.textSecondary}
+                  />
+                  <View style={styles.notificationCopy}>
+                    <Text style={[styles.notificationTitle, { color: colors.text }]}>
+                      {pushNotificationsReady ? 'Notifications are on' : 'Stay in the loop'}
+                    </Text>
+                    <Text style={[styles.notificationBody, { color: colors.textSecondary }]}>
+                      Get your Daily Brief, Community activity, live-space updates, and important announcements.
+                    </Text>
+                    {!pushNotificationsReady ? (
+                      <TouchableOpacity
+                        disabled={notificationBusy}
+                        onPress={() => {
+                          if (!pushPermissionCanAskAgain && !pushPermissionGranted) {
+                            void openNotificationSettings();
+                          } else {
+                            void enablePushNotifications();
+                          }
+                        }}
+                        style={[styles.notificationButton, { backgroundColor: colors.surface }]}
+                        accessibilityRole="button"
+                        accessibilityLabel={pushPermissionCanAskAgain || pushPermissionGranted
+                          ? 'Enable push notifications'
+                          : 'Open notification settings'}
+                      >
+                        {notificationBusy ? <ActivityIndicator size="small" color={colors.buy} /> : null}
+                        <Text style={[styles.notificationButtonText, { color: colors.buy }]}>
+                          {notificationBusy
+                            ? 'Enabling…'
+                            : pushPermissionGranted
+                              ? 'Finish setup'
+                              : pushPermissionCanAskAgain ? 'Enable notifications' : 'Open device settings'}
+                        </Text>
+                      </TouchableOpacity>
+                    ) : null}
+                  </View>
+                </View>
+              )}
+              <AnalysisInsightPreview maxHeight={Math.min(windowHeight * 0.42, 360)} />
             </>
           ) : null}
 
@@ -766,10 +853,10 @@ export default function OnboardingFlow() {
         ) : null}
         {step === 2 ? (
           <PrimaryButton
-            label={cta.label}
+            label={Platform.OS !== 'web' && !pushNotificationsReady ? 'Enable notifications to continue' : cta.label}
             onPress={() => { trackCtaTap(); void continueToPaywall(); }}
-            disabled={transitioning}
-            loading={transitioning}
+            disabled={transitioning || notificationBusy || (Platform.OS !== 'web' && !pushNotificationsReady)}
+            loading={transitioning || notificationBusy}
           />
         ) : null}
       </View>
@@ -1019,6 +1106,12 @@ const styles = StyleSheet.create({
   insightDemoContent: { gap: 10, paddingTop: 10, alignItems: 'center' },
   insightDemoTitle: { fontSize: 29, lineHeight: 35, letterSpacing: -0.4, textAlign: 'center', fontFamily: 'Inter_400Regular' },
   insightDemoBody: { marginTop: -4, fontSize: 12, lineHeight: 17, textAlign: 'center', fontFamily: 'Inter_400Regular' },
+  notificationCard: { width: '100%', flexDirection: 'row', alignItems: 'flex-start', borderWidth: 1, borderRadius: 16, padding: 14, gap: 12 },
+  notificationCopy: { flex: 1, gap: 5 },
+  notificationTitle: { fontSize: 13, fontFamily: 'Inter_700Bold' },
+  notificationBody: { fontSize: 11, lineHeight: 16, fontFamily: 'Inter_400Regular' },
+  notificationButton: { alignSelf: 'flex-start', minHeight: 36, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', borderRadius: 10, paddingHorizontal: 12, marginTop: 4, gap: 7 },
+  notificationButtonText: { fontSize: 11, fontFamily: 'Inter_700Bold' },
   demoTitle: { marginBottom: 8, fontSize: 30, lineHeight: 36, letterSpacing: -0.35, textAlign: 'center', fontFamily: 'Inter_400Regular' },
   insightPhoneFrame: { borderWidth: 3, borderColor: '#303438', borderRadius: 34, backgroundColor: '#080A0B', padding: 4, alignSelf: 'center', overflow: 'hidden', shadowColor: '#000000', shadowOpacity: 0.25, shadowRadius: 16, shadowOffset: { width: 0, height: 8 }, elevation: 6 },
   insightPhoneScreen: { flex: 1, borderRadius: 27, backgroundColor: '#090B0A', paddingHorizontal: 10, paddingTop: 10, paddingBottom: 8, overflow: 'hidden', justifyContent: 'space-between' },

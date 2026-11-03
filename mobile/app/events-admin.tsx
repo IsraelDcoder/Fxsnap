@@ -213,9 +213,11 @@ export default function EventsAdminScreen() {
     };
     setSaving(true);
     try {
-      await goLiveEventSpace(input, isDemo);
+      const { space } = await goLiveEventSpace(input, isDemo);
       resetForm();
-      router.replace(isDemo ? { pathname: '/events', params: { demo: '1' } } : '/events');
+      router.replace(isDemo
+        ? { pathname: '/events', params: { demo: '1' } }
+        : { pathname: './event-room', params: { id: space.id } });
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : 'Could not start this live space.');
     } finally {
@@ -228,6 +230,9 @@ export default function EventsAdminScreen() {
     try {
       await transitionEventSpace(space.id, action, undefined, isDemo);
       await load();
+      if (action === 'open_waiting_room' && !isDemo) {
+        router.push({ pathname: './event-room', params: { id: space.id } });
+      }
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : 'Could not update this event space.');
     }
@@ -238,6 +243,9 @@ export default function EventsAdminScreen() {
     try {
       await manageEventLifecycle(space.id, action, isDemo);
       await load();
+      if (action === 'start_live' && !isDemo) {
+        router.push({ pathname: './event-room', params: { id: space.id } });
+      }
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : 'Could not control the LiveKit room.');
     }
@@ -289,6 +297,12 @@ export default function EventsAdminScreen() {
             <Metric label="Live" value={spaces.filter((space) => space.status === 'live').length} colors={colors} />
             <Metric label="Scheduled" value={spaces.filter((space) => space.status === 'scheduled').length} colors={colors} />
             <Metric label="Needs attention" value={spaces.filter((space) => space.status === 'waiting_room_open').length} colors={colors} />
+          </View>
+          <View style={[styles.audioNotice, { backgroundColor: colors.surface }]}>
+            <Feather name="info" size={15} color={colors.buy} />
+            <Text style={[styles.audioNoticeText, { color: colors.textSecondary }]}>
+              After creating a live space, you’ll enter its host controls automatically. For scheduled spaces, choose Open waiting room; when you’re ready, start the room and you’ll join as host to admit listeners and manage speakers.
+            </Text>
           </View>
 
           <View style={[styles.formCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
