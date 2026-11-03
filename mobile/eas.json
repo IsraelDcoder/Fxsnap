@@ -8,7 +8,10 @@
       "distribution": "internal"
     },
     "production": {
-      "autoIncrement": true
+      "autoIncrement": true,
+      "env": {
+        "EXPO_USE_COMMUNITY_AUTOLINKING": "0"
+      }
     }
   },
   "submit": {
