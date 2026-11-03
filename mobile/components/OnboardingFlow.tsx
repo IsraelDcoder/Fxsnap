@@ -566,10 +566,6 @@ export default function OnboardingFlow() {
 
   const continueToPaywall = async () => {
     if (transitioning || transitionLockRef.current) return;
-    if (Platform.OS !== 'web' && !pushNotificationsReady) {
-      setError('Enable push notifications before continuing to plans.');
-      return;
-    }
     transitionLockRef.current = true;
     setTransitioning(true);
     setError('');
@@ -853,10 +849,10 @@ export default function OnboardingFlow() {
         ) : null}
         {step === 2 ? (
           <PrimaryButton
-            label={Platform.OS !== 'web' && !pushNotificationsReady ? 'Enable notifications to continue' : cta.label}
+            label={cta.label}
             onPress={() => { trackCtaTap(); void continueToPaywall(); }}
-            disabled={transitioning || notificationBusy || (Platform.OS !== 'web' && !pushNotificationsReady)}
-            loading={transitioning || notificationBusy}
+            disabled={transitioning}
+            loading={transitioning}
           />
         ) : null}
       </View>
