@@ -63,8 +63,7 @@ review and tighten it if analytics, embeds or other third parties are added.
   operator's exact legal identity and governing jurisdiction with qualified
   counsel before launch; the public Terms preserve mandatory local protections
   rather than naming a jurisdiction that has not been supplied.
-- Provide a verified public support/contact address and contact-form handling
-  requirements.
+- Confirm contact-form handling requirements before adding a contact form.
 - Israel Thompson is listed as the supplied educational author. Editorial
   review is still pending; article drafts remain `noindex` and are excluded
   from the sitemap.

@@ -5,7 +5,7 @@ export const siteConfig = {
     "FXSnap combines screenshot-based AI chart analysis with a trader community for sharing setups, discussing markets and reviewing outcomes.",
   googlePlayUrl:
     "https://play.google.com/store/apps/details?id=com.fxsnap.mobile",
-  supportEmail: "support@fxsnap.app",
+  supportEmail: "support@fxsnapp.app",
 };
 
 export const navigation = [
