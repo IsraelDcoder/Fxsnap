@@ -2,11 +2,12 @@
 
 ## EAS
 
-1. Install and authenticate the EAS CLI.
-2. Create or link the Expo project.
-3. Replace `replace_with_eas_project_id` in `app.json` and `.env` with the real EAS project ID.
-4. Confirm `com.fxsnap.mobile` is available and owned by the publishing account.
-5. Build with the production EAS profile.
+1. Install and authenticate the EAS CLI with the Expo account that owns the app.
+2. Verify that the Expo project referenced by `extra.eas.projectId` in
+   `app.json` exists and that the authenticated account has access to it. The
+   project ID is already configured there; do not replace it with a placeholder.
+3. Confirm `com.fxsnap.mobile` is available and owned by the publishing account.
+4. Build with the production EAS profile.
 
 The local `npm run build` command creates a web export. Native release builds use `npm run build:ios`, `npm run build:android`, or `npm run build:all`.
 Android release builds use R8 minification and resource shrinking. Test the resulting release build before submitting it, and verify the updated DEX optimization metrics in Play Console. The app does not lock orientation, so include landscape and large-screen layouts in device testing.
