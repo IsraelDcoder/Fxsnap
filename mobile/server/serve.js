@@ -555,18 +555,19 @@ function parseBoundedStringArray(value, maxItems, maxLength) {
     .slice(0, maxItems);
 }
 
-function normalizeMultiTimeframe(raw) {
+function normalizeMultiTimeframe(raw, status, chartIsChart) {
   if (!raw || typeof raw !== 'object') return undefined;
+  const defaultChartValid = status !== 'invalid_image';
   return {
     alignment: canonicalizeEnumOr(raw.alignment, { aligned: 'aligned', conflicting: 'conflicting', unclear: 'unclear' }, ['aligned', 'conflicting', 'unclear'], 'unclear'),
     summary: boundedString(raw.summary, '', 500),
     h4: {
-      chartValid: parseBoolean(raw.h4?.chartValid, false),
+      chartValid: parseBoolean(raw.h4?.chartValid ?? raw.h4?.chart_valid, defaultChartValid),
       trend: canonicalizeEnumOr(raw.h4?.trend, { bullish: 'bullish', bearish: 'bearish', neutral: 'neutral' }, ['bullish', 'bearish', 'neutral'], 'neutral'),
       structure: boundedString(raw.h4?.structure, '', 300),
     },
     m15: {
-      chartValid: parseBoolean(raw.m15?.chartValid, false),
+      chartValid: parseBoolean(raw.m15?.chartValid ?? raw.m15?.chart_valid, parseBoolean(chartIsChart, defaultChartValid)),
       trend: canonicalizeEnumOr(raw.m15?.trend, { bullish: 'bullish', bearish: 'bearish', neutral: 'neutral' }, ['bullish', 'bearish', 'neutral'], 'neutral'),
       structure: boundedString(raw.m15?.structure, '', 300),
       confirmation: boundedString(raw.m15?.confirmation, '', 300),
@@ -1734,7 +1735,7 @@ function canonicalizeRawAnalysis(raw) {
     message,
     detectedPair: ensureNullableString(raw.detectedPair || raw.pair),
     timeframe: ensureNullableString(raw.timeframe),
-    multiTimeframe: normalizeMultiTimeframe(raw.multiTimeframe),
+    multiTimeframe: normalizeMultiTimeframe(raw.multiTimeframe, status, chartRaw.is_chart),
     timeframes_detected: Array.isArray(raw.timeframes_detected) && raw.timeframes_detected.length >= 2
       ? raw.timeframes_detected.slice(0, 2).map((item) => ({
         timeframe: boundedString(item?.timeframe, '', 12),
@@ -4562,7 +4563,7 @@ async function recoverCandidateLevels(result, requestFollowup) {
 }
 
 function buildMultiTimeframeMessages(pair, charts) {
-  const instructions = `${getTraderSystemPrompt()}\n\nMULTI-TIMEFRAME MODE — analyze the two labeled images together in this single response. Do not treat them as separate requests or invent an intermediate timeframe. The 4H image establishes higher-timeframe trend and structure. The 15M image is for entry location and confirmation. Explain whether the 15M setup agrees with the 4H context. The chart latest_visible_price, current_price_source, current_candle_status, and latest_candle_timestamp fields must describe the 15M entry chart, with latest_candle_timestamp equal to the exact UTC ISO-8601 open time of its rightmost candle. If either image is not a readable chart, set its chartValid to false and status to invalid_image. If directional evidence conflicts or is unclear, set status to no_trade, trade_setup.type to none, and multiTimeframe.alignment accordingly. Never force a trade.\n\nAccuracy gate: only set alignment to "aligned" when both images are readable, the 4H chart has explicit structural evidence, the 15M chart has explicit structural evidence, and the 15M chart contains an explicit confirmation signal (for example a bullish or bearish engulfing, pin bar, break of structure with retest, or other clearly visible entry confirmation). Do not infer alignment from generic trend labels alone. If evidence is missing, use "unclear" and return no_trade.`;
+  const instructions = `${getTraderSystemPrompt()}\n\nMULTI-TIMEFRAME MODE — analyze the two labeled images together in this single response. Do not treat them as separate requests or invent an intermediate timeframe. The 4H image establishes higher-timeframe trend and structure. The 15M image is for entry location and confirmation. Explain whether the 15M setup agrees with the 4H context. Always include multiTimeframe with alignment, summary, h4, and m15. Set each chartValid to true when that labeled image is a readable trading chart, and false only when that specific image is not a readable trading chart; do not omit either boolean. The chart latest_visible_price, current_price_source, current_candle_status, and latest_candle_timestamp fields must describe the 15M entry chart, with latest_candle_timestamp equal to the exact UTC ISO-8601 open time of its rightmost candle. If either image is not a readable chart, set status to invalid_image. If directional evidence conflicts or is unclear, set status to no_trade, trade_setup.type to none, and multiTimeframe.alignment accordingly. Never force a trade.\n\nAccuracy gate: only set alignment to "aligned" when both images are readable, the 4H chart has explicit structural evidence, the 15M chart has explicit structural evidence, and the 15M chart contains an explicit confirmation signal (for example a bullish or bearish engulfing, pin bar, break of structure with retest, or other clearly visible entry confirmation). Do not infer alignment from generic trend labels alone. If evidence is missing, use "unclear" and return no_trade.`;
   return [
     { role: 'system', content: instructions },
     {

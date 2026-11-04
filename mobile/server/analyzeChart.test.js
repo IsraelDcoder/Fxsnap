@@ -1076,6 +1076,50 @@ test('multi-timeframe fields survive canonicalization for the unified result', (
   assert.deepEqual(normalized.timeframes_detected.map((item) => item.timeframe), ['H4', 'M15']);
 });
 
+test('omitted multi-timeframe validity flags do not reject readable charts', () => {
+  const canonical = canonicalizeRawAnalysis({
+    status: 'no_trade',
+    chart: { is_chart: true },
+    multiTimeframe: {
+      alignment: 'unclear',
+      summary: 'Both charts are readable, but the setup evidence is incomplete.',
+      h4: { trend: 'bullish', structure: 'Higher highs and higher lows.' },
+      m15: { trend: 'bullish', structure: 'Pullback into support.', confirmation: '' },
+    },
+  });
+
+  assert.equal(canonical.status, 'no_trade');
+  assert.equal(canonical.multiTimeframe.h4.chartValid, true);
+  assert.equal(canonical.multiTimeframe.m15.chartValid, true);
+  assert.equal(TradeAnalysisSchema.safeParse(canonical).success, true);
+
+  const explicitlyInvalid = canonicalizeRawAnalysis({
+    status: 'no_trade',
+    chart: { is_chart: true },
+    multiTimeframe: {
+      alignment: 'unclear',
+      summary: 'The H4 image is not a readable chart.',
+      h4: { chartValid: false, trend: 'neutral', structure: '' },
+      m15: { chartValid: true, trend: 'bullish', structure: 'Pullback.', confirmation: '' },
+    },
+  });
+  assert.equal(explicitlyInvalid.multiTimeframe.h4.chartValid, false);
+  assert.equal(explicitlyInvalid.multiTimeframe.m15.chartValid, true);
+
+  const unreadablePrimaryChart = canonicalizeRawAnalysis({
+    status: 'no_trade',
+    chart: { is_chart: false },
+    multiTimeframe: {
+      alignment: 'unclear',
+      summary: 'The 15M image is not a readable chart.',
+      h4: { trend: 'bullish', structure: 'Higher highs and higher lows.' },
+      m15: { trend: 'neutral', structure: '', confirmation: '' },
+    },
+  });
+  assert.equal(unreadablePrimaryChart.multiTimeframe.h4.chartValid, true);
+  assert.equal(unreadablePrimaryChart.multiTimeframe.m15.chartValid, false);
+});
+
 test('conflicting H4 and M15 direction always suppresses the trade setup', () => {
   const result = enforceMultiTimeframeAlignment({
     status: 'success',
