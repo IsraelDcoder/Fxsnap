@@ -49,7 +49,7 @@ import {
   type OnboardingMascotMood,
 } from '@/services/onboardingPersonalization';
 import { getOnboardingProgress } from '@/services/onboardingProgress';
-import { API_BASE_URL } from '@/services/apiAuth';
+import { PRIVACY_POLICY_URL, TERMS_OF_USE_URL } from '@/constants/legalUrls';
 import { signInWithGoogle } from '@/services/account';
 import {
   getNotificationPreferences,
@@ -59,8 +59,6 @@ import {
 import { getNotificationEnableErrorMessage } from '@/services/notificationErrors';
 import { useApp } from '@/context/AppContext';
 
-const PRIVACY_URL = `${API_BASE_URL}/privacy`;
-const TERMS_URL = `${API_BASE_URL}/terms`;
 const WELCOME_HEADLINE = 'Your next winning\nstreak starts just\nwith a snap';
 const WELCOME_HEADLINE_CHARACTERS = Array.from(WELCOME_HEADLINE);
 
@@ -680,11 +678,11 @@ export default function OnboardingFlow() {
                 </Animated.View>
                 {error ? <Text style={[styles.welcomeError, { color: colors.destructive }]} accessibilityRole="alert">{error}</Text> : null}
                 <View style={styles.welcomeLegalRow}>
-                  <TouchableOpacity onPress={() => void openLegalDocument(PRIVACY_URL)} accessibilityRole="link">
+                  <TouchableOpacity onPress={() => void openLegalDocument(PRIVACY_POLICY_URL)} accessibilityRole="link">
                     <Text style={[styles.welcomeLegalLink, { color: colors.textSecondary }]}>Privacy Policy</Text>
                   </TouchableOpacity>
                   <Text style={[styles.welcomeLegalDivider, { color: colors.textSecondary }]}>|</Text>
-                  <TouchableOpacity onPress={() => void openLegalDocument(TERMS_URL)} accessibilityRole="link">
+                  <TouchableOpacity onPress={() => void openLegalDocument(TERMS_OF_USE_URL)} accessibilityRole="link">
                     <Text style={[styles.welcomeLegalLink, { color: colors.textSecondary }]}>Terms of Use</Text>
                   </TouchableOpacity>
                 </View>

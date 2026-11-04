@@ -19,7 +19,7 @@ import Purchases, {
 import { router, useLocalSearchParams } from 'expo-router';
 import { useApp } from '@/context/AppContext';
 import { useColors } from '@/hooks/useColors';
-import { API_BASE_URL } from '@/services/apiAuth';
+import { PRIVACY_POLICY_URL, TERMS_OF_USE_URL } from '@/constants/legalUrls';
 import { configureBilling } from '@/services/billing';
 import { trackEvent } from '@/services/telemetry';
 import { hasRevenueCatEntitlement } from '@/services/revenuecatEntitlements';
@@ -56,9 +56,6 @@ const PLAN_PERIODS: Record<PaywallPlan, string> = {
   monthly: 'month',
   yearly: 'year',
 };
-
-const TERMS_URL = `${API_BASE_URL}/terms`;
-const PRIVACY_URL = `${API_BASE_URL}/privacy`;
 
 function isUserCancellation(error: unknown) {
   return Boolean(
@@ -649,11 +646,11 @@ export default function PaywallScreen() {
               ))}
             </View>
             <View style={styles.footerLinks}>
-              <TouchableOpacity onPress={() => void openUrl(TERMS_URL)} style={styles.footerLinkButton}>
+              <TouchableOpacity onPress={() => void openUrl(TERMS_OF_USE_URL)} style={styles.footerLinkButton}>
                 <Text style={[styles.footerLink, { color: theme.textFaint }]}>Terms of Service</Text>
               </TouchableOpacity>
               <Text style={[styles.footerDot, { color: theme.textFaint }]}>·</Text>
-              <TouchableOpacity onPress={() => void openUrl(PRIVACY_URL)} style={styles.footerLinkButton}>
+              <TouchableOpacity onPress={() => void openUrl(PRIVACY_POLICY_URL)} style={styles.footerLinkButton}>
                 <Text style={[styles.footerLink, { color: theme.textFaint }]}>Privacy Policy</Text>
               </TouchableOpacity>
             </View>

@@ -68,7 +68,9 @@ Create a Sentry React Native project, set `EXPO_PUBLIC_SENTRY_DSN`, and configur
 
 ## Before store submission
 
-- Replace draft privacy and terms documents with reviewed, hosted URLs.
+- In-app legal links point to `https://fxsnapp.app/privacy` and
+  `https://fxsnapp.app/termsofuse`. Confirm both hosted pages are reachable
+  before release.
 - Add support and account-deletion URLs.
 - Complete App Store privacy and Google Play Data Safety declarations.
 - Test camera, gallery, image upload, billing, restore, expiration, refund/revocation, sharing, offline errors, and small-screen, landscape, tablet, and foldable layouts on real devices.

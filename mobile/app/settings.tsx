@@ -18,7 +18,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useApp } from '@/context/AppContext';
 import { useColors } from '@/hooks/useColors';
 import { getSubscriptionDetails, type SubscriptionDetails } from '@/services/billing';
-import { API_BASE_URL } from '@/services/apiAuth';
+import { PRIVACY_POLICY_URL, TERMS_OF_USE_URL } from '@/constants/legalUrls';
 import { trackEvent } from '@/services/telemetry';
 import {
   deleteFxsnapAccount,
@@ -390,7 +390,8 @@ export default function SettingsScreen() {
 
   const openLegalDocument = async (path: 'privacy' | 'terms') => {
     try {
-      await Linking.openURL(`${API_BASE_URL}/${path}`);
+      const url = path === 'privacy' ? PRIVACY_POLICY_URL : TERMS_OF_USE_URL;
+      await Linking.openURL(url);
     } catch {
       Alert.alert('Unable to open document', 'Please try again when you have an internet connection.');
     }
