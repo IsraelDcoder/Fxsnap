@@ -55,7 +55,7 @@ export default function DeleteAccountPage() {
           </p>
           <p>
             <Link className="inline-link" href="/privacy">
-              Read the privacy-policy draft <ArrowRight aria-hidden="true" size={15} />
+              Read the privacy policy <ArrowRight aria-hidden="true" size={15} />
             </Link>
           </p>
         </div>

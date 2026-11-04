@@ -1937,11 +1937,13 @@ summary:focus-visible {
   font-weight: 560;
 }
 
-.legal-draft {
+.legal-draft,
+.legal-copy {
   max-width: 800px;
 }
 
-.legal-draft h2 {
+.legal-draft h2,
+.legal-copy h2 {
   margin: 35px 0 8px;
   color: var(--ink);
   font-size: 22px;
@@ -1950,14 +1952,36 @@ summary:focus-visible {
 }
 
 .legal-draft p,
-.legal-draft li {
+.legal-draft li,
+.legal-copy p,
+.legal-copy li {
   color: var(--muted);
   font-size: 13px;
   line-height: 1.9;
 }
 
-.legal-draft ol {
+.legal-draft ol,
+.legal-copy ul {
   padding-left: 21px;
+}
+
+.legal-copy li + li {
+  margin-top: 8px;
+}
+
+.legal-copy strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.legal-copy h2:first-of-type {
+  margin-top: 24px;
+}
+
+.legal-updated {
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .deletion-content h2:first-child {

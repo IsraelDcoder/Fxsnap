@@ -58,8 +58,11 @@ review and tighten it if analytics, embeds or other third parties are added.
 
 - The homepage hero uses the supplied home, chart-upload and analysis-history
   screenshots. Add the Apple App Store URL when it is provided.
-- Provide legal entity/jurisdiction, privacy contact, retention and data-flow
-  details before publishing Privacy Policy and Terms pages.
+- Privacy Policy and Terms pages now describe the reviewed app data flows,
+  deletion behavior, contact address and retention settings. Confirm the
+  operator's exact legal identity and governing jurisdiction with qualified
+  counsel before launch; the public Terms preserve mandatory local protections
+  rather than naming a jurisdiction that has not been supplied.
 - Provide a verified public support/contact address and contact-form handling
   requirements.
 - Israel Thompson is listed as the supplied educational author. Editorial
