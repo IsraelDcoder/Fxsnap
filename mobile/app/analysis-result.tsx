@@ -842,6 +842,9 @@ export default function AnalysisResultScreen() {
                   {formatDevelopingNote(rightmostCandle.reading)}
                 </Text>
               ) : null}
+              <Text style={[styles.patternStructure, { color: colors.textSecondary }]}>
+                One candle suggests short-term pressure only; it does not reliably predict the next move by itself.
+              </Text>
               {rightmostCandle?.identified && rightmostOhlc ? (
                 <Text style={[styles.patternStructure, { color: colors.textSecondary }]}>{rightmostOhlc}</Text>
               ) : null}

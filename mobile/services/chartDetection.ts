@@ -150,11 +150,6 @@ export interface ChartAnalysisResult {
   };
 }
 
-export interface MultiTimeframeChartImage {
-  imageBase64: string;
-  mimeType: string;
-}
-
 function emptyAnalysis(status: AnalysisStatus, message: string): ChartAnalysisResult {
   return {
     status,
@@ -347,20 +342,6 @@ export async function analyzeChartImage(
   timeframe?: string,
 ): Promise<ChartAnalysisResult> {
   return sendChartAnalysis('/analyze-chart', { imageBase64, mimeType, pair, timeframe });
-}
-
-export async function analyzeMultiTimeframeCharts(
-  h4Chart: MultiTimeframeChartImage,
-  m15Chart: MultiTimeframeChartImage,
-  pair: string,
-): Promise<ChartAnalysisResult> {
-  return sendChartAnalysis('/api/multi-timeframe-analysis', {
-    pair,
-    charts: {
-      h4: h4Chart,
-      m15: m15Chart,
-    },
-  });
 }
 
 async function sendChartAnalysis(path: string, body: Record<string, unknown>): Promise<ChartAnalysisResult> {

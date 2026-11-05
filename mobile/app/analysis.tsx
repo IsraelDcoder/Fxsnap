@@ -23,15 +23,13 @@ import * as Haptics from '@/services/haptics';
 import { useApp } from '@/context/AppContext';
 import { PairSelectionModal } from '@/components/PairSelectionModal';
 import { useColors } from '@/hooks/useColors';
-import { analyzeChartImage, analyzeMultiTimeframeCharts, type ChartAnalysisResult, type MultiTimeframeChartImage } from '../services/chartDetection';
+import { analyzeChartImage, type ChartAnalysisResult } from '../services/chartDetection';
 import { trackEvent } from '@/services/telemetry';
 import { recordRatingEligibleAnalysis } from '@/services/ratingPrompt';
 import { clearAnalysisRetryRequest, getAnalysisRetryRequest, storeAnalysisRetryRequest } from '@/services/analysisRetry';
 import { buildAnalysisResult } from '@/services/analysisResult';
 
 type Stage = 'pick' | 'preview' | 'analyzing' | 'ready';
-type AnalysisMode = 'quick' | 'multiTimeframe';
-type TimeframeChart = MultiTimeframeChartImage & { uri: string };
 type QuickTimeframe = '1m' | '5m' | '15m' | '30m' | '1H' | '4H' | '1D';
 
 const QUICK_TIMEFRAMES: QuickTimeframe[] = ['1m', '5m', '15m', '30m', '1H', '4H', '1D'];
@@ -39,7 +37,7 @@ const QUICK_TIMEFRAMES: QuickTimeframe[] = ['1m', '5m', '15m', '30m', '1H', '4H'
 const ANALYSIS_STEPS = [
   { title: 'Cooking your analysis', detail: 'Reading the newest visible candles and current price action.' },
   { title: 'Mapping the market structure', detail: 'Checking nearby support, resistance, and momentum.' },
-  { title: 'Checking setup quality and risk', detail: 'Looking for a high-probability setup without forcing a trade.' },
+  { title: 'Checking setup quality and risk', detail: 'Checking whether the visible chart supports a setup; the analysis is not a prediction.' },
 ];
 
 function AnalyzingView({ ready = false }: { ready?: boolean }) {
@@ -117,7 +115,6 @@ export default function AnalysisScreen() {
   const { setCurrentAnalysis, isSubscribed, isLoading, billingAvailable, checkFeatureAccess, consumeAnalysisAccessGrant } = useApp();
   const [accessVerified, setAccessVerified] = useState(false);
   const [stage, setStage] = useState<Stage>(retryRequest ? 'preview' : 'pick');
-  const [mode, setMode] = useState<AnalysisMode>('quick');
   const [imageUri, setImageUri] = useState<string | null>(retryRequest?.imageUri ?? null);
   const [imageBase64, setImageBase64] = useState<string | null>(retryRequest?.imageBase64 ?? null);
   const [imageMimeType, setImageMimeType] = useState(retryRequest?.imageMimeType ?? 'image/jpeg');
@@ -126,17 +123,15 @@ export default function AnalysisScreen() {
     () => QUICK_TIMEFRAMES.find((timeframe) => timeframe === retryRequest?.timeframe) ?? null,
   );
   const [retryingExistingChart, setRetryingExistingChart] = useState(Boolean(retryRequest));
-  const [timeframeCharts, setTimeframeCharts] = useState<{ h4: TimeframeChart | null; m15: TimeframeChart | null }>({ h4: null, m15: null });
-  const [activeTimeframe, setActiveTimeframe] = useState<'h4' | 'm15'>('m15');
   const [showPairModal, setShowPairModal] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
 
   const topPad = Platform.OS === 'web' ? 40 : insets.top;
   const botPad = Platform.OS === 'web' ? 34 : insets.bottom;
 
-  const checkAccessBeforeAnalysis = async (feature: 'AI_ANALYSIS' | 'TRADE_SETUP' = 'AI_ANALYSIS'): Promise<boolean> => {
+  const checkAccessBeforeAnalysis = async (): Promise<boolean> => {
     if (isLoading) return false;
-    const decision = await checkFeatureAccess(feature, '/analysis');
+    const decision = await checkFeatureAccess('AI_ANALYSIS', '/analysis');
     if (decision.error) {
       setAnalysisError(decision.error);
       Alert.alert('Unable to start analysis', decision.error);
@@ -231,89 +226,6 @@ export default function AnalysisScreen() {
     }
   };
 
-  const pickTimeframeChart = async (timeframe: 'h4' | 'm15') => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: false,
-      quality: 0.85,
-      base64: true,
-      legacy: Platform.OS === 'android' && (Platform.Version as any) < 33,
-    });
-    if (result.canceled || !result.assets[0]) return;
-    const asset = result.assets[0];
-    const imageBase64 = asset.base64 || '';
-    if (imageBase64.length < 100 || imageBase64.length > 5_400_000) {
-      setAnalysisError('Choose a smaller chart image (under about 4 MB) so both timeframes can be analyzed together.');
-      return;
-    }
-    setTimeframeCharts((current) => ({
-      ...current,
-      [timeframe]: { uri: asset.uri, imageBase64, mimeType: asset.mimeType || 'image/jpeg' },
-    }));
-    setAnalysisError(null);
-  };
-
-  const pickTimeframeCamera = async (timeframe: 'h4' | 'm15') => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    if (Platform.OS !== 'web') {
-      const permission = await ImagePicker.requestCameraPermissionsAsync();
-      if (!permission.granted) {
-        Alert.alert('Permission needed', 'Please allow camera access.');
-        return;
-      }
-    }
-    const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: 'images',
-      allowsEditing: false,
-      quality: 0.85,
-      base64: true,
-    });
-    if (result.canceled || !result.assets[0]) return;
-    const asset = result.assets[0];
-    const imageBase64 = asset.base64 || '';
-    if (imageBase64.length < 100 || imageBase64.length > 5_400_000) {
-      setAnalysisError('Choose a smaller chart image (under about 4 MB) so both timeframes can be analyzed together.');
-      return;
-    }
-    setTimeframeCharts((current) => ({
-      ...current,
-      [timeframe]: { uri: asset.uri, imageBase64, mimeType: asset.mimeType || 'image/jpeg' },
-    }));
-    setAnalysisError(null);
-  };
-
-  const openTimeframePicker = async (timeframe: 'h4' | 'm15') => {
-    if (mode !== 'multiTimeframe') {
-      if (!(await checkAccessBeforeAnalysis('TRADE_SETUP'))) return;
-      setMode('multiTimeframe');
-      setStage('pick');
-      setSelectedPair(null);
-      setTimeframeCharts({ h4: null, m15: null });
-    }
-    setActiveTimeframe(timeframe);
-    await pickTimeframeChart(timeframe);
-  };
-
-  const startMultiTimeframeMode = async () => {
-    if (!(await checkAccessBeforeAnalysis('TRADE_SETUP'))) return;
-    setMode('multiTimeframe');
-    setStage('pick');
-    setSelectedPair(null);
-    setTimeframeCharts({ h4: null, m15: null });
-    setAnalysisError(null);
-    setShowPairModal(false);
-  };
-
-  const startQuickMode = () => {
-    setRetryingExistingChart(false);
-    setSelectedPair(null);
-    setMode('quick');
-    setStage('pick');
-    setShowPairModal(false);
-    setAnalysisError(null);
-  };
-
   const handleImageSelected = async () => {
     if (isLoading) return;
     trackEvent('analysis_started');
@@ -325,7 +237,7 @@ export default function AnalysisScreen() {
       setAnalysisError('Unable to read the image for AI analysis. Please choose the chart again.');
       return;
     }
-    if (mode === 'quick' && !quickTimeframe) {
+    if (!quickTimeframe) {
       setAnalysisError('Select the chart timeframe before analyzing so the live candle can be verified.');
       return;
     }
@@ -339,7 +251,7 @@ export default function AnalysisScreen() {
   };
 
   const finishAnalysis = async (chart: ChartAnalysisResult, pair: string, sourceImageUri: string, analysisStartedAt: number) => {
-    const returnToInput = () => setStage(mode === 'quick' ? 'preview' : 'pick');
+    const returnToInput = () => setStage('preview');
     console.log('[ANALYSIS] API response received', {
       status: chart.status,
       pair,
@@ -385,20 +297,15 @@ export default function AnalysisScreen() {
   const handlePairSelected = async (pair: string) => {
     if (isLoading) return;
     const selectedQuickTimeframe = quickTimeframe;
-    if (mode === 'quick' && !selectedQuickTimeframe) {
+    if (!selectedQuickTimeframe) {
       setAnalysisError('Select the chart timeframe before analyzing so the live candle can be verified.');
       return;
     }
-    const requiredFeature = mode === 'multiTimeframe' ? 'TRADE_SETUP' : 'AI_ANALYSIS';
-    if (!(await checkAccessBeforeAnalysis(requiredFeature))) return;
-    if (mode === 'quick' && (!imageBase64 || !imageUri)) return;
+    if (!(await checkAccessBeforeAnalysis())) return;
+    if (!imageBase64 || !imageUri) return;
     const sourceImageUri = imageUri ?? '';
-    if (mode === 'multiTimeframe' && selectedPair && selectedPair !== pair) {
-      setTimeframeCharts({ h4: null, m15: null });
-    }
     setSelectedPair(pair);
     setShowPairModal(false);
-    if (mode === 'multiTimeframe') return;
     if (imageBase64 && imageUri) {
       storeAnalysisRetryRequest({
         imageBase64,
@@ -448,38 +355,8 @@ export default function AnalysisScreen() {
     }
   };
 
-  const handleMultiTimeframeAnalysis = async () => {
-    if (!selectedPair || !timeframeCharts.h4 || !timeframeCharts.m15 || isLoading) return;
-    if (!(await checkAccessBeforeAnalysis('TRADE_SETUP'))) return;
-    setStage('analyzing');
-    setAnalysisError(null);
-    trackEvent('analysis_started', { mode: 'multi_timeframe' });
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    const analysisStartedAt = Date.now();
-    try {
-      const chart = await analyzeMultiTimeframeCharts(
-        { imageBase64: timeframeCharts.h4.imageBase64, mimeType: timeframeCharts.h4.mimeType },
-        { imageBase64: timeframeCharts.m15.imageBase64, mimeType: timeframeCharts.m15.mimeType },
-        selectedPair,
-      );
-      await finishAnalysis(chart, selectedPair, timeframeCharts.h4.uri, analysisStartedAt);
-    } catch (error) {
-      setAnalysisError(error instanceof Error ? error.message : 'Analysis failed. Please try again.');
-      Alert.alert('Analysis failed', 'We couldn\'t complete your analysis. Please try again.');
-      setStage('pick');
-    }
-  };
-
-
-
-  const activeTimeframeChart = timeframeCharts[activeTimeframe];
   const captureFrameHeight = Math.min(460, Math.max(300, viewportHeight * 0.4));
-  const hasBothTimeframes = Boolean(timeframeCharts.h4 && timeframeCharts.m15);
   const handlePrimaryCaptureAction = () => {
-    if (mode === 'multiTimeframe') {
-      void pickTimeframeCamera(activeTimeframe);
-      return;
-    }
     if (imageUri) {
       void handleImageSelected();
       return;
@@ -487,17 +364,9 @@ export default function AnalysisScreen() {
     void pickFromCamera();
   };
   const handleGalleryAction = () => {
-    if (mode === 'multiTimeframe') {
-      void pickTimeframeChart(activeTimeframe);
-      return;
-    }
     void pickFromGallery();
   };
   const openFramePicker = () => {
-    if (mode === 'multiTimeframe') {
-      void pickTimeframeChart(activeTimeframe);
-      return;
-    }
     void pickFromGallery();
   };
 
@@ -527,27 +396,16 @@ export default function AnalysisScreen() {
           contentContainerStyle={[styles.analysisComposer, { paddingBottom: botPad + 8 }]}
           showsVerticalScrollIndicator={false}
         >
-          <View style={[styles.modeSwitcher, { backgroundColor: colors.surface, borderColor: colors.cardBorder }]}>
-            <TouchableOpacity accessibilityRole="tab" accessibilityState={{ selected: mode === 'quick' }} onPress={startQuickMode} style={[styles.modeButton, mode === 'quick' && { backgroundColor: colors.card }]}>
-              <Text style={[styles.modeButtonText, { color: mode === 'quick' ? colors.text : colors.textMuted }]}>Quick</Text>
-            </TouchableOpacity>
-            <TouchableOpacity accessibilityRole="tab" accessibilityState={{ selected: mode === 'multiTimeframe' }} onPress={startMultiTimeframeMode} style={[styles.modeButton, mode === 'multiTimeframe' && { backgroundColor: colors.card }]}>
-              <Text style={[styles.modeButtonText, { color: mode === 'multiTimeframe' ? colors.text : colors.textMuted }]}>Multi-Timeframe</Text>
-            </TouchableOpacity>
-          </View>
-
           <TouchableOpacity
             accessibilityRole="button"
-            accessibilityLabel={mode === 'multiTimeframe' ? `Chart preview for ${activeTimeframe === 'h4' ? 'H4 context' : 'M15 entry'}. Tap to choose an image.` : imageUri ? 'Replace chart image' : 'Choose chart image'}
+            accessibilityLabel={imageUri ? 'Replace chart image' : 'Choose chart image'}
             onPress={openFramePicker}
             style={[
               styles.captureFrame,
               { height: captureFrameHeight, borderColor: colors.cardBorder, backgroundColor: colors.card },
             ]}
           >
-            {mode === 'multiTimeframe' && activeTimeframeChart ? (
-              <Image source={{ uri: activeTimeframeChart.uri }} style={styles.captureImage} resizeMode="contain" />
-            ) : mode === 'quick' && imageUri ? (
+            {imageUri ? (
               <Image source={{ uri: imageUri }} style={styles.captureImage} resizeMode="contain" />
             ) : (
               <View style={styles.framePlaceholder}>
@@ -561,109 +419,44 @@ export default function AnalysisScreen() {
             <View pointerEvents="none" style={[styles.frameCorner, styles.frameCornerBottomRight, { borderColor: colors.textSecondary }]} />
           </TouchableOpacity>
 
-          {mode === 'multiTimeframe' ? (
-            <View style={styles.timeframeRow}>
-              {(['h4', 'm15'] as const).map((timeframe) => {
-                const chart = timeframeCharts[timeframe];
-                const label = timeframe === 'h4' ? 'H4 context' : 'M15 entry';
-                const selected = activeTimeframe === timeframe;
+          <View style={styles.quickTimeframeSection}>
+            <Text style={[styles.quickTimeframeTitle, { color: colors.text }]}>Chart timeframe</Text>
+            <Text style={[styles.quickTimeframeHint, { color: colors.textSecondary }]}>
+              Select the interval shown on the uploaded chart.
+            </Text>
+            <View style={styles.quickTimeframeOptions}>
+              {QUICK_TIMEFRAMES.map((timeframe) => {
+                const selected = quickTimeframe === timeframe;
                 return (
                   <TouchableOpacity
                     key={timeframe}
-                    accessibilityRole="button"
-                    accessibilityLabel={`${chart ? 'Replace' : 'Add'} ${label} chart`}
-                    onPress={() => void openTimeframePicker(timeframe)}
+                    accessibilityRole="radio"
+                    accessibilityState={{ selected }}
+                    onPress={() => {
+                      setQuickTimeframe(timeframe);
+                      setAnalysisError(null);
+                    }}
                     style={[
-                      styles.timeframeTile,
+                      styles.quickTimeframeOption,
                       {
-                        backgroundColor: colors.card,
-                        borderColor: selected ? colors.buy : colors.cardBorder,
+                        backgroundColor: selected ? colors.primary : colors.card,
+                        borderColor: selected ? colors.primary : colors.cardBorder,
                       },
                     ]}
                   >
-                    <Text style={[styles.timeframeTileTitle, { color: colors.text }]}>{label}</Text>
-                    <View style={[styles.timeframeTileDrop, { borderColor: colors.cardBorder }]}>
-                      {chart ? (
-                        <Image source={{ uri: chart.uri }} style={styles.timeframeTileImage} resizeMode="cover" />
-                      ) : (
-                        <>
-                          <Feather name="plus" size={25} color={colors.textSecondary} />
-                          <Text style={[styles.timeframeTilePrompt, { color: colors.textSecondary }]}>Add chart</Text>
-                        </>
-                      )}
-                    </View>
+                    <Text style={[styles.quickTimeframeOptionText, { color: selected ? colors.primaryForeground : colors.text }]}>
+                      {timeframe}
+                    </Text>
                   </TouchableOpacity>
                 );
               })}
             </View>
-          ) : null}
-
-          {mode === 'quick' ? (
-            <View style={styles.quickTimeframeSection}>
-              <Text style={[styles.quickTimeframeTitle, { color: colors.text }]}>Chart timeframe</Text>
-              <Text style={[styles.quickTimeframeHint, { color: colors.textSecondary }]}>
-                Select the interval shown on the uploaded chart.
-              </Text>
-              <View style={styles.quickTimeframeOptions}>
-                {QUICK_TIMEFRAMES.map((timeframe) => {
-                  const selected = quickTimeframe === timeframe;
-                  return (
-                    <TouchableOpacity
-                      key={timeframe}
-                      accessibilityRole="radio"
-                      accessibilityState={{ selected }}
-                      onPress={() => {
-                        setQuickTimeframe(timeframe);
-                        setAnalysisError(null);
-                      }}
-                      style={[
-                        styles.quickTimeframeOption,
-                        {
-                          backgroundColor: selected ? colors.primary : colors.card,
-                          borderColor: selected ? colors.primary : colors.cardBorder,
-                        },
-                      ]}
-                    >
-                      <Text style={[styles.quickTimeframeOptionText, { color: selected ? colors.primaryForeground : colors.text }]}>
-                        {timeframe}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            </View>
-          ) : null}
-
-          {mode === 'multiTimeframe' ? (
-            <View style={styles.multiControls}>
-              <TouchableOpacity
-                accessibilityRole="button"
-                onPress={() => setShowPairModal(true)}
-                style={[styles.pairSelectorCompact, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}
-              >
-                <Text style={[styles.pairSelectorCompactText, { color: selectedPair ? colors.text : colors.textSecondary }]}>
-                  {selectedPair || 'Select pair'}
-                </Text>
-                <Feather name="chevron-down" size={17} color={colors.textSecondary} />
-              </TouchableOpacity>
-              {hasBothTimeframes ? (
-                <TouchableOpacity
-                  accessibilityRole="button"
-                  disabled={!selectedPair}
-                  onPress={() => void handleMultiTimeframeAnalysis()}
-                  style={[styles.multiAnalyzeButton, { backgroundColor: colors.primary, opacity: selectedPair ? 1 : 0.5 }]}
-                >
-                  <Feather name="zap" size={16} color={colors.primaryForeground} />
-                  <Text style={[styles.multiAnalyzeButtonText, { color: colors.primaryForeground }]}>Analyze setup</Text>
-                </TouchableOpacity>
-              ) : null}
-            </View>
-          ) : null}
+          </View>
 
           <View style={styles.captureControls}>
             <TouchableOpacity
               accessibilityRole="button"
-              accessibilityLabel={mode === 'multiTimeframe' ? `Choose ${activeTimeframe === 'h4' ? 'H4' : 'M15'} chart from gallery` : 'Choose chart from gallery'}
+              accessibilityLabel="Choose chart from gallery"
               onPress={handleGalleryAction}
               style={styles.galleryButton}
             >
@@ -674,7 +467,7 @@ export default function AnalysisScreen() {
             </TouchableOpacity>
             <TouchableOpacity
               accessibilityRole="button"
-              accessibilityLabel={mode === 'multiTimeframe' ? `Take ${activeTimeframe === 'h4' ? 'H4' : 'M15'} chart photo` : imageUri ? 'Analyze chart' : 'Take chart photo'}
+              accessibilityLabel={imageUri ? 'Analyze chart' : 'Take chart photo'}
               onPress={handlePrimaryCaptureAction}
               style={[styles.shutterOuter, { borderColor: colors.text }]}
             >
@@ -724,9 +517,6 @@ const styles = StyleSheet.create({
   },
   analysisComposerScroll: { flex: 1 },
   analysisComposer: { flexGrow: 1, paddingHorizontal: 18, paddingTop: 10, gap: 10 },
-  modeSwitcher: { flexDirection: 'row', minHeight: 44, padding: 4, borderWidth: 1, borderRadius: 22, gap: 3 },
-  modeButton: { flex: 1, minHeight: 34, alignItems: 'center', justifyContent: 'center', borderRadius: 18 },
-  modeButtonText: { fontSize: 14, fontFamily: 'Inter_600SemiBold' },
   captureFrame: {
     width: '100%',
     minHeight: 280,
@@ -745,23 +535,12 @@ const styles = StyleSheet.create({
   frameCornerTopRight: { top: 20, right: 20, borderTopWidth: 3, borderRightWidth: 3, borderTopRightRadius: 8 },
   frameCornerBottomLeft: { bottom: 20, left: 20, borderBottomWidth: 3, borderLeftWidth: 3, borderBottomLeftRadius: 8 },
   frameCornerBottomRight: { bottom: 20, right: 20, borderBottomWidth: 3, borderRightWidth: 3, borderBottomRightRadius: 8 },
-  timeframeRow: { flexDirection: 'row', gap: 10 },
-  timeframeTile: { flex: 1, minWidth: 0, minHeight: 124, borderRadius: 18, padding: 12, borderWidth: 1, gap: 10 },
-  timeframeTileTitle: { fontSize: 15, lineHeight: 20, fontFamily: 'Inter_700Bold' },
-  timeframeTileDrop: { flex: 1, minHeight: 68, borderRadius: 12, borderWidth: 1.5, borderStyle: 'dashed', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', gap: 1 },
-  timeframeTilePrompt: { fontSize: 12, lineHeight: 17, fontFamily: 'Inter_500Medium' },
   quickTimeframeSection: { gap: 6, paddingVertical: 2 },
   quickTimeframeTitle: { fontSize: 14, fontFamily: 'Inter_600SemiBold' },
   quickTimeframeHint: { fontSize: 12, lineHeight: 17, fontFamily: 'Inter_400Regular' },
   quickTimeframeOptions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingTop: 2 },
   quickTimeframeOption: { minWidth: 42, minHeight: 36, paddingHorizontal: 10, borderWidth: 1, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
   quickTimeframeOptionText: { fontSize: 12, fontFamily: 'Inter_600SemiBold' },
-  timeframeTileImage: { width: '100%', height: '100%' },
-  multiControls: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  pairSelectorCompact: { flex: 1, minHeight: 40, borderWidth: 1, borderRadius: 12, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  pairSelectorCompactText: { fontSize: 13, fontFamily: 'Inter_600SemiBold' },
-  multiAnalyzeButton: { minHeight: 40, borderRadius: 12, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
-  multiAnalyzeButtonText: { fontSize: 12, fontFamily: 'Inter_700Bold' },
   captureControls: { minHeight: 94, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 32, paddingTop: 2 },
   galleryButton: { width: 72, alignItems: 'center', gap: 4 },
   galleryIconCircle: { width: 60, height: 60, borderRadius: 30, alignItems: 'center', justifyContent: 'center' },
