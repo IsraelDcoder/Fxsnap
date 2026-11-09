@@ -48,7 +48,10 @@ import {
   getOnboardingCta,
   type OnboardingMascotMood,
 } from '@/services/onboardingPersonalization';
-import { getOnboardingProgress } from '@/services/onboardingProgress';
+import {
+  getOnboardingProgress,
+  requiresPushNotificationSetupBeforePaywall,
+} from '@/services/onboardingProgress';
 import { PRIVACY_POLICY_URL, TERMS_OF_USE_URL } from '@/constants/legalUrls';
 import { signInWithGoogle } from '@/services/account';
 import {
@@ -484,8 +487,9 @@ export default function OnboardingFlow() {
     },
   }), [handleBack, moveTo, step, transitioning]);
 
-  const enablePushNotifications = async () => {
-    if (Platform.OS === 'web' || notificationBusy) return;
+  const enablePushNotifications = async (): Promise<boolean> => {
+    if (Platform.OS === 'web') return true;
+    if (notificationBusy) return false;
     setNotificationBusy(true);
     setError('');
     try {
@@ -500,14 +504,23 @@ export default function OnboardingFlow() {
         setError(permission.canAskAgain
           ? 'Notifications are still turned off. Allow them to continue.'
           : 'Enable notifications for FXSnap in your device settings to continue.');
-        return;
+        return false;
       }
       await saveNotificationPreferences(nextPreferences);
       setPushNotificationsReady(true);
       trackEvent('onboarding_push_notifications_enabled', { version: ONBOARDING_VERSION });
+      return true;
     } catch (notificationError) {
       console.error('[Onboarding] Could not enable push notifications.', notificationError);
       setError(getNotificationEnableErrorMessage(notificationError));
+      try {
+        const permission = await Notifications.getPermissionsAsync();
+        setPushPermissionGranted(permission.granted);
+        setPushPermissionCanAskAgain(permission.canAskAgain);
+      } catch (permissionError) {
+        console.error('[Onboarding] Could not refresh notification permission after setup failed.', permissionError);
+      }
+      return false;
     } finally {
       setNotificationBusy(false);
     }
@@ -564,6 +577,10 @@ export default function OnboardingFlow() {
 
   const continueToPaywall = async () => {
     if (transitioning || transitionLockRef.current) return;
+    if (requiresPushNotificationSetupBeforePaywall(Platform.OS, pushNotificationsReady)) {
+      const notificationsEnabled = await enablePushNotifications();
+      if (!notificationsEnabled) return;
+    }
     transitionLockRef.current = true;
     setTransitioning(true);
     setError('');
@@ -849,8 +866,8 @@ export default function OnboardingFlow() {
           <PrimaryButton
             label={cta.label}
             onPress={() => { trackCtaTap(); void continueToPaywall(); }}
-            disabled={transitioning}
-            loading={transitioning}
+            disabled={transitioning || notificationBusy}
+            loading={transitioning || notificationBusy}
           />
         ) : null}
       </View>

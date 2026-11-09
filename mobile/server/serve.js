@@ -4694,6 +4694,19 @@ function createRequestHandler() {
       return accountPromise.then((account) => register(account))
         .catch((error) => sendJson(res, 400, { error: error.message }));
     }
+    if (pathname === '/api/notifications/paywall-reminders' && req.method === 'POST') {
+      const deviceId = requireAuth(req, res);
+      if (!deviceId) return;
+      if (!persistentStore.supabaseEnabled) return sendJson(res, 503, { error: 'Push reminders require Supabase storage.' });
+      const notifications = require('./notificationService');
+      return allowRequest(req, deviceId)
+        .then((allowed) => {
+          if (!allowed) return sendJson(res, 429, { error: 'Too many requests.' });
+          return notifications.startPaywallReminderSequence(deviceId)
+            .then((scheduled) => sendJson(res, 200, { scheduled }));
+        })
+        .catch((error) => sendJson(res, 500, { error: error.message || 'Could not schedule paywall reminders.' }));
+    }
     if (pathname === '/api/notifications/dispatch' && req.method === 'POST') {
       if (!persistentStore.supabaseEnabled) return sendJson(res, 503, { error: 'Push notifications require Supabase storage.' });
       const secret = process.env.NOTIFICATION_CRON_SECRET || '';
@@ -4704,9 +4717,10 @@ function createRequestHandler() {
       const notifications = require('./notificationService');
       return Promise.all([
         notifications.sendScheduledCampaigns(new Date(), getRevenueCatPremiumStatus),
+        notifications.sendPaywallReminderSequences(new Date(), getRevenueCatPremiumStatus),
         notifications.dispatchCommunityPushNotifications(),
       ])
-        .then(([campaigns, community]) => ({ campaigns, community }))
+        .then(([campaigns, paywallReminders, community]) => ({ campaigns, paywallReminders, community }))
         .then((result) => sendJson(res, 200, result))
         .catch((error) => sendJson(res, 500, { error: error.message || 'Notification dispatch failed.' }));
     }

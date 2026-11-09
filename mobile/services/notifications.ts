@@ -176,6 +176,24 @@ export async function syncRegisteredPushNotifications() {
   await requestAndRegisterPushNotifications(preferences, false);
 }
 
+export async function schedulePaywallReminderSequence(): Promise<boolean> {
+  if (Platform.OS === 'web') return false;
+  const preferences = await getNotificationPreferences();
+  if (!preferences.enabled || !preferences.inactivity) return false;
+
+  const response = await fetch(`${API_BASE_URL}/api/notifications/paywall-reminders`, {
+    method: 'POST',
+    headers: await getApiHeaders(),
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null);
+    const detail = payload && typeof payload.error === 'string' ? payload.error : '';
+    throw new Error(`Could not schedule FXSnap reminders (${response.status})${detail ? `: ${detail}` : ''}.`);
+  }
+  const payload = await response.json();
+  return payload.scheduled === true;
+}
+
 export function registerForegroundNotificationHandler(
   onRoute?: (route: NotificationTarget, identifier: string, data: Record<string, unknown>) => void,
 ): EventSubscription {

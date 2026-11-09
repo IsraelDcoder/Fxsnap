@@ -25,6 +25,17 @@ export function isCommunityFeatureRoute(path: string): boolean {
   return path === '/community' || path.startsWith('/community-') || path.startsWith('/community/');
 }
 
+export function getAccessGateRoute(
+  path: string,
+  onboardingComplete: boolean,
+  isSubscribed: boolean,
+): '/onboarding' | '/paywall' | null {
+  if (isSubscribed || path === '/paywall' || path === '/exit-offer' || path === '/auth/callback') return null;
+  if (!onboardingComplete && (path === '/' || path === '/onboarding')) return null;
+  if (!onboardingComplete) return '/onboarding';
+  return '/paywall';
+}
+
 export function getFeatureAccessDecision(
   feature: string,
   isSubscribed: boolean,

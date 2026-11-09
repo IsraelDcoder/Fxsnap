@@ -1,5 +1,9 @@
 const persistentStore = require('./persistentStore');
 const supabasePushStore = require('./supabasePushStore');
+const {
+  getPaywallReminder,
+  getPaywallReminderCount,
+} = require('./paywallReminderPolicy');
 
 let expoClientPromise;
 async function getExpoClient() {
@@ -13,7 +17,7 @@ async function getExpoClient() {
 }
 
 const CAMPAIGN_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000;
-const ROUTES = new Set(['/daily-brief', '/analysis', '/saved', '/community']);
+const ROUTES = new Set(['/daily-brief', '/analysis', '/saved', '/community', '/paywall']);
 
 function getStartOfWeek(date) {
   const start = new Date(date);
@@ -55,6 +59,12 @@ async function unregisterPushToken(deviceId, accountId) {
   return true;
 }
 
+async function startPaywallReminderSequence(deviceId, startedAt = new Date()) {
+  const entry = await supabasePushStore.getRegisteredDevice(deviceId);
+  if (!entry || !entry.token || entry.preferences?.inactivity !== true) return false;
+  return (await supabasePushStore.startPaywallReminderSequence(deviceId, startedAt.toISOString())) === true;
+}
+
 async function getRegisteredTokens() {
   const { Expo } = await getExpoClient();
   const entries = await supabasePushStore.list();
@@ -90,7 +100,7 @@ function buildCampaign(entry, events, now, isSubscribed) {
   return null;
 }
 
-async function sendCampaign({ type, title, body, route, token, deviceId }) {
+async function sendCampaign({ type, title, body, route, token, deviceId, campaignId }) {
   if (!ROUTES.has(route)) throw new Error('Unsupported notification route.');
   const { Expo, expo } = await getExpoClient();
   if (!Expo.isExpoPushToken(token)) return { sent: false, reason: 'Invalid Expo push token.' };
@@ -98,7 +108,7 @@ async function sendCampaign({ type, title, body, route, token, deviceId }) {
     to: token,
     title,
     body,
-    data: { type, route, campaignId: `${type}:${deviceId}` },
+    data: { type, route, campaignId: campaignId || `${type}:${deviceId}` },
     channelId: 'fxsnap-retention',
     sound: 'default',
     priority: 'default',
@@ -109,9 +119,11 @@ async function sendCampaign({ type, title, body, route, token, deviceId }) {
 async function sendScheduledCampaigns(now = new Date(), isPremium = async () => false) {
   if (!process.env.EXPO_ACCESS_TOKEN) return { sent: 0, skipped: 'EXPO_ACCESS_TOKEN is not configured.' };
   const entries = (await getRegisteredTokens()).filter((entry) => entry.accountId && entry.supabaseUserId);
+  const activeReminderDeviceIds = await supabasePushStore.listActivePaywallReminderDeviceIds();
   const events = await persistentStore.getJson('fxsnap:events') || [];
   const results = [];
   for (const entry of entries) {
+    if (activeReminderDeviceIds.has(entry.deviceId)) continue;
     const campaign = buildCampaign(entry, events, now, await isPremium(entry.deviceId));
     if (!campaign) continue;
     const result = await sendCampaign({ ...campaign, token: entry.token, deviceId: entry.deviceId });
@@ -123,6 +135,81 @@ async function sendScheduledCampaigns(now = new Date(), isPremium = async () => 
     }
   }
   return { sent: results.filter((result) => result.sent).length, results };
+}
+
+async function sendPaywallReminderSequences(now = new Date(), isPremium = async () => null) {
+  if (!process.env.EXPO_ACCESS_TOKEN) return { sent: 0, skipped: 'EXPO_ACCESS_TOKEN is not configured.' };
+  const sequences = await supabasePushStore.claimDuePaywallReminderSequences(now, 20);
+  const results = [];
+  for (const sequence of sequences || []) {
+    try {
+      const entry = await supabasePushStore.getRegisteredDevice(sequence.device_id);
+      if (!entry?.token || entry.preferences?.inactivity !== true) {
+        await supabasePushStore.finishPaywallReminderSequence(sequence.sequence_id, 'cancelled', now);
+        results.push({ deviceId: sequence.device_id, sent: false, reason: 'Push registration or trading-reminder preference is unavailable.' });
+        continue;
+      }
+
+      const subscriptionStatus = await isPremium(sequence.device_id);
+      if (subscriptionStatus === true) {
+        await supabasePushStore.finishPaywallReminderSequence(sequence.sequence_id, 'cancelled', now);
+        results.push({ deviceId: sequence.device_id, sent: false, reason: 'Pro entitlement is active.' });
+        continue;
+      }
+      if (subscriptionStatus !== false) {
+        await supabasePushStore.finishPaywallReminderSequence(sequence.sequence_id, 'retry', now);
+        results.push({ deviceId: sequence.device_id, sent: false, reason: 'Pro entitlement could not be verified.' });
+        continue;
+      }
+
+      const campaign = getPaywallReminder(sequence.next_step);
+      if (!campaign) {
+        await supabasePushStore.finishPaywallReminderSequence(sequence.sequence_id, 'completed', now);
+        results.push({ deviceId: sequence.device_id, sent: false, reason: 'Reminder sequence is complete.' });
+        continue;
+      }
+
+      const delivery = await sendCampaign({
+        ...campaign,
+        token: entry.token,
+        deviceId: entry.deviceId,
+        campaignId: `paywall-reminder:${sequence.sequence_id}:${sequence.next_step}`,
+      });
+      if (!delivery.sent) {
+        await supabasePushStore.finishPaywallReminderSequence(sequence.sequence_id, 'retry', now);
+        results.push({ deviceId: sequence.device_id, sent: false, error: delivery.ticket?.message || delivery.reason });
+        continue;
+      }
+
+      await supabasePushStore.finishPaywallReminderSequence(sequence.sequence_id, 'sent', now);
+      try {
+        await supabasePushStore.markNotified(entry.deviceId, now.toISOString());
+      } catch (markError) {
+        console.error('[Notifications] Could not update the global push cooldown after a paywall reminder.', {
+          deviceId: entry.deviceId,
+          message: markError instanceof Error ? markError.message : String(markError),
+        });
+      }
+      results.push({ deviceId: sequence.device_id, sent: true, type: campaign.type });
+    } catch (error) {
+      console.error('[Notifications] Paywall reminder delivery failed.', {
+        deviceId: sequence.device_id,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      await supabasePushStore.finishPaywallReminderSequence(sequence.sequence_id, 'retry', now);
+      results.push({
+        deviceId: sequence.device_id,
+        sent: false,
+        error: error instanceof Error ? error.message : 'Paywall reminder delivery failed.',
+      });
+    }
+  }
+  return {
+    sent: results.filter((result) => result.sent).length,
+    processed: results.length,
+    reminderCount: getPaywallReminderCount(),
+    results,
+  };
 }
 
 async function dispatchCommunityPushNotifications(objectId = null, limit = 100) {
@@ -230,9 +317,11 @@ module.exports = {
   registerPushToken,
   unregisterPushToken,
   getRegisteredTokens,
+  startPaywallReminderSequence,
   buildCampaign,
   sendCampaign,
   sendScheduledCampaigns,
+  sendPaywallReminderSequences,
   dispatchCommunityPushNotifications,
   sendSupportInboxNotification,
   sendLiveSpaceNotification,

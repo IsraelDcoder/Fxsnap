@@ -6,6 +6,8 @@ const {
   dispatchCommunityPushNotifications,
   getRegisteredTokens,
   registerPushToken,
+  sendPaywallReminderSequences,
+  startPaywallReminderSequence,
   unregisterPushToken,
 } = require('../server/notificationService.js') as {
   buildCampaign: (
@@ -18,7 +20,19 @@ const {
   dispatchCommunityPushNotifications: (objectId?: string | null, limit?: number) => Promise<Record<string, unknown>>;
   registerPushToken: (deviceId: string, payload: Record<string, unknown>) => Promise<boolean>;
   unregisterPushToken: (deviceId: string, accountId: string) => Promise<boolean>;
+  startPaywallReminderSequence: (deviceId: string, startedAt?: Date) => Promise<boolean>;
+  sendPaywallReminderSequences: (
+    now: Date,
+    isPremium: (deviceId: string) => Promise<boolean | null>,
+  ) => Promise<{ sent: number; processed: number }>;
 };
+type PushStore = {
+  getRegisteredDevice: (deviceId: string) => Promise<Record<string, unknown> | null>;
+  startPaywallReminderSequence: (deviceId: string, startedAt: string) => Promise<unknown>;
+  claimDuePaywallReminderSequences: (now: Date, limit?: number) => Promise<Array<Record<string, unknown>>>;
+  finishPaywallReminderSequence: (id: number, outcome: string, now: Date) => Promise<unknown>;
+};
+const pushStore = require('../server/supabasePushStore.js') as PushStore;
 
 const now = new Date('2026-10-14T09:00:00.000Z');
 const baseEntry = {
@@ -52,6 +66,68 @@ test('engaged users with four weekly analyses receive the weekly overview on Mon
 test('recently notified devices are suppressed for seven days', () => {
   const entry = { ...baseEntry, lastNotificationAt: '2026-10-10T09:00:00.000Z' };
   assert.equal(buildCampaign(entry, [], now, false), null);
+});
+
+test('paywall reminder scheduling requires a registered push device with reminders enabled', async () => {
+  const originalGetDevice = pushStore.getRegisteredDevice;
+  const originalStart = pushStore.startPaywallReminderSequence;
+  const started: unknown[][] = [];
+  pushStore.getRegisteredDevice = async () => ({
+    token: 'ExponentPushToken[test]',
+    preferences: { inactivity: true },
+  });
+  pushStore.startPaywallReminderSequence = async (deviceId: string, startedAt: string) => {
+    started.push([deviceId, startedAt]);
+    return true;
+  };
+  try {
+    assert.equal(await startPaywallReminderSequence('device-1234567890', now), true);
+    assert.equal(started.length, 1);
+    pushStore.getRegisteredDevice = async () => ({
+      token: 'ExponentPushToken[test]',
+      preferences: { inactivity: false },
+    });
+    assert.equal(await startPaywallReminderSequence('device-1234567890', now), false);
+    assert.equal(started.length, 1);
+  } finally {
+    pushStore.getRegisteredDevice = originalGetDevice;
+    pushStore.startPaywallReminderSequence = originalStart;
+  }
+});
+
+test('due paywall reminders are cancelled for subscribers and retried when entitlement status is unknown', async () => {
+  const originalToken = process.env.EXPO_ACCESS_TOKEN;
+  const originalClaim = pushStore.claimDuePaywallReminderSequences;
+  const originalGetDevice = pushStore.getRegisteredDevice;
+  const originalFinish = pushStore.finishPaywallReminderSequence;
+  process.env.EXPO_ACCESS_TOKEN = 'test-expo-access-token';
+  const outcomes: Array<[number, string]> = [];
+  pushStore.claimDuePaywallReminderSequences = async () => [
+    { sequence_id: 1, device_id: 'device-subscribed', next_step: 0 },
+    { sequence_id: 2, device_id: 'device-unknown', next_step: 0 },
+  ];
+  pushStore.getRegisteredDevice = async (deviceId: string) => ({
+    token: 'ExponentPushToken[test]',
+    preferences: { inactivity: true },
+    deviceId,
+  });
+  pushStore.finishPaywallReminderSequence = async (id: number, outcome: string) => {
+    outcomes.push([id, outcome]);
+  };
+  try {
+    const result = await sendPaywallReminderSequences(now, async (deviceId) => (
+      deviceId === 'device-subscribed' ? true : null
+    ));
+    assert.equal(result.sent, 0);
+    assert.equal(result.processed, 2);
+    assert.deepEqual(outcomes, [[1, 'cancelled'], [2, 'retry']]);
+  } finally {
+    pushStore.claimDuePaywallReminderSequences = originalClaim;
+    pushStore.getRegisteredDevice = originalGetDevice;
+    pushStore.finishPaywallReminderSequence = originalFinish;
+    if (originalToken === undefined) delete process.env.EXPO_ACCESS_TOKEN;
+    else process.env.EXPO_ACCESS_TOKEN = originalToken;
+  }
 });
 
 test('campaigns respect disabled categories', () => {

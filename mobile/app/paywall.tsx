@@ -16,13 +16,20 @@ import Purchases, {
   INTRO_ELIGIBILITY_STATUS,
   type PurchasesPackage,
 } from 'react-native-purchases';
-import { router, useLocalSearchParams } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useApp } from '@/context/AppContext';
 import { useColors } from '@/hooks/useColors';
 import { PRIVACY_POLICY_URL, TERMS_OF_USE_URL } from '@/constants/legalUrls';
 import { configureBilling } from '@/services/billing';
+import { schedulePaywallReminderSequence } from '@/services/notifications';
 import { trackEvent } from '@/services/telemetry';
 import { hasRevenueCatEntitlement } from '@/services/revenuecatEntitlements';
+import {
+  cacheYearlyExitOfferForSession,
+  hasShownYearlyExitOfferThisSession,
+  isDiscountedFirstYearPrice,
+  isYearlyExitOfferOption,
+} from '@/services/exitOffer';
 import { getPaywallRemoteConfig, type PaywallRemoteConfig } from '@/services/paywallConfig';
 import { loadOnboardingState, saveOnboardingState } from '@/services/onboardingState';
 
@@ -109,7 +116,6 @@ export default function PaywallScreen() {
     isSubscribed,
     isLoading: appLoading,
     completeOnboarding,
-    markPaywallDismissed,
     consumePendingFeatureRoute,
     clearPendingFeatureRoute,
   } = useApp();
@@ -121,9 +127,11 @@ export default function PaywallScreen() {
   const [retryOfferings, setRetryOfferings] = useState(0);
   const [remoteConfig, setRemoteConfig] = useState<PaywallRemoteConfig | null>(null);
   const [closeButtonVisible, setCloseButtonVisible] = useState(false);
+  const [exitOfferWasShown, setExitOfferWasShown] = useState(hasShownYearlyExitOfferThisSession);
+  const [exitOfferLoading, setExitOfferLoading] = useState(false);
+  const [exitOfferError, setExitOfferError] = useState('');
   const closeButtonProgress = useRef(new Animated.Value(0)).current;
   const onboardingCompletionStarted = useRef(false);
-  const dismissInProgress = useRef(false);
 
   useEffect(() => {
     if (appLoading || isSubscribed) return;
@@ -143,33 +151,41 @@ export default function PaywallScreen() {
     };
   }, [appLoading, closeButtonProgress, isSubscribed]);
 
-  const dismissPaywall = useCallback(() => {
-    if (dismissInProgress.current) return;
-    dismissInProgress.current = true;
-    clearPendingFeatureRoute();
+  const handleClosePaywall = useCallback(() => {
+    if (exitOfferLoading) return;
+    if (hasShownYearlyExitOfferThisSession() || Platform.OS !== 'android') return;
+    setExitOfferLoading(true);
+    setExitOfferError('Loading your special offer…');
     void (async () => {
       try {
-        if (onboardingPaywall) {
-          try {
-            const onboardingState = await loadOnboardingState();
-            await saveOnboardingState({ ...onboardingState, completedAt: new Date().toISOString() });
-          } catch (completionError) {
-            console.error('[Onboarding] Could not persist completion after paywall dismissal.', completionError);
-          }
+        if (!(await configureBilling())) {
+          setExitOfferError('The special offer is unavailable on this device. Choose a subscription to continue.');
+          return;
         }
-        await markPaywallDismissed();
-        if (onboardingPaywall) {
-          trackEvent('onboarding_completed', { version: 2, completion: 'dismissed' });
+        const offerings = await Purchases.getOfferings();
+        const offerPackage = offerings.all['exit_offer']?.annual ?? null;
+        const discountedOption = offerPackage?.product.subscriptionOptions?.find(
+          (option) => isYearlyExitOfferOption(option.id),
+        ) ?? null;
+        const firstYearPrice = discountedOption?.pricingPhases[0]?.price;
+        if (!offerPackage || !discountedOption
+          || !isDiscountedFirstYearPrice(firstYearPrice, offerPackage.product.price)) {
+          console.error('[Paywall] The configured discounted annual offer is unavailable.');
+          setExitOfferError('The special offer is unavailable right now. Choose a subscription to continue.');
+          return;
         }
-        router.replace('/(tabs)/home?exitOffer=1');
-      } catch (dismissError) {
-        console.error('[Paywall] Could not dismiss the paywall.', dismissError);
-        setError('Could not open Home. Please try again.');
+        cacheYearlyExitOfferForSession({ package: offerPackage, option: discountedOption });
+        setExitOfferWasShown(true);
+        setExitOfferError('');
+        router.push('/exit-offer');
+      } catch (offerError) {
+        console.error('[Paywall] Could not load the RevenueCat exit offer.', offerError);
+        setExitOfferError('The special offer could not be loaded. Choose a subscription to continue.');
       } finally {
-        dismissInProgress.current = false;
+        setExitOfferLoading(false);
       }
     })();
-  }, [clearPendingFeatureRoute, markPaywallDismissed, onboardingPaywall]);
+  }, [exitOfferLoading]);
 
   const completeOnboardingAfterEntitlement = useCallback(async (completion: 'purchase' | 'restore' | 'existing_subscription') => {
     if (!onboardingPaywall || onboardingCompletionStarted.current) return;
@@ -194,22 +210,29 @@ export default function PaywallScreen() {
   }, [source]);
 
   useEffect(() => {
+    if (Platform.OS === 'web' || appLoading || isSubscribed) return;
+    void schedulePaywallReminderSequence().catch((scheduleError: unknown) => {
+      console.error('[Paywall] Could not schedule opted-in reminder notifications.', scheduleError);
+    });
+  }, [appLoading, isSubscribed]);
+
+  useEffect(() => {
     if (appLoading || !isSubscribed) return;
     if (onboardingPaywall) {
       void completeOnboardingAfterEntitlement('existing_subscription');
       router.replace(returnRoute);
       return;
     }
-    dismissPaywall();
+    router.replace(returnRoute);
   }, [appLoading, completeOnboardingAfterEntitlement, isSubscribed, onboardingPaywall, returnRoute]);
 
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
-      dismissPaywall();
+      handleClosePaywall();
       return true;
     });
     return () => subscription.remove();
-  }, [dismissPaywall]);
+  }, [handleClosePaywall]));
 
   useEffect(() => {
     let active = true;
@@ -420,7 +443,7 @@ export default function PaywallScreen() {
       >
         <View style={styles.topBar}>
           <View style={styles.closeButtonSlot}>
-            {closeButtonVisible ? (
+            {closeButtonVisible && Platform.OS === 'android' && !exitOfferWasShown ? (
               <Animated.View
                 style={{
                   opacity: closeButtonProgress,
@@ -433,10 +456,11 @@ export default function PaywallScreen() {
                 }}
               >
                 <TouchableOpacity
-                  onPress={dismissPaywall}
+                  onPress={handleClosePaywall}
                   style={[styles.closeButton, { backgroundColor: theme.subtle }]}
                   accessibilityRole="button"
-                  accessibilityLabel="Close paywall"
+                  accessibilityLabel="View subscription offer"
+                  disabled={exitOfferLoading || processing}
                 >
                   <Feather name="x" size={18} color={theme.textMuted} />
                 </TouchableOpacity>
@@ -452,6 +476,11 @@ export default function PaywallScreen() {
             <Text style={[styles.restoreText, { color: theme.textMuted }]}>Restore</Text>
           </TouchableOpacity>
         </View>
+        {exitOfferError ? (
+          <Text style={[styles.exitOfferInlineError, { color: colors.sell }]} accessibilityRole="alert">
+            {exitOfferError}
+          </Text>
+        ) : null}
 
         <View style={styles.hero}>
           <View style={[styles.heroRing, styles.heroRingOuter, { borderColor: `${theme.accent}20` }]} />
@@ -984,6 +1013,14 @@ const styles = StyleSheet.create({
   errorText: {
     marginTop: 6,
     marginBottom: 4,
+    fontSize: 12,
+    lineHeight: 17,
+    fontFamily: 'Inter_500Medium',
+    textAlign: 'center',
+  },
+  exitOfferInlineError: {
+    marginHorizontal: 20,
+    marginTop: 2,
     fontSize: 12,
     lineHeight: 17,
     fontFamily: 'Inter_500Medium',

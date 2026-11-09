@@ -1,4 +1,5 @@
 const TABLE = 'fxsnap_push_devices';
+const PAYWALL_REMINDERS_TABLE = 'fxsnap_paywall_reminder_sequences';
 
 function getSupabaseConfig() {
   const url = (process.env.SUPABASE_URL || process.env.SUPABASE_PROJECT_URL || '').replace(/\/$/, '');
@@ -77,6 +78,26 @@ async function list() {
   }
 }
 
+function mapPushDevice(row) {
+  return {
+    deviceId: row.device_id,
+    accountId: row.account_id,
+    supabaseUserId: row.supabase_user_id,
+    token: row.expo_token,
+    platform: row.platform,
+    preferences: row.preferences,
+    registeredAt: row.registered_at,
+    lastNotificationAt: row.last_notification_at,
+  };
+}
+
+async function getRegisteredDevice(deviceId) {
+  const rows = await request(
+    `${TABLE}?device_id=eq.${encodeURIComponent(deviceId)}&select=device_id,account_id,supabase_user_id,expo_token,platform,preferences,registered_at,last_notification_at&limit=1`,
+  );
+  return rows?.[0] ? mapPushDevice(rows[0]) : null;
+}
+
 async function listBySupabaseUserIds(userIds) {
   const validIds = [...new Set(userIds)].filter((id) => (
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)
@@ -119,6 +140,40 @@ async function markNotified(deviceId, notifiedAt) {
   });
 }
 
+async function startPaywallReminderSequence(deviceId, startedAt) {
+  return request('rpc/fxsnap_start_paywall_reminder_sequence', {
+    method: 'POST',
+    body: JSON.stringify({ p_device_id: deviceId, p_started_at: startedAt }),
+  });
+}
+
+async function listActivePaywallReminderDeviceIds() {
+  const deviceIds = new Set();
+  const pageSize = 1000;
+  for (let offset = 0; ; offset += pageSize) {
+    const rows = await request(
+      `${PAYWALL_REMINDERS_TABLE}?select=device_id&status=eq.active&order=device_id.asc`,
+      { headers: { range: `${offset}-${offset + pageSize - 1}` } },
+    );
+    for (const row of rows || []) deviceIds.add(row.device_id);
+    if (!rows || rows.length < pageSize) return deviceIds;
+  }
+}
+
+async function claimDuePaywallReminderSequences(now, limit = 100) {
+  return request('rpc/fxsnap_claim_due_paywall_reminders', {
+    method: 'POST',
+    body: JSON.stringify({ p_now: now.toISOString(), p_limit: limit }),
+  });
+}
+
+async function finishPaywallReminderSequence(id, outcome, now) {
+  return request('rpc/fxsnap_finish_paywall_reminder', {
+    method: 'POST',
+    body: JSON.stringify({ p_id: id, p_outcome: outcome, p_now: now.toISOString() }),
+  });
+}
+
 async function claimCommunityEvents(limit = 100, objectId = null) {
   return request('rpc/fxsnap_community_claim_push_events', {
     method: 'POST',
@@ -137,9 +192,14 @@ module.exports = {
   register,
   remove,
   list,
+  getRegisteredDevice,
   listBySupabaseUserIds,
   listByAccountIds,
   markNotified,
+  startPaywallReminderSequence,
+  listActivePaywallReminderDeviceIds,
+  claimDuePaywallReminderSequences,
+  finishPaywallReminderSequence,
   claimCommunityEvents,
   finishCommunityEvent,
 };

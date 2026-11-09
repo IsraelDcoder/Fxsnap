@@ -1,6 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { shouldGuardFeatureRoute } from '../services/featureAccess';
+import { getAccessGateRoute, shouldGuardFeatureRoute } from '../services/featureAccess';
+
+test('users must complete onboarding and then subscribe before accessing app routes', () => {
+  assert.equal(getAccessGateRoute('/', false, false), null);
+  assert.equal(getAccessGateRoute('/onboarding', false, false), null);
+  assert.equal(getAccessGateRoute('/analysis', false, false), '/onboarding');
+  assert.equal(getAccessGateRoute('/paywall', false, false), null);
+  assert.equal(getAccessGateRoute('/exit-offer', false, false), null);
+  assert.equal(getAccessGateRoute('/home', true, false), '/paywall');
+  assert.equal(getAccessGateRoute('/exit-offer', true, false), null);
+  assert.equal(getAccessGateRoute('/community', true, false), '/paywall');
+  assert.equal(getAccessGateRoute('/settings', true, false), '/paywall');
+  assert.equal(getAccessGateRoute('/onboarding', true, false), '/paywall');
+  assert.equal(getAccessGateRoute('/paywall', true, false), null);
+  assert.equal(getAccessGateRoute('/home', true, true), null);
+});
 
 test('free users are gated from premium features while Community remains available', () => {
   [
