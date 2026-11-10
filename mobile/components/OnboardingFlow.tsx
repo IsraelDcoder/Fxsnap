@@ -57,6 +57,7 @@ import { signInWithGoogle } from '@/services/account';
 import {
   getNotificationPreferences,
   requestAndRegisterPushNotifications,
+  schedulePaywallReminderSequence,
   saveNotificationPreferences,
 } from '@/services/notifications';
 import { getNotificationEnableErrorMessage } from '@/services/notificationErrors';
@@ -495,11 +496,15 @@ export default function OnboardingFlow() {
     try {
       const preferences = await getNotificationPreferences();
       const nextPreferences = { ...preferences, enabled: true };
-      const registration = await requestAndRegisterPushNotifications(nextPreferences, true);
-      const permission = await Notifications.getPermissionsAsync();
+      const currentPermission = await Notifications.getPermissionsAsync();
+      const permission = currentPermission.granted
+        ? currentPermission
+        : await Notifications.requestPermissionsAsync({
+          ios: { allowAlert: true, allowBadge: true, allowSound: true },
+        });
       setPushPermissionGranted(permission.granted);
       setPushPermissionCanAskAgain(permission.canAskAgain);
-      if (!registration.granted) {
+      if (!permission.granted) {
         setPushNotificationsReady(false);
         setError(permission.canAskAgain
           ? 'Notifications are still turned off. Allow them to continue.'
@@ -509,6 +514,14 @@ export default function OnboardingFlow() {
       await saveNotificationPreferences(nextPreferences);
       setPushNotificationsReady(true);
       trackEvent('onboarding_push_notifications_enabled', { version: ONBOARDING_VERSION });
+      void requestAndRegisterPushNotifications(nextPreferences, false)
+        .then(async (registration) => {
+          if (!registration.granted) throw new Error('Push permission was not available during background registration.');
+          await schedulePaywallReminderSequence();
+        })
+        .catch((registrationError: unknown) => {
+          console.error('[Onboarding] Push permission is enabled, but background push registration failed.', registrationError);
+        });
       return true;
     } catch (notificationError) {
       console.error('[Onboarding] Could not enable push notifications.', notificationError);
@@ -797,7 +810,7 @@ export default function OnboardingFlow() {
                           if (!pushPermissionCanAskAgain && !pushPermissionGranted) {
                             void openNotificationSettings();
                           } else {
-                            void enablePushNotifications();
+                            void continueToPaywall();
                           }
                         }}
                         style={[styles.notificationButton, { backgroundColor: colors.surface }]}
