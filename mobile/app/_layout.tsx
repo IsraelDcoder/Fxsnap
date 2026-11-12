@@ -135,6 +135,7 @@ function StartupBrandReveal({ onComplete }: { onComplete: () => void }) {
 function RootLayoutNav({ fontsReady }: { fontsReady: boolean }) {
   const {
     onboardingComplete,
+    paywallDismissed,
     isLoading,
     isSubscribed,
     billingAvailable,
@@ -200,9 +201,9 @@ function RootLayoutNav({ fontsReady }: { fontsReady: boolean }) {
 
   useEffect(() => {
     if (isLoading || (billingAvailable && !billingStatusReady)) return;
-    const gateRoute = getAccessGateRoute(pathname, onboardingComplete, isSubscribed);
+    const gateRoute = getAccessGateRoute(pathname, onboardingComplete, isSubscribed, paywallDismissed);
     if (gateRoute) router.replace(gateRoute);
-  }, [billingAvailable, billingStatusReady, isLoading, isSubscribed, onboardingComplete, pathname]);
+  }, [billingAvailable, billingStatusReady, isLoading, isSubscribed, onboardingComplete, paywallDismissed, pathname]);
 
   useEffect(() => {
     if (Platform.OS === 'web') return;

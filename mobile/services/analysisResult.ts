@@ -248,6 +248,7 @@ export function buildAnalysisResult(chart: ChartAnalysisResult, pair: string, im
     pair,
     status: chart.status,
     message: chart.message,
+    freeAnalysis: chart.freeAnalysis,
     direction,
     timeframe: chart.timeframe || undefined,
     latestVisiblePrice: chart.latestVisiblePrice,

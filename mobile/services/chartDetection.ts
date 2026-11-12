@@ -40,6 +40,7 @@ export function normalizeChartAnalysisError(payload: any): { status: AnalysisSta
 export interface ChartAnalysisResult {
   status: AnalysisStatus;
   message?: string;
+  freeAnalysis?: boolean;
   detectedPair?: string | null;
   timeframe?: string | null;
   latestVisiblePrice?: number;
@@ -398,6 +399,7 @@ async function sendChartAnalysis(path: string, body: Record<string, unknown>): P
     return {
       status,
       message: payload.message || undefined,
+      freeAnalysis: payload.freeAnalysis === true,
       detectedPair: payload.detectedPair ?? null,
       timeframe: payload.timeframe ?? null,
       latestVisiblePrice,

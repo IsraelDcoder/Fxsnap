@@ -13,8 +13,9 @@ export function isDevelopmentAnalysisPremiumBypassEnabled(
 export function canViewFullAnalysis(
   isSubscribed: boolean,
   developmentBypass = isDevelopmentAnalysisPremiumBypassEnabled(),
+  freeAnalysis = false,
 ): boolean {
-  return isSubscribed || developmentBypass;
+  return isSubscribed || developmentBypass || freeAnalysis;
 }
 
 export function isPremiumFeatureRoute(path: string): boolean {
@@ -29,10 +30,12 @@ export function getAccessGateRoute(
   path: string,
   onboardingComplete: boolean,
   isSubscribed: boolean,
+  paywallDismissed = false,
 ): '/onboarding' | '/paywall' | null {
   if (isSubscribed || path === '/paywall' || path === '/exit-offer' || path === '/auth/callback') return null;
   if (!onboardingComplete && (path === '/' || path === '/onboarding')) return null;
   if (!onboardingComplete) return '/onboarding';
+  if (paywallDismissed && (path === '/' || path === '/home' || path === '/(tabs)/home' || path === '/analysis')) return null;
   return '/paywall';
 }
 

@@ -174,5 +174,6 @@ test('analysis premium bypass is opt-in and only active in development builds', 
 
 test('full chart analysis details require an active subscription', () => {
   assert.equal(canViewFullAnalysis(false), false);
+  assert.equal(canViewFullAnalysis(false, false, true), true);
   assert.equal(canViewFullAnalysis(true), true);
 });

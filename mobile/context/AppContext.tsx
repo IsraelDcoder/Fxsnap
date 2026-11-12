@@ -5,6 +5,7 @@ import { router } from 'expo-router';
 import { addBillingListener, billingIsConfigured, configureBilling, getPremiumStatus, purchasePlan, restorePurchases, type BillingPlan } from '@/services/billing';
 import { getFeatureAccessDecision, type FeatureAccessDecision, type ProtectedFeature } from '@/services/featureAccess';
 import { setHapticsEnabled } from '@/services/haptics';
+import { getServerAnalysisAccess } from '@/services/apiAuth';
 import { createDailyRiskActivity, getLocalRiskDateKey, normalizeDailyRiskActivity, type DailyRiskActivity, type OpenRiskPosition } from '@/services/risk';
 import {
   getAuthenticatedAccount,
@@ -25,6 +26,7 @@ export interface AnalysisResult {
   pair: string;
   status?: AnalysisStatus;
   message?: string;
+  freeAnalysis?: boolean;
   direction?: 'BUY' | 'SELL';
   timeframe?: string;
   takeProfitLevels?: string[];
@@ -566,7 +568,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const subscriptionActive = billingAvailable && !billingStatusReady
       ? await (billingStatusPromise.current ?? Promise.resolve(false))
       : isSubscribed;
-    const decision = getFeatureAccessDecision(feature, subscriptionActive);
+    let decision = getFeatureAccessDecision(feature, subscriptionActive);
+    if (!subscriptionActive && (feature === 'AI_ANALYSIS' || feature === 'TRADE_SETUP')) {
+      const access = await getServerAnalysisAccess().catch((error: unknown) => {
+        console.error('[ACCESS] Could not verify free analysis availability.', error);
+        return null;
+      });
+      if (!access) {
+        return { allowed: false, requiresPaywall: false, error: 'Could not verify free analysis access. Please try again.' };
+      }
+      if (access.canAnalyze) decision = { allowed: true, requiresPaywall: false };
+    }
     if (grantAnalysisRoute && decision.allowed && route === '/analysis') {
       analysisAccessGrant.current = true;
     }

@@ -32,7 +32,7 @@ function isUserCancellation(error: unknown): boolean {
 export default function ExitOfferScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { restorePurchases } = useApp();
+  const { markPaywallDismissed, restorePurchases } = useApp();
   const [offer] = useState<YearlyExitOffer | null>(getYearlyExitOfferForSession);
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState('');
@@ -47,10 +47,24 @@ export default function ExitOfferScreen() {
     else router.replace('/paywall');
   }, []);
 
+  const dismissOffer = useCallback(async () => {
+    if (processing) return;
+    try {
+      await markPaywallDismissed();
+      router.replace('/home');
+    } catch (dismissError) {
+      console.error('[Exit offer] Could not save paywall dismissal.', dismissError);
+      setError('Could not open the app. Please try again.');
+    }
+  }, [markPaywallDismissed, processing]);
+
   useFocusEffect(useCallback(() => {
-    const subscription = BackHandler.addEventListener('hardwareBackPress', () => processing);
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (!processing) void dismissOffer();
+      return true;
+    });
     return () => subscription.remove();
-  }, [processing]));
+  }, [dismissOffer, processing]));
 
   const purchaseOffer = async () => {
     if (!offer || processing) return;
@@ -119,10 +133,10 @@ export default function ExitOfferScreen() {
             <Text style={[styles.brandText, { color: colors.text }]}>FXSNAP PRO</Text>
           </View>
           <TouchableOpacity
-            onPress={returnToPaywall}
+            onPress={() => void dismissOffer()}
             style={[styles.closeButton, { backgroundColor: colors.surface }]}
             accessibilityRole="button"
-            accessibilityLabel="Close special offer and return to subscription plans"
+            accessibilityLabel="Close special offer and continue to the app"
             disabled={processing}
           >
             <Feather name="x" size={20} color={colors.textSecondary} />

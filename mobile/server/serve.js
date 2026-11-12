@@ -4313,6 +4313,7 @@ async function analyzeChart(req, res) {
   if (!(await allowRequest(req, deviceId))) return sendJson(res, 429, { error: 'Too many requests. Try again shortly.' });
 
   let input = {};
+  let usesFreeAnalysis = false;
   try {
     input = await readJsonBody(req);
   } catch (error) {
@@ -4329,10 +4330,26 @@ async function analyzeChart(req, res) {
     if (!['image/jpeg', 'image/png', 'image/webp'].includes(mime)) {
       return sendJson(res, 400, { error: 'Only JPEG, PNG, and WebP chart images are supported.' });
     }
-    if (!(await requirePremiumSubscription(deviceId, res, true))) return;
     const hasOpenRouter = Boolean(process.env.OPENROUTER_API_KEY && !process.env.OPENROUTER_API_KEY.startsWith('replace_'));
     if (!hasOpenRouter) {
       return sendJson(res, 200, aiUnavailableResponse(input, 'Chart AI is not configured on the server. Set OPENROUTER_API_KEY.'));
+    }
+    if (!isDevelopmentAnalysisPremiumBypassEnabled()) {
+      const premium = await getRevenueCatPremiumStatus(deviceId);
+      if (premium === null) {
+        return sendJson(res, 503, { error: 'Unable to verify your subscription. Please try again.' });
+      }
+      if (!premium) {
+        const used = await persistentStore.getCounter(`fxsnap:free-analysis:${deviceId}`, 60 * 60 * 24 * 3650);
+        if (used >= 1) {
+          return sendJson(res, 402, {
+            code: 'PREMIUM_REQUIRED',
+            error: 'premium_required',
+            message: 'Your free chart analysis has been used. Subscribe to FXSnap Pro to run another analysis.',
+          });
+        }
+        usesFreeAnalysis = true;
+      }
     }
 
     let raw;
@@ -4404,6 +4421,10 @@ async function analyzeChart(req, res) {
       }
     }
 
+    if (usesFreeAnalysis && (result.status === 'success' || result.status === 'no_trade')) {
+      await persistentStore.increment(`fxsnap:free-analysis:${deviceId}`, 60 * 60 * 24 * 3650);
+      result.freeAnalysis = true;
+    }
     return sendJson(res, 200, result);
   } catch (error) {
     const detail = sanitizeDiagnosticText(error instanceof Error ? error.message : 'Unknown analysis error.');
@@ -4504,7 +4525,8 @@ async function getAnalysisAccess(req, res) {
   if (isDevelopmentAnalysisPremiumBypassEnabled()) return sendJson(res, 200, { canAnalyze: true });
   const premium = await getRevenueCatPremiumStatus(deviceId);
   if (premium === null) return sendJson(res, 503, { error: 'Unable to verify your subscription.' });
-  return sendJson(res, 200, { canAnalyze: premium });
+  const freeAnalysisUsed = await persistentStore.getCounter(`fxsnap:free-analysis:${deviceId}`, 60 * 60 * 24 * 3650);
+  return sendJson(res, 200, { canAnalyze: premium || freeAnalysisUsed < 1 });
 }
 
 function getPaywallRemoteConfig(req, res) {

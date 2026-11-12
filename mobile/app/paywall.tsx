@@ -127,7 +127,6 @@ export default function PaywallScreen() {
   const [retryOfferings, setRetryOfferings] = useState(0);
   const [remoteConfig, setRemoteConfig] = useState<PaywallRemoteConfig | null>(null);
   const [closeButtonVisible, setCloseButtonVisible] = useState(false);
-  const [exitOfferWasShown, setExitOfferWasShown] = useState(hasShownYearlyExitOfferThisSession);
   const [exitOfferLoading, setExitOfferLoading] = useState(false);
   const [exitOfferError, setExitOfferError] = useState('');
   const closeButtonProgress = useRef(new Animated.Value(0)).current;
@@ -153,7 +152,11 @@ export default function PaywallScreen() {
 
   const handleClosePaywall = useCallback(() => {
     if (exitOfferLoading) return;
-    if (hasShownYearlyExitOfferThisSession() || Platform.OS !== 'android') return;
+    if (Platform.OS !== 'android') return;
+    if (hasShownYearlyExitOfferThisSession()) {
+      router.push('/exit-offer');
+      return;
+    }
     setExitOfferLoading(true);
     setExitOfferError('Loading your special offer…');
     void (async () => {
@@ -175,7 +178,6 @@ export default function PaywallScreen() {
           return;
         }
         cacheYearlyExitOfferForSession({ package: offerPackage, option: discountedOption });
-        setExitOfferWasShown(true);
         setExitOfferError('');
         router.push('/exit-offer');
       } catch (offerError) {
@@ -443,7 +445,7 @@ export default function PaywallScreen() {
       >
         <View style={styles.topBar}>
           <View style={styles.closeButtonSlot}>
-            {closeButtonVisible && Platform.OS === 'android' && !exitOfferWasShown ? (
+            {closeButtonVisible && Platform.OS === 'android' ? (
               <Animated.View
                 style={{
                   opacity: closeButtonProgress,

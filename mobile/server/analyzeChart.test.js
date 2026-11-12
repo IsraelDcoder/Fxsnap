@@ -1740,10 +1740,14 @@ test('partial directional responses pass normalization without becoming actionab
   assert.equal(result.tradeDecision, 'NONE');
 });
 
-test('authenticated chart upload returns a complete plan and reserves invalid_image for non-charts', async () => {
+test('authenticated chart upload allows one free analysis and requires Pro for the next', async () => {
   const previousFetch = global.fetch;
   const previousApiKey = process.env.OPENROUTER_API_KEY;
   const previousRevenueCatKey = process.env.REVENUECAT_SECRET_API_KEY;
+  const persistentStore = require('./persistentStore');
+  const originalGetCounter = persistentStore.getCounter;
+  const originalIncrement = persistentStore.increment;
+  let freeAnalysisUsed = 0;
   let providerCalls = 0;
   let revenueCatEntitlementActive = true;
   let visiblePriceResponse = {
@@ -1837,17 +1841,29 @@ test('authenticated chart upload returns a complete plan and reserves invalid_im
     });
     const requestBody = { imageBase64: 'x'.repeat(120), mimeType: 'image/jpeg', pair: 'EURUSD', premiumAccess: true };
     const postAnalysis = () => post('/analyze-chart', requestBody);
+    persistentStore.getCounter = async () => freeAnalysisUsed;
+    persistentStore.increment = async (key, ttlSeconds) => (
+      key.startsWith('fxsnap:free-analysis:')
+        ? ++freeAnalysisUsed
+        : originalIncrement(key, ttlSeconds)
+    );
 
     revenueCatEntitlementActive = false;
-    const unpaid = await postAnalysis();
-    assert.equal(unpaid.statusCode, 402);
-    assert.equal(unpaid.body.code, 'PREMIUM_REQUIRED');
-    assert.equal(providerCalls, 0);
+    const freeAnalysis = await postAnalysis();
+    assert.equal(freeAnalysis.statusCode, 200);
+    assert.equal(freeAnalysis.body.status, 'success');
+    assert.equal(freeAnalysisUsed, 1);
+    assert.equal(providerCalls, 2);
+
+    const secondFreeAnalysis = await postAnalysis();
+    assert.equal(secondFreeAnalysis.statusCode, 402);
+    assert.equal(secondFreeAnalysis.body.code, 'PREMIUM_REQUIRED');
+    assert.equal(providerCalls, 2);
 
     revenueCatEntitlementActive = true;
     const response = await postAnalysis();
     assert.equal(response.statusCode, 200);
-    assert.equal(providerCalls, 2);
+    assert.equal(providerCalls, 4);
     assert.equal(response.body.status, 'success');
     assert.equal(response.body.trade_plan.direction, 'BUY');
     assert.equal(response.body.trade_setup.entry_zone, '1.1');
@@ -1902,7 +1918,7 @@ test('authenticated chart upload returns a complete plan and reserves invalid_im
     assert.equal(recoveredPrice.body.chart.latest_visible_price, '4340.77');
     assert.equal(recoveredPrice.body.chart.current_price_source, 'visible_price_marker');
     assert.equal(recoveredPrice.body.chart.rightmost_candle.direction, 'bearish');
-    assert.equal(providerCalls, 4);
+    assert.equal(providerCalls, 6);
 
     providerResponse = {
       status: 'no_trade',
@@ -1943,7 +1959,7 @@ test('authenticated chart upload returns a complete plan and reserves invalid_im
     assert.equal(recoveredSetup.body.trade_setup.take_profit, '1.102');
     assert.equal(recoveredSetup.body.tradeDecision, 'WAIT');
     assert.equal(recoveredSetup.body.levelFollowupStatus, 'completed');
-    assert.equal(providerCalls, 7);
+    assert.equal(providerCalls, 9);
 
     followupResponse = null;
     providerResponse = {
@@ -1958,13 +1974,13 @@ test('authenticated chart upload returns a complete plan and reserves invalid_im
     assert.equal(lowResolution.body.status, 'no_trade');
     assert.equal(lowResolution.body.trade_plan, null);
     assert.equal(lowResolution.body.bias, 'NEUTRAL');
-    assert.equal(providerCalls, 10);
+    assert.equal(providerCalls, 12);
 
     providerResponse = { status: 'invalid_image', chart: { is_chart: false } };
     const nonChart = await postAnalysis();
     assert.equal(nonChart.body.status, 'invalid_image');
     assert.equal(nonChart.body.trade_plan, null);
-    assert.equal(providerCalls, 11);
+    assert.equal(providerCalls, 13);
   } finally {
     server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));
@@ -1973,6 +1989,8 @@ test('authenticated chart upload returns a complete plan and reserves invalid_im
     else process.env.OPENROUTER_API_KEY = previousApiKey;
     if (previousRevenueCatKey == null) delete process.env.REVENUECAT_SECRET_API_KEY;
     else process.env.REVENUECAT_SECRET_API_KEY = previousRevenueCatKey;
+    persistentStore.getCounter = originalGetCounter;
+    persistentStore.increment = originalIncrement;
   }
 });
 
