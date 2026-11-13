@@ -72,14 +72,13 @@ async function getRegisteredTokens() {
 }
 
 function buildCampaign(entry, events, now, isSubscribed) {
-  const deviceEvents = events.filter((event) => event.deviceId === entry.deviceId);
-  const lastSeenAt = deviceEvents.reduce((latest, event) => {
+  const lastSeenAt = events.reduce((latest, event) => {
     const occurredAt = Date.parse(event.occurredAt);
     return Number.isFinite(occurredAt) && occurredAt > latest ? occurredAt : latest;
   }, Date.parse(entry.registeredAt) || 0);
   const weekStart = getStartOfWeek(now).getTime();
   const activityStart = now.getUTCDay() === 1 ? weekStart - 7 * 24 * 60 * 60 * 1000 : weekStart;
-  const recentEvents = deviceEvents.filter((event) => Date.parse(event.occurredAt) >= activityStart && Date.parse(event.occurredAt) < weekStart);
+  const recentEvents = events.filter((event) => Date.parse(event.occurredAt) >= activityStart && Date.parse(event.occurredAt) < weekStart);
   const chartAnalyses = recentEvents.filter((event) => event.name === 'analysis_succeeded').length;
   const lastSent = entry.lastNotificationAt ? Date.parse(entry.lastNotificationAt) : 0;
   if (now.getTime() - lastSent < CAMPAIGN_COOLDOWN_MS) return null;
@@ -120,11 +119,27 @@ async function sendScheduledCampaigns(now = new Date(), isPremium = async () => 
   if (!process.env.EXPO_ACCESS_TOKEN) return { sent: 0, skipped: 'EXPO_ACCESS_TOKEN is not configured.' };
   const entries = (await getRegisteredTokens()).filter((entry) => entry.accountId && entry.supabaseUserId);
   const activeReminderDeviceIds = await supabasePushStore.listActivePaywallReminderDeviceIds();
-  const events = await persistentStore.getJson('fxsnap:events') || [];
+  const dayKeys = Array.from({ length: 8 }, (_, offset) => {
+    const date = new Date(now);
+    date.setUTCDate(date.getUTCDate() - offset);
+    return `fxsnap:events:${date.toISOString().slice(0, 10)}`;
+  });
+  const eventBuckets = await Promise.all([
+    persistentStore.getJson('fxsnap:events'),
+    ...dayKeys.map((key) => persistentStore.getJson(key)),
+  ]);
+  const events = eventBuckets.flatMap((bucket) => Array.isArray(bucket) ? bucket : []);
+  const eventsByDevice = new Map();
+  for (const event of events) {
+    if (typeof event?.deviceId !== 'string') continue;
+    const deviceEvents = eventsByDevice.get(event.deviceId) || [];
+    deviceEvents.push(event);
+    eventsByDevice.set(event.deviceId, deviceEvents);
+  }
   const results = [];
   for (const entry of entries) {
     if (activeReminderDeviceIds.has(entry.deviceId)) continue;
-    const campaign = buildCampaign(entry, events, now, await isPremium(entry.deviceId));
+    const campaign = buildCampaign(entry, eventsByDevice.get(entry.deviceId) || [], now, await isPremium(entry.deviceId));
     if (!campaign) continue;
     const result = await sendCampaign({ ...campaign, token: entry.token, deviceId: entry.deviceId });
     if (result.sent) {

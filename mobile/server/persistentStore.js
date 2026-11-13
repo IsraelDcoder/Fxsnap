@@ -137,10 +137,68 @@ async function deleteKey(key, ttlSeconds) {
 }
 
 async function appendJson(key, value, maxItems, ttlSeconds) {
-  const current = (await getJson(key)) || [];
-  const list = [...current, value];
-  while (list.length > maxItems) list.shift();
-  return setJson(key, list, ttlSeconds);
+  const additions = Array.isArray(value) ? value : [value];
+  if (!Number.isInteger(maxItems) || maxItems < 1) throw new Error('appendJson requires a positive maxItems value.');
+
+  if (supabaseEnabled) {
+    return supabaseRpc('fxsnap_kv_append_json', {
+      p_key: key,
+      p_values: additions,
+      p_max_items: maxItems,
+      p_ttl_seconds: ttlSeconds || 0,
+    });
+  }
+  if (await connect()) {
+    const script = `
+      local stored = redis.call('GET', KEYS[1])
+      local current = {}
+      if stored then
+        local ok, decoded = pcall(cjson.decode, stored)
+        if ok and type(decoded) == 'table' then current = decoded end
+      end
+      local additions = cjson.decode(ARGV[1])
+      local seen = {}
+      for _, item in ipairs(current) do
+        local id = type(item) == 'table' and (item.dedupeId or item.id) or nil
+        if type(id) == 'string' then seen[id] = true end
+      end
+      for _, item in ipairs(additions) do
+        local id = type(item) == 'table' and (item.dedupeId or item.id) or nil
+        if type(id) ~= 'string' or not seen[id] then
+          table.insert(current, item)
+          if type(id) == 'string' then seen[id] = true end
+        end
+      end
+      while #current > tonumber(ARGV[2]) do table.remove(current, 1) end
+      if tonumber(ARGV[3]) > 0 then
+        redis.call('SET', KEYS[1], cjson.encode(current), 'EX', tonumber(ARGV[3]))
+      else
+        redis.call('SET', KEYS[1], cjson.encode(current))
+      end
+      return 1
+    `;
+    return redisClient.eval(script, {
+      keys: [key],
+      arguments: [JSON.stringify(additions), String(maxItems), String(ttlSeconds || 0)],
+    });
+  }
+
+  pruneExpired();
+  const current = memoryStore.get(key)?.value;
+  const list = Array.isArray(current) ? [...current] : [];
+  const seen = new Set(list.map((item) => item?.dedupeId || item?.id).filter((id) => typeof id === 'string'));
+  for (const item of additions) {
+    const id = item?.dedupeId || item?.id;
+    if (typeof id !== 'string' || !seen.has(id)) {
+      list.push(item);
+      if (typeof id === 'string') seen.add(id);
+    }
+  }
+  memoryStore.set(key, {
+    value: list.slice(-maxItems),
+    expiresAt: ttlSeconds ? Date.now() + ttlSeconds * 1000 : null,
+  });
+  return true;
 }
 
 module.exports = {

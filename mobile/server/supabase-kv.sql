@@ -227,5 +227,58 @@ $$;
 revoke all on function public.fxsnap_kv_increment(text, integer) from public;
 grant execute on function public.fxsnap_kv_increment(text, integer) to service_role;
 
+create or replace function public.fxsnap_kv_append_json(
+  p_key text,
+  p_values jsonb,
+  p_max_items integer,
+  p_ttl_seconds integer
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if jsonb_typeof(p_values) <> 'array' or p_max_items < 1 or p_ttl_seconds < 0 then
+    raise exception 'Invalid atomic JSON append arguments.';
+  end if;
+
+  insert into public.fxsnap_kv (key, value, expires_at)
+  values (p_key, p_values, case when p_ttl_seconds > 0 then now() + make_interval(secs => p_ttl_seconds) else null end)
+  on conflict (key) do update
+    set value = (
+      select coalesce(jsonb_agg(item order by ordinal), '[]'::jsonb)
+      from (
+        select item, ordinal
+        from (
+          select distinct on (dedupe_key) item, ordinal
+          from (
+            select item, ordinal,
+              case
+                when jsonb_typeof(item) = 'object' and nullif(item->>'dedupeId', '') is not null then item->>'dedupeId'
+                when jsonb_typeof(item) = 'object' and nullif(item->>'id', '') is not null then item->>'id'
+                else 'legacy-' || ordinal::text
+              end as dedupe_key
+            from jsonb_array_elements(
+              case
+                when public.fxsnap_kv.expires_at is not null and public.fxsnap_kv.expires_at <= now() then '[]'::jsonb
+                when jsonb_typeof(public.fxsnap_kv.value) = 'array' then public.fxsnap_kv.value
+                else '[]'::jsonb
+              end || excluded.value
+            ) with ordinality as event_rows(item, ordinal)
+          ) combined
+          order by dedupe_key, ordinal
+        ) deduplicated
+        order by ordinal desc
+        limit p_max_items
+      ) bounded
+    ),
+    expires_at = case when p_ttl_seconds > 0 then now() + make_interval(secs => p_ttl_seconds) else null end;
+  return true;
+end;
+$$;
+revoke all on function public.fxsnap_kv_append_json(text, jsonb, integer, integer) from public, anon, authenticated;
+grant execute on function public.fxsnap_kv_append_json(text, jsonb, integer, integer) to service_role;
+
 drop function if exists public.fxsnap_kv_set_if_absent(text, jsonb, integer);
 drop function if exists public.fxsnap_kv_delete_if_value(text, jsonb);

@@ -1834,13 +1834,27 @@ test('authenticated chart upload allows one free analysis and requires Pro for t
         let responseText = '';
         response.setEncoding('utf8');
         response.on('data', (chunk) => { responseText += chunk; });
-        response.on('end', () => resolve({ statusCode: response.statusCode, body: JSON.parse(responseText) }));
+        response.on('end', () => resolve({
+          statusCode: response.statusCode,
+          body: responseText ? JSON.parse(responseText) : null,
+        }));
       });
       request.once('error', reject);
       request.end(requestText);
     });
     const requestBody = { imageBase64: 'x'.repeat(120), mimeType: 'image/jpeg', pair: 'EURUSD', premiumAccess: true };
     const postAnalysis = () => post('/analyze-chart', requestBody);
+    const analyticsResponses = [await post('/api/events', {
+      events: [
+        { name: 'analysis-test-batch-1', properties: {} },
+        { name: 'analysis-test-batch-2', properties: {} },
+      ],
+    })];
+    for (let index = 1; index < 31; index += 1) {
+      analyticsResponses.push(await post('/api/events', { name: `analysis-test-${index}`, properties: {} }));
+    }
+    assert.equal(analyticsResponses.slice(0, 30).every((response) => response.statusCode === 204), true);
+    assert.equal(analyticsResponses[30].statusCode, 429);
     persistentStore.getCounter = async () => freeAnalysisUsed;
     persistentStore.increment = async (key, ttlSeconds) => (
       key.startsWith('fxsnap:free-analysis:')

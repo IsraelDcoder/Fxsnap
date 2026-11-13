@@ -1,4 +1,4 @@
-import { getApiHeaders, resolveApiBaseUrl } from '@/services/apiAuth';
+import { fetchWithApiAuth, getApiHeaders, resolveApiBaseUrl } from '@/services/apiAuth';
 
 const API_URL = resolveApiBaseUrl();
 
@@ -347,7 +347,7 @@ export async function analyzeChartImage(
 
 async function sendChartAnalysis(path: string, body: Record<string, unknown>): Promise<ChartAnalysisResult> {
   try {
-    const response = await fetch(`${API_URL}${path}`, {
+    const response = await fetchWithApiAuth(`${API_URL}${path}`, {
       method: 'POST',
       headers: await getApiHeaders(),
       body: JSON.stringify(body),

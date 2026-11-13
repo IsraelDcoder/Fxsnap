@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
-import { API_BASE_URL, getApiHeaders, getDeviceId } from './apiAuth';
+import { API_BASE_URL, fetchWithApiAuth, getApiHeaders, getDeviceId } from './apiAuth';
 import { notifyAccountDataChanged } from './accountDataEvents';
 import { getFxsnapAccountApiHeaders, getOptionalFxsnapAccountApiHeaders } from './account';
 import { formatExpoPushTokenError } from './notificationErrors';
@@ -145,7 +145,7 @@ export async function requestAndRegisterPushNotifications(preferences?: Notifica
 
   let response: Response;
   try {
-    response = await fetch(`${API_BASE_URL}/api/push-token`, {
+    response = await fetchWithApiAuth(`${API_BASE_URL}/api/push-token`, {
       method: 'POST',
       headers: { ...(await getOptionalFxsnapAccountApiHeaders()), 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -181,7 +181,7 @@ export async function schedulePaywallReminderSequence(): Promise<boolean> {
   const preferences = await getNotificationPreferences();
   if (!preferences.enabled || !preferences.inactivity) return false;
 
-  const response = await fetch(`${API_BASE_URL}/api/notifications/paywall-reminders`, {
+  const response = await fetchWithApiAuth(`${API_BASE_URL}/api/notifications/paywall-reminders`, {
     method: 'POST',
     headers: await getApiHeaders(),
   });
@@ -237,7 +237,7 @@ export function getNotificationRoute(data: Record<string, unknown> | undefined):
 }
 
 export async function registerPushToken(cluster: { token: string; platform: string; deviceId: string }) {
-  const response = await fetch(`${API_BASE_URL}/api/push-token`, {
+  const response = await fetchWithApiAuth(`${API_BASE_URL}/api/push-token`, {
     method: 'POST',
     headers: { ...(await getFxsnapAccountApiHeaders()), 'content-type': 'application/json' },
     body: JSON.stringify(cluster),
@@ -246,7 +246,7 @@ export async function registerPushToken(cluster: { token: string; platform: stri
 }
 
 export async function unregisterPushToken() {
-  const response = await fetch(`${API_BASE_URL}/api/push-token`, {
+  const response = await fetchWithApiAuth(`${API_BASE_URL}/api/push-token`, {
     method: 'DELETE',
     headers: await getOptionalFxsnapAccountApiHeaders(),
   });

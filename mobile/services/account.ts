@@ -3,7 +3,7 @@ import * as SecureStore from 'expo-secure-store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
-import { getApiHeaders, resolveApiBaseUrl } from '@/services/apiAuth';
+import { fetchWithApiAuth, getApiHeaders, resolveApiBaseUrl } from '@/services/apiAuth';
 import { getSupabaseClient, hasSupabaseConfiguration } from '@/services/supabase';
 import { createCommunityPreviewAccount } from '@/services/communityPreview';
 
@@ -119,7 +119,7 @@ export async function getAuthenticatedAccount(): Promise<FxsnapAccount | null> {
     return accessToken ? provisionFxsnapAccount(accessToken) : null;
   }
 
-  const response = await fetch(`${API_URL}/api/account`, {
+  const response = await fetchWithApiAuth(`${API_URL}/api/account`, {
     method: 'GET',
     headers: accountTokenHeaders(token, await getApiHeaders()),
   });
@@ -146,7 +146,7 @@ async function provisionFxsnapAccount(supabaseAccessToken: string): Promise<Fxsn
     throw new Error('Supabase did not return a valid account session.');
   }
 
-  const response = await fetch(`${API_URL}/api/account/supabase`, {
+  const response = await fetchWithApiAuth(`${API_URL}/api/account/supabase`, {
     method: 'POST',
     headers: await getApiHeaders(),
     body: JSON.stringify({ accessToken: supabaseAccessToken }),
@@ -228,7 +228,7 @@ export async function getFxsnapAccountData(): Promise<FxsnapAccountData | null> 
   const token = await SecureStore.getItemAsync(ACCOUNT_TOKEN_KEY);
   if (!token) throw new Error('Sign in to sync your FXSnap data.');
 
-  const response = await fetch(`${API_URL}/api/account/data`, {
+  const response = await fetchWithApiAuth(`${API_URL}/api/account/data`, {
     method: 'GET',
     headers: accountTokenHeaders(token, await getApiHeaders()),
   });
@@ -243,7 +243,7 @@ export async function saveFxsnapAccountData(data: FxsnapAccountData): Promise<vo
   const token = await SecureStore.getItemAsync(ACCOUNT_TOKEN_KEY);
   if (!token) throw new Error('Sign in to sync your FXSnap data.');
 
-  const response = await fetch(`${API_URL}/api/account/data`, {
+  const response = await fetchWithApiAuth(`${API_URL}/api/account/data`, {
     method: 'POST',
     headers: accountTokenHeaders(token, await getApiHeaders()),
     body: JSON.stringify({ data }),
@@ -255,7 +255,7 @@ export async function signOutOfFxsnapAccount(): Promise<void> {
   ensureNativeSecureStorage();
   const token = await SecureStore.getItemAsync(ACCOUNT_TOKEN_KEY);
   if (token) {
-    const response = await fetch(`${API_URL}/api/account/session`, {
+    const response = await fetchWithApiAuth(`${API_URL}/api/account/session`, {
       method: 'DELETE',
       headers: accountTokenHeaders(token, await getApiHeaders()),
     });
@@ -274,7 +274,7 @@ export async function deleteFxsnapAccount(): Promise<void> {
   const token = await SecureStore.getItemAsync(ACCOUNT_TOKEN_KEY);
   if (!token) throw new Error('Sign in again before deleting your FXSnap account.');
 
-  const response = await fetch(`${API_URL}/api/account`, {
+  const response = await fetchWithApiAuth(`${API_URL}/api/account`, {
     method: 'DELETE',
     headers: accountTokenHeaders(token, await getApiHeaders()),
   });

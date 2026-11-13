@@ -1438,7 +1438,8 @@ export default function CommunityScreen() {
   const moderate = async (action: 'pin' | 'unpin' | 'remove_message', post: CommunityMessage) => {
     try {
       const headers = await (await import('@/services/account')).getFxsnapAccountApiHeaders();
-      const response = await fetch(`${(await import('@/services/apiAuth')).API_BASE_URL}/api/admin/community/moderation`, {
+      const { API_BASE_URL, fetchWithApiAuth } = await import('@/services/apiAuth');
+      const response = await fetchWithApiAuth(`${API_BASE_URL}/api/admin/community/moderation`, {
         method: 'POST',
         headers,
         body: JSON.stringify({ action, messageId: post.id }),

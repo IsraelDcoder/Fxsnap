@@ -3295,16 +3295,35 @@ async function generateStrategy(req, res) {
   }
 }
 
-async function allowRequest(req, deviceId) {
-  const ip = deviceId || req.socket.remoteAddress || 'unknown';
-  const redisCount = await persistentStore.increment(`fxsnap:rate:${ip}`, 60);
-  if (redisCount !== null) return redisCount <= 30;
+async function allowRequest(req, deviceId, limiterName, maximum = 30, windowSeconds = 60) {
+  const identity = deviceId || req.socket.remoteAddress || 'unknown';
+  const key = `fxsnap:rate:${limiterName}:${identity}`;
+  const redisCount = await persistentStore.increment(key, windowSeconds);
+  if (redisCount !== null) {
+    if (redisCount <= maximum) return true;
+    logRateLimitRejection(req, limiterName, redisCount, maximum, windowSeconds);
+    return false;
+  }
   const now = Date.now();
-  const record = requestCounts.get(ip) || { started: now, count: 0 };
-  if (now - record.started > 60_000) { record.started = now; record.count = 0; }
+  const record = requestCounts.get(key) || { started: now, count: 0 };
+  if (now - record.started > windowSeconds * 1000) { record.started = now; record.count = 0; }
   record.count += 1;
-  requestCounts.set(ip, record);
-  return record.count <= 30;
+  requestCounts.set(key, record);
+  if (record.count <= maximum) return true;
+  logRateLimitRejection(req, limiterName, record.count, maximum, windowSeconds);
+  return false;
+}
+
+function logRateLimitRejection(req, limiterName, count, maximum, windowSeconds) {
+  const route = String(req.url || '/').split('?')[0];
+  console.warn('[RateLimit] Request rejected.', {
+    limiter: limiterName,
+    route,
+    status: 429,
+    count,
+    maximum,
+    windowSeconds,
+  });
 }
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = 12_000) {
@@ -3407,6 +3426,14 @@ async function callVisionModel(messages, timeoutMs = 30000, retryWithoutJsonMode
   });
 
   if (!response.ok) {
+    if (response.status === 429) {
+      console.warn('[ProviderRateLimit] Upstream provider rejected a request.', {
+        provider: 'openrouter',
+        route: '/chat/completions',
+        upstreamStatus: response.status,
+        model,
+      });
+    }
     if (retryWithoutJsonMode && response.status === 400) {
       console.warn('[Chart AI] JSON-mode request was rejected; retrying once without response_format.', {
         error: sanitizeDiagnosticText(payload?.error?.message || 'OpenRouter vision failed'),
@@ -4310,7 +4337,7 @@ function aiInvalidResponse(input, message) {
 
 async function analyzeChart(req, res) {
   const deviceId = requireAuth(req, res); if (!deviceId) return;
-  if (!(await allowRequest(req, deviceId))) return sendJson(res, 429, { error: 'Too many requests. Try again shortly.' });
+  if (!(await allowRequest(req, deviceId, 'chart_analysis'))) return sendJson(res, 429, { error: 'Too many requests. Try again shortly.' });
 
   let input = {};
   let usesFreeAnalysis = false;
@@ -4435,13 +4462,48 @@ async function analyzeChart(req, res) {
 
 async function receiveEvent(req, res) {
   const deviceId = requireAuth(req, res); if (!deviceId) return;
-  if (!(await allowRequest(req, deviceId))) return sendJson(res, 429, { error: 'Too many requests.' });
+  if (!(await allowRequest(req, deviceId, 'analytics'))) return sendJson(res, 429, { error: 'Too many requests.' });
   try {
-    const event = await readJsonBody(req);
-    if (typeof event.name !== 'string' || event.name.length > 80) return sendJson(res, 400, { error: 'Invalid event.' });
-    const storedEvent = { deviceId, name: event.name, properties: event.properties || {}, occurredAt: event.occurredAt || new Date().toISOString() };
-    if (!(await persistentStore.appendJson('fxsnap:events', storedEvent, 10000, 60 * 60 * 24 * 90))) recentEvents.push(storedEvent);
-    if (recentEvents.length > 1000) recentEvents.shift();
+    const body = await readJsonBody(req);
+    const events = Array.isArray(body.events) ? body.events : [body];
+    if (events.length < 1 || events.length > 50
+      || events.some((event) => !event || typeof event.name !== 'string' || event.name.length > 80)) {
+      return sendJson(res, 400, { error: 'Invalid event batch.' });
+    }
+
+    const storedEvents = [];
+    for (const event of events) {
+      const occurredAt = event.occurredAt || new Date().toISOString();
+      const date = new Date(occurredAt);
+      if (!Number.isFinite(date.getTime())) return sendJson(res, 400, { error: 'Invalid event timestamp.' });
+      const eventId = typeof event.id === 'string' && event.id.length > 0 && event.id.length <= 120
+        ? event.id
+        : undefined;
+      storedEvents.push({
+        id: eventId,
+        dedupeId: eventId ? `${deviceId}:${eventId}` : undefined,
+        deviceId,
+        name: event.name,
+        properties: event.properties || {},
+        occurredAt: date.toISOString(),
+      });
+    }
+
+    const eventsByDay = new Map();
+    for (const event of storedEvents) {
+      const bucketDay = event.occurredAt.slice(0, 10);
+      const bucket = eventsByDay.get(bucketDay) || [];
+      bucket.push(event);
+      eventsByDay.set(bucketDay, bucket);
+    }
+    try {
+      await Promise.all(Array.from(eventsByDay, ([day, dayEvents]) => (
+        persistentStore.appendJson(`fxsnap:events:${day}`, dayEvents, 10000, 60 * 60 * 24 * 8)
+      )));
+    } catch (error) {
+      console.error('[Telemetry] Event persistence failed:', error instanceof Error ? error.message : 'Unknown storage error.');
+      return sendJson(res, 503, { error: 'Event persistence failed.' });
+    }
     return sendJson(res, 204, {});
   } catch (error) { return sendJson(res, 400, { error: error.message }); }
 }
@@ -4721,7 +4783,7 @@ function createRequestHandler() {
       if (!deviceId) return;
       if (!persistentStore.supabaseEnabled) return sendJson(res, 503, { error: 'Push reminders require Supabase storage.' });
       const notifications = require('./notificationService');
-      return allowRequest(req, deviceId)
+      return allowRequest(req, deviceId, 'paywall_reminders')
         .then((allowed) => {
           if (!allowed) return sendJson(res, 429, { error: 'Too many requests.' });
           return notifications.startPaywallReminderSequence(deviceId)
