@@ -5,6 +5,7 @@ import { router } from 'expo-router';
 import { addBillingListener, billingIsConfigured, configureBilling, getPremiumStatus, purchasePlan, restorePurchases, type BillingPlan } from '@/services/billing';
 import { getFeatureAccessDecision, type FeatureAccessDecision, type ProtectedFeature } from '@/services/featureAccess';
 import { setHapticsEnabled } from '@/services/haptics';
+import { getServerAnalysisAccess } from '@/services/apiAuth';
 import { createDailyRiskActivity, getLocalRiskDateKey, normalizeDailyRiskActivity, type DailyRiskActivity, type OpenRiskPosition } from '@/services/risk';
 import {
   getAuthenticatedAccount,
@@ -25,10 +26,37 @@ export interface AnalysisResult {
   pair: string;
   status?: AnalysisStatus;
   message?: string;
+  freeAnalysis?: boolean;
   direction?: 'BUY' | 'SELL';
   timeframe?: string;
   takeProfitLevels?: string[];
   latestVisiblePrice?: number;
+  rightmostCandle?: {
+    identified: boolean;
+    direction: 'bullish' | 'bearish' | 'doji' | 'unclear';
+    open: number | null;
+    high: number | null;
+    low: number | null;
+    close: number | null;
+    reading: string;
+  };
+  liveMarketData?: {
+    status: 'verified' | 'stale' | 'unavailable' | 'symbol_mismatch';
+    price: number | null;
+    timestamp: string | null;
+    source: string | null;
+    checkedAt: string;
+    reason?: string;
+  };
+  signalMetadata?: {
+    candle_open_time: string | null;
+    candle_close_time: string | null;
+    data_timestamp: string | null;
+    timeframe: string | null;
+    price_at_signal: number | null;
+    is_candle_forming: boolean | null;
+    data_source: string | null;
+  };
   priceSeries?: number[];
   reasoning?: string[];
   supportResistance?: {
@@ -75,7 +103,7 @@ export interface AnalysisResult {
     stopLoss: number;
     takeProfit1: number;
     takeProfit2: number | null;
-    riskReward: number;
+    riskReward: number | null;
   } | null;
   verdict?: 'TRADE_PLAN' | 'CONDITIONAL_PLAN' | 'NO_TRADE';
   conviction?: 'HIGH' | 'MEDIUM' | 'LOW' | null;
@@ -540,7 +568,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const subscriptionActive = billingAvailable && !billingStatusReady
       ? await (billingStatusPromise.current ?? Promise.resolve(false))
       : isSubscribed;
-    const decision = getFeatureAccessDecision(feature, subscriptionActive);
+    let decision = getFeatureAccessDecision(feature, subscriptionActive);
+    if (!subscriptionActive && (feature === 'AI_ANALYSIS' || feature === 'TRADE_SETUP')) {
+      const access = await getServerAnalysisAccess().catch((error: unknown) => {
+        console.error('[ACCESS] Could not verify free analysis availability.', error);
+        return null;
+      });
+      if (!access) {
+        return { allowed: false, requiresPaywall: false, error: 'Could not verify free analysis access. Please try again.' };
+      }
+      if (access.canAnalyze) decision = { allowed: true, requiresPaywall: false };
+    }
     if (grantAnalysisRoute && decision.allowed && route === '/analysis') {
       analysisAccessGrant.current = true;
     }

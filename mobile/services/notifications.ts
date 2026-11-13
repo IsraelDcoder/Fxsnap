@@ -1,9 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as SecureStore from 'expo-secure-store';
 import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
-import { API_BASE_URL, getApiHeaders, getDeviceId } from './apiAuth';
+import { API_BASE_URL, fetchWithApiAuth, getApiHeaders, getDeviceId } from './apiAuth';
 import { notifyAccountDataChanged } from './accountDataEvents';
 import { getFxsnapAccountApiHeaders, getOptionalFxsnapAccountApiHeaders } from './account';
 import { formatExpoPushTokenError } from './notificationErrors';
@@ -37,7 +36,7 @@ export type PushNotificationPayload = {
 };
 
 const NOTIFICATION_SETTINGS_KEY = 'fxsnap:notificationSettings';
-const PUSH_TOKEN_KEY = 'fxsnap_pushToken';
+const PUSH_TOKEN_KEY = 'fxsnapPushToken';
 
 Notifications.setNotificationHandler({
   handleNotification: async (notification) => {
@@ -115,6 +114,10 @@ export async function requestAndRegisterPushNotifications(preferences?: Notifica
       name: 'FXSnap Community',
       importance: Notifications.AndroidImportance.DEFAULT,
     });
+    await Notifications.setNotificationChannelAsync('fxsnap-events', {
+      name: 'Live spaces',
+      importance: Notifications.AndroidImportance.HIGH,
+    });
     await Notifications.setNotificationChannelAsync('fxsnap-retention', {
       name: 'FXSnap updates',
       importance: Notifications.AndroidImportance.DEFAULT,
@@ -142,7 +145,7 @@ export async function requestAndRegisterPushNotifications(preferences?: Notifica
 
   let response: Response;
   try {
-    response = await fetch(`${API_BASE_URL}/api/push-token`, {
+    response = await fetchWithApiAuth(`${API_BASE_URL}/api/push-token`, {
       method: 'POST',
       headers: { ...(await getOptionalFxsnapAccountApiHeaders()), 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -163,8 +166,7 @@ export async function requestAndRegisterPushNotifications(preferences?: Notifica
     throw new Error(`Push token registration failed (${response.status})${detail ? `: ${detail}` : ''}`);
   }
 
-  await SecureStore.setItemAsync(PUSH_TOKEN_KEY, token);
-  await AsyncStorage.removeItem(PUSH_TOKEN_KEY);
+  await AsyncStorage.setItem(PUSH_TOKEN_KEY, token);
   return { granted: true, token };
 }
 
@@ -172,6 +174,24 @@ export async function syncRegisteredPushNotifications() {
   const preferences = await getNotificationPreferences();
   if (!preferences.enabled) return;
   await requestAndRegisterPushNotifications(preferences, false);
+}
+
+export async function schedulePaywallReminderSequence(): Promise<boolean> {
+  if (Platform.OS === 'web') return false;
+  const preferences = await getNotificationPreferences();
+  if (!preferences.enabled || !preferences.inactivity) return false;
+
+  const response = await fetchWithApiAuth(`${API_BASE_URL}/api/notifications/paywall-reminders`, {
+    method: 'POST',
+    headers: await getApiHeaders(),
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null);
+    const detail = payload && typeof payload.error === 'string' ? payload.error : '';
+    throw new Error(`Could not schedule FXSnap reminders (${response.status})${detail ? `: ${detail}` : ''}.`);
+  }
+  const payload = await response.json();
+  return payload.scheduled === true;
 }
 
 export function registerForegroundNotificationHandler(
@@ -217,7 +237,7 @@ export function getNotificationRoute(data: Record<string, unknown> | undefined):
 }
 
 export async function registerPushToken(cluster: { token: string; platform: string; deviceId: string }) {
-  const response = await fetch(`${API_BASE_URL}/api/push-token`, {
+  const response = await fetchWithApiAuth(`${API_BASE_URL}/api/push-token`, {
     method: 'POST',
     headers: { ...(await getFxsnapAccountApiHeaders()), 'content-type': 'application/json' },
     body: JSON.stringify(cluster),
@@ -226,15 +246,15 @@ export async function registerPushToken(cluster: { token: string; platform: stri
 }
 
 export async function unregisterPushToken() {
-  const response = await fetch(`${API_BASE_URL}/api/push-token`, {
+  const response = await fetchWithApiAuth(`${API_BASE_URL}/api/push-token`, {
     method: 'DELETE',
     headers: await getOptionalFxsnapAccountApiHeaders(),
   });
   if (!response.ok) throw new Error('Unable to unregister push token');
-  await SecureStore.deleteItemAsync(PUSH_TOKEN_KEY);
+  await AsyncStorage.removeItem(PUSH_TOKEN_KEY);
 }
 
 export async function clearNotificationPreferences() {
   await AsyncStorage.removeItem(NOTIFICATION_SETTINGS_KEY);
-  await SecureStore.deleteItemAsync(PUSH_TOKEN_KEY);
+  await AsyncStorage.removeItem(PUSH_TOKEN_KEY);
 }

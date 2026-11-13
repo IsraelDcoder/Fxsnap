@@ -86,7 +86,11 @@ import {
   type CommunityProfile,
   type CommunityReaction,
 } from '@/services/community';
-import { readCommunityFeedCache, writeCommunityFeedCache } from '@/services/communityFeedCache';
+import {
+  readCommunityFeedCache,
+  removeCommunityPostFromFeedCache,
+  writeCommunityFeedCache,
+} from '@/services/communityFeedCache';
 import {
   applyCommunityReaction,
   COMMUNITY_VIEW_BATCH_SIZE,
@@ -359,6 +363,7 @@ export default function CommunityScreen() {
   const currentAccountIdRef = useRef<string | null>(null);
   const currentPostIdsRef = useRef(new Set<string>());
   const currentDiscussionMessageIdsRef = useRef(new Set<string>());
+  const removedMessageIdsRef = useRef(new Set<string>());
   const processedPostId = useRef<string | null>(null);
   const processedAnalysisId = useRef<string | null>(null);
   const skipBootstrapFeedFetch = useRef(false);
@@ -470,16 +475,20 @@ export default function CommunityScreen() {
         before: reset ? null : nextCursor,
         limit: 30,
       });
+      const visibleMessages = page.messages.filter((post) => !removedMessageIdsRef.current.has(post.id));
       setPosts((previous) => {
-        if (reset) return page.messages;
+        if (reset) return visibleMessages;
         const seen = new Set(previous.map((post) => post.id));
-        return [...previous, ...page.messages.filter((post) => !seen.has(post.id))];
+        return [...previous, ...visibleMessages.filter((post) => !seen.has(post.id))];
       });
       setNextCursor(page.nextCursor);
       setHasMore(page.hasMore);
       setFollowingEmpty(page.followingEmpty === true);
       if (reset && profile && account?.email) {
-        void writeCommunityFeedCache(account.email, feed, category, profile, page).catch((error) => {
+        void writeCommunityFeedCache(account.email, feed, category, profile, {
+          ...page,
+          messages: visibleMessages,
+        }).catch((error) => {
           console.warn('[Community] Could not save the feed cache.', error);
         });
       }
@@ -491,6 +500,26 @@ export default function CommunityScreen() {
       setRefreshing(false);
     }
   }, [account?.email, category, feed, nextCursor, profile, stage]);
+
+  const removeMessageFromCommunityState = useCallback((messageId: string) => {
+    removedMessageIdsRef.current.add(messageId);
+    setPosts((previous) => previous.filter((item) => item.id !== messageId));
+    setComments((previous) => previous.filter((item) => item.id !== messageId && item.replyTo?.id !== messageId));
+    setThreadReplies((previous) => previous.filter((item) => item.id !== messageId && item.replyTo?.id !== messageId));
+    setCommentPost((previous) => previous?.id === messageId ? null : previous);
+    setReplyTarget((previous) => previous?.id === messageId ? null : previous);
+    setEditingPost((previous) => previous?.id === messageId ? null : previous);
+    setPostActionsPost((previous) => previous?.id === messageId ? null : previous);
+
+    if (account?.email) {
+      void removeCommunityPostFromFeedCache(account.email, messageId).catch((error) => {
+        console.error('[Community] Could not invalidate the removed post in the feed cache.', {
+          messageId,
+          errorName: error instanceof Error ? error.name : 'UnknownError',
+        });
+      });
+    }
+  }, [account?.email]);
 
   const refreshNotifications = useCallback(async () => {
     const result = await getCommunityNotifications();
@@ -607,6 +636,11 @@ export default function CommunityScreen() {
           console.error('[Community] Could not refresh notifications.', error);
         });
       }
+      if (eventType === 'message_removed' && objectId) {
+        removeMessageFromCommunityState(objectId);
+        console.info('[Community] Applied live post removal.', { messageId: objectId });
+        return;
+      }
       if ((eventType !== 'message' && eventType !== 'announcement' && eventType !== 'reaction') || !objectId) return;
       if (eventType === 'reaction'
         && !currentPostIdsRef.current.has(objectId)
@@ -644,7 +678,7 @@ export default function CommunityScreen() {
     return () => {
       unsubscribe();
     };
-  }, [category, feed, profile, refreshNotifications, stage]);
+  }, [category, feed, profile, refreshNotifications, removeMessageFromCommunityState, stage]);
 
   useEffect(() => {
     if (stage !== 'feed' || !profile || LOCAL_COMMUNITY_PREVIEW) {
@@ -1348,9 +1382,8 @@ export default function CommunityScreen() {
             style: 'destructive',
             onPress: () => {
               void deleteCommunityMessage(post.id).then(() => {
+                removeMessageFromCommunityState(post.id);
                 if (post.replyTo) {
-                  setComments((previous) => previous.filter((item) => item.id !== post.id));
-                  setThreadReplies((previous) => previous.filter((item) => item.id !== post.id && item.replyTo?.id !== post.id));
                   if (commentPost) {
                     setPosts((previous) => previous.map((item) => item.id === commentPost.id
                       ? { ...item, commentCount: Math.max(0, item.commentCount - 1) }
@@ -1359,9 +1392,6 @@ export default function CommunityScreen() {
                       ? { ...previous, commentCount: Math.max(0, previous.commentCount - 1) }
                       : previous);
                   }
-                } else {
-                  setPosts((previous) => previous.filter((item) => item.id !== post.id));
-                  if (commentPost?.id === post.id) setCommentPost(null);
                 }
               }).catch((error) => Alert.alert('Could not delete content', apiErrorMessage(error)));
             },
@@ -1408,15 +1438,18 @@ export default function CommunityScreen() {
   const moderate = async (action: 'pin' | 'unpin' | 'remove_message', post: CommunityMessage) => {
     try {
       const headers = await (await import('@/services/account')).getFxsnapAccountApiHeaders();
-      const response = await fetch(`${(await import('@/services/apiAuth')).API_BASE_URL}/api/admin/community/moderation`, {
+      const { API_BASE_URL, fetchWithApiAuth } = await import('@/services/apiAuth');
+      const response = await fetchWithApiAuth(`${API_BASE_URL}/api/admin/community/moderation`, {
         method: 'POST',
         headers,
         body: JSON.stringify({ action, messageId: post.id }),
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || 'The moderation action failed.');
-      if (action === 'remove_message') setPosts((previous) => previous.filter((item) => item.id !== post.id));
-      else setPosts((previous) => previous.map((item) => item.id === post.id
+      if (action === 'remove_message') {
+        removeMessageFromCommunityState(post.id);
+        console.info('[Community] Admin removal confirmed and local feed updated.', { messageId: post.id });
+      } else setPosts((previous) => previous.map((item) => item.id === post.id
         ? { ...item, pinnedAt: action === 'pin' ? new Date().toISOString() : null }
         : item));
     } catch (error) {

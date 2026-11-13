@@ -7,6 +7,15 @@ const MarketDataProvider = require('./marketProvider');
 
 const API_BASE = 'https://api.twelvedata.com';
 
+function parseProviderTimestamp(value) {
+  const text = String(value || '').trim();
+  if (!text) return Number.NaN;
+  const utcText = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2})?$/.test(text)
+    ? `${text.replace(' ', 'T')}${text.length === 16 ? ':00' : ''}Z`
+    : text;
+  return Date.parse(utcText);
+}
+
 function ensureFetch() {
   if (typeof fetch === 'undefined') {
     // Node 18+ exposes global fetch. If not available, surface a clear error.
@@ -46,7 +55,7 @@ class TwelveDataProvider extends MarketDataProvider {
     return json;
   }
 
-  // quote: returns { symbol, price, timestamp, raw }
+  // quote: returns { symbol, price, timestamp, raw }; timestamp is null when the provider omits it.
   async getQuote(symbol) {
     const s = String(symbol || '').trim();
     if (!s) throw new Error('symbol required');
@@ -55,11 +64,13 @@ class TwelveDataProvider extends MarketDataProvider {
     // Twelve Data may return price-like fields under different keys (price, close, last_trade, etc.)
     const rawPrice = (json && (json.price ?? json.close ?? json.last_trade ?? json.last ?? json.value ?? json.ask ?? json.bid)) ?? null;
     const priceNum = rawPrice != null ? Number(rawPrice) : null;
-    const ts = (json && json.timestamp) ? (Number(json.timestamp) * 1000) : (json && json.datetime ? Date.parse(String(json.datetime)) : Date.now());
+    const rawTimestamp = json?.timestamp != null
+      ? Number(json.timestamp) * 1000
+      : json?.datetime != null ? parseProviderTimestamp(json.datetime) : Number.NaN;
     return {
       symbol: s,
       price: Number.isFinite(priceNum) ? priceNum : null,
-      timestamp: Number.isFinite(ts) ? ts : Date.now(),
+      timestamp: Number.isFinite(rawTimestamp) ? rawTimestamp : null,
       raw: json,
     };
   }
@@ -67,7 +78,7 @@ class TwelveDataProvider extends MarketDataProvider {
   async getCandles(symbol, interval = '1min', limit = 100) {
     const s = String(symbol || '').trim();
     if (!s) throw new Error('symbol required');
-    const json = await this._fetch('/time_series', { symbol: s, interval, outputsize: limit });
+    const json = await this._fetch('/time_series', { symbol: s, interval, outputsize: limit, timezone: 'UTC' });
     const values = json && (json.values || json.data || []) ? (json.values || json.data || []) : [];
     return values.map((v) => ({
       time: v.datetime || v.timestamp || null,

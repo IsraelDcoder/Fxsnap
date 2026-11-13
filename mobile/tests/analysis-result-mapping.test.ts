@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { normalizeChartTradePlan, normalizeChartTradeSetup, normalizeLatestVisiblePrice, type ChartAnalysisResult } from '../services/chartDetection';
-import { buildAnalysisResult, formatDevelopingNote, formatRiskReward, formatTradeReadiness, getDirectionalCallLabel, getMarketDevelopmentPlan, getMissingTradeLevelsExplanation, getTradeReadinessLabel, hasValidatedTradeSetup, isUnavailableAnalysisValue } from '../services/analysisResult';
+import { buildAnalysisResult, calculateRiskRewardFromLevels, formatDevelopingNote, formatRiskReward, formatTradeReadiness, getDirectionalCallLabel, getMarketDevelopmentPlan, getMissingTradeLevelsExplanation, getTradeReadinessLabel, hasValidatedTradeSetup, isUnavailableAnalysisValue } from '../services/analysisResult';
 
 function chartResult(overrides: Partial<ChartAnalysisResult> = {}): ChartAnalysisResult {
   return {
@@ -28,6 +28,15 @@ function chartResult(overrides: Partial<ChartAnalysisResult> = {}): ChartAnalysi
     marketBiasConfidence: 64,
     marketConfidence: 64,
     latestVisiblePrice: 1.1025,
+    rightmostCandle: {
+      identified: true,
+      direction: 'bullish',
+      open: 1.1010,
+      high: 1.1030,
+      low: 1.1005,
+      close: 1.1025,
+      reading: 'The latest candle closed bullish near resistance.',
+    },
     entryReadiness: 0,
     tradeStatus: 'no_setup',
     setupStatus: 'NO_SETUP',
@@ -102,6 +111,15 @@ test('maps no-trade analysis content and every available level into the result m
   assert.equal(result.marketBias, 'bullish');
   assert.equal(result.confidence, 64);
   assert.equal(result.latestVisiblePrice, 1.1025);
+  assert.deepEqual(result.rightmostCandle, {
+    identified: true,
+    direction: 'bullish',
+    open: 1.1010,
+    high: 1.1030,
+    low: 1.1005,
+    close: 1.1025,
+    reading: 'The latest candle closed bullish near resistance.',
+  });
   assert.equal(result.entryReadiness, 0);
   assert.deepEqual(result.takeProfitLevels, ['1.1100', '1.1200']);
   assert.deepEqual(result.tradeSetup, {
@@ -114,6 +132,36 @@ test('maps no-trade analysis content and every available level into the result m
   assert.deepEqual(result.reasoning, ['Higher highs are visible.', 'Price is holding support.']);
   assert.equal(result.analysis?.notes, 'Wait for price to retest support.');
   assert.deepEqual(result.supportResistance, { support: ['1.0950'], resistance: ['1.1100'] });
+});
+
+test('keeps chart evidence confidence separate from market-bias confidence and maps quote metadata', () => {
+  const liveMarketData = {
+    status: 'verified' as const,
+    price: 1.1027,
+    timestamp: '2025-01-01T12:00:00.000Z',
+    source: 'Twelve Data',
+    checkedAt: '2025-01-01T12:00:01.000Z',
+  };
+  const signalMetadata = {
+    candle_open_time: '2025-01-01T11:45:00.000Z',
+    candle_close_time: '2025-01-01T12:00:00.000Z',
+    data_timestamp: '2025-01-01T12:00:00.000Z',
+    timeframe: 'M15',
+    price_at_signal: 1.1027,
+    is_candle_forming: true,
+    data_source: 'Twelve Data',
+  };
+  const result = buildAnalysisResult(chartResult({
+    confidence: 72,
+    marketConfidence: 41,
+    liveMarketData,
+    signalMetadata,
+  }), 'EUR/USD', 'file:///chart.jpg');
+
+  assert.equal(result.confidence, 72);
+  assert.equal(result.marketConfidence, 41);
+  assert.deepEqual(result.liveMarketData, liveMarketData);
+  assert.deepEqual(result.signalMetadata, signalMetadata);
 });
 
 test('keeps candidate levels visible in the result model when trade direction is not established', () => {
@@ -335,7 +383,7 @@ test('explains missing no-trade levels as a hold while the market develops', () 
   );
   assert.equal(getMissingTradeLevelsExplanation({
     ...result,
-    tradeSetup: { ...result.tradeSetup!, entryZone: '1.1000', stopLoss: '1.0950', riskReward: 2 },
+    tradeSetup: { ...result.tradeSetup!, type: 'buy', entryZone: '1.1000', stopLoss: '1.0950', riskReward: 2 },
     takeProfitLevels: ['1.1100'],
   }), null);
 });
@@ -383,6 +431,14 @@ test('recognizes model-generated unavailable phrases instead of displaying them 
   assert.equal(formatRiskReward(0.08000000000000303), '1:0.08');
   assert.equal(formatRiskReward('1:0.9393939393939916'), '1:0.94');
   assert.equal(formatRiskReward(0.004), '1:<0.01');
+});
+
+test('risk/reward is derived from valid level geometry and rejects wrong-side levels', () => {
+  assert.equal(calculateRiskRewardFromLevels('1.1000', '1.0990', '1.1020', 'BUY'), 2);
+  assert.equal(calculateRiskRewardFromLevels('1.1000', '1.1010', '1.0980', 'SELL'), 2);
+  assert.equal(calculateRiskRewardFromLevels('1.1000-1.1010', '1.0980', '1.1030', 'BUY'), 0.67);
+  assert.equal(calculateRiskRewardFromLevels('1.1000', '1.1010', '1.1020', 'BUY'), null);
+  assert.equal(calculateRiskRewardFromLevels('1.1000', '1.0990', '1.1020', 'SELL'), null);
 });
 
 test('incomplete successful responses are presented as developing, not as established trades', () => {
@@ -490,7 +546,7 @@ test('a complete candidate with a low calculated R:R remains valid and reports t
       risk_reward: 0.9393939393939916,
     },
   }), 'EUR/USD');
-  assert.match(getMarketDevelopmentPlan(floatingPointNoise), /R:R 1:0\.94/);
+  assert.match(getMarketDevelopmentPlan(floatingPointNoise), /R:R 1:0\.8/);
 });
 
 test('waiting setups remain on hold and explain the confirmation trigger', () => {

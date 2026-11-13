@@ -12,8 +12,9 @@ const {
   enforceValidationRules,
   getTraderSystemPrompt,
   normalizeCompleteChartAnalysis,
-  buildMultiTimeframeMessages,
   buildCandidateLevelFollowupMessages,
+  buildCandidateLevelFollowupRetryMessages,
+  recoverScreenshotRead,
   callVisionModel,
   shouldRequestCandidateLevelFollowup,
   applyTwoSidedCandidateReview,
@@ -22,8 +23,6 @@ const {
   recoverCandidateLevels,
   summarizeAnalysisPayload,
   sanitizeDiagnosticText,
-  MultiTimeframeInputSchema,
-  enforceMultiTimeframeAlignment,
   canonicalizeRawAnalysis,
   normalizeAnalysis,
   TradeAnalysisSchema,
@@ -81,7 +80,144 @@ test('development analysis premium bypass requires explicit opt-in and developme
   }
 });
 
-test('one conditional review is requested for readable charts with incomplete levels regardless of first-pass bias', () => {
+test('screenshot-read recovery captures the exact current price and identified newest candle', async () => {
+  const result = {
+    status: 'success',
+    detectedPair: 'XAUUSD',
+    chart: {
+      is_chart: true,
+      pair: 'XAUUSD',
+      price_scale_visible: false,
+      latest_visible_price: null,
+      current_price_source: 'unreadable',
+      rightmost_candle: null,
+    },
+  };
+  let reviewMessages;
+  const recovered = await recoverScreenshotRead(result, 'image-data', 'image/jpeg', 'XAUUSD', async (messages) => {
+    reviewMessages = messages;
+    return {
+      price_scale_visible: true,
+      latest_visible_price: '4,340.77',
+      current_price_source: 'visible_price_marker',
+      rightmost_candle: {
+        identified: true,
+        direction: 'bearish',
+        open: '4341.42',
+        high: '4341.42',
+        low: '4339.18',
+        close: '4340.77',
+        reading: 'Small bearish body with a lower wick; short-term pressure is uncertain.',
+      },
+    };
+  });
+
+  assert.equal(recovered.chart.latest_visible_price, '4340.77');
+  assert.equal(recovered.chart.current_price_source, 'visible_price_marker');
+  assert.equal(recovered.chart.price_scale_visible, true);
+  assert.deepEqual(recovered.chart.rightmost_candle, {
+    identified: true,
+    direction: 'bearish',
+    open: 4341.42,
+    high: 4341.42,
+    low: 4339.18,
+    close: 4340.77,
+    reading: 'Small bearish body with a lower wick; short-term pressure is uncertain.',
+  });
+  assert.match(reviewMessages[0].content, /inspect only the far-right newest candle/i);
+  assert.match(reviewMessages[1].content[0].text, /far-right newest candle only/i);
+
+  const unreadable = await recoverScreenshotRead(result, 'image-data', 'image/jpeg', 'XAUUSD', async () => ({
+    price_scale_visible: true,
+    latest_visible_price: null,
+    current_price_source: 'unreadable',
+    rightmost_candle: { identified: false, direction: 'unclear' },
+  }));
+  assert.equal(unreadable.chart.latest_visible_price, null);
+  assert.equal(unreadable.chart.rightmost_candle, null);
+
+  const unverified = await recoverScreenshotRead(result, 'image-data', 'image/jpeg', 'XAUUSD', async () => ({
+    price_scale_visible: false,
+    latest_visible_price: '4340.77',
+    current_price_source: 'visible_price_marker',
+    rightmost_candle: {
+      identified: true,
+      direction: 'bullish',
+      open: '4350',
+      high: '4340',
+      low: '4340',
+      close: '4360',
+    },
+  }));
+  assert.equal(unverified.chart.latest_visible_price, null);
+  assert.equal(unverified.chart.rightmost_candle.identified, true);
+  assert.equal(unverified.chart.rightmost_candle.open, null);
+});
+
+test('complete chart analysis preserves only a valid rightmost-candle read', () => {
+  const analysis = {
+    status: 'success',
+    chart: {
+      is_chart: true,
+      pair: 'XAUUSD',
+      timeframe: 'M15',
+      chart_quality: 'good',
+      price_scale_visible: true,
+      candles_visible: true,
+      has_enough_candles: true,
+      latest_visible_price: '4340.77',
+      current_price_source: 'visible_price_marker',
+      current_candle_status: 'forming',
+      latest_candle_timestamp: new Date().toISOString(),
+      rightmost_candle: {
+        identified: true,
+        direction: 'bearish',
+        open: '4341.42',
+        high: '4341.42',
+        low: '4339.18',
+        close: '4340.77',
+        reading: 'Small bearish body with a lower wick.',
+      },
+    },
+    analysis: { trend: 'bullish', structure: 'Higher highs and higher lows.' },
+    levels: { support: [4323.3], resistance: [4388.55] },
+    bias: 'BUY',
+    trade_plan: { direction: 'BUY', entry: 4323.3, stop_loss: 4320, take_profit_1: 4388.55 },
+  };
+  const normalized = normalizeCompleteChartAnalysis(analysis, { pair: 'XAUUSD' });
+
+  assert.deepEqual(normalized.chart.rightmost_candle, {
+    identified: true,
+    direction: 'bearish',
+    open: 4341.42,
+    high: 4341.42,
+    low: 4339.18,
+    close: 4340.77,
+    reading: 'Small bearish body with a lower wick.',
+  });
+
+  const unreadableOhlc = normalizeCompleteChartAnalysis({
+    ...analysis,
+    chart: {
+      ...analysis.chart,
+      rightmost_candle: { ...analysis.chart.rightmost_candle, high: '4338.00' },
+    },
+  }, { pair: 'XAUUSD' });
+  assert.equal(unreadableOhlc.chart.rightmost_candle.identified, true);
+  assert.equal(unreadableOhlc.chart.rightmost_candle.high, null);
+
+  const contradictoryOhlc = normalizeCompleteChartAnalysis({
+    ...analysis,
+    chart: {
+      ...analysis.chart,
+      rightmost_candle: { ...analysis.chart.rightmost_candle, direction: 'bullish' },
+    },
+  }, { pair: 'XAUUSD' });
+  assert.equal(contradictoryOhlc.chart.rightmost_candle.identified, false);
+  assert.equal(contradictoryOhlc.chart.rightmost_candle.direction, 'unclear');
+});
+
+test('quick analysis candidate recovery can retry recognized charts without full metadata', () => {
   assert.equal(shouldRequestCandidateLevelFollowup(directionalChartWithoutLevels), true);
   assert.equal(shouldRequestCandidateLevelFollowup({
     ...directionalChartWithoutLevels,
@@ -99,6 +235,10 @@ test('one conditional review is requested for readable charts with incomplete le
     ...directionalChartWithoutLevels,
     chart: { ...directionalChartWithoutLevels.chart, has_enough_candles: false },
   }), false);
+  assert.equal(shouldRequestCandidateLevelFollowup({
+    ...directionalChartWithoutLevels,
+    chart: { ...directionalChartWithoutLevels.chart, has_enough_candles: false },
+  }, true), true);
   assert.equal(shouldRequestCandidateLevelFollowup({
     ...directionalChartWithoutLevels,
     chart: { ...directionalChartWithoutLevels.chart, price_scale_visible: false },
@@ -450,6 +590,19 @@ test('two-sided follow-up prompt sends the same chart and evaluates both directi
   assert.equal(messages[1].content[1].image_url.url, 'data:image/jpeg;base64,image-data');
 });
 
+test('candidate-level retry asks for a complete JSON review and resends the chart', () => {
+  const messages = buildCandidateLevelFollowupRetryMessages(
+    'image-data',
+    'image/jpeg',
+    'EURUSD',
+    directionalChartWithoutLevels,
+  );
+
+  assert.match(messages[0].content, /Formatting retry: return one complete JSON object/i);
+  assert.match(messages[1].content[0].text, /previous response was malformed or incomplete/i);
+  assert.equal(messages[1].content[2].image_url.url, 'data:image/jpeg;base64,image-data');
+});
+
 test('valid follow-up levels fill missing fields but remain a non-actionable no-trade result', () => {
   const result = applyCandidateLevelFollowup(directionalChartWithoutLevels, {
     status: 'candidate',
@@ -699,6 +852,33 @@ test('level recovery makes at most one provider request and preserves the origin
   assert.match(failed.dataLimitations.join(' '), /original market analysis is preserved/i);
 });
 
+test('level recovery retries malformed provider JSON once and safely applies a valid review', async () => {
+  let calls = 0;
+  const recovered = await recoverCandidateLevels(
+    directionalChartWithoutLevels,
+    async () => {
+      calls += 1;
+      const error = new Error('The chart AI returned malformed or empty JSON.');
+      error.code = 'AI_INVALID_RESPONSE';
+      throw error;
+    },
+    async () => {
+      calls += 1;
+      return twoSidedReview(
+        twoSidedCandidate('buy'),
+        twoSidedCandidate('sell', { status: 'unsupported' }),
+      );
+    },
+  );
+
+  assert.equal(calls, 2);
+  assert.equal(recovered.trade_setup.type, 'buy');
+  assert.equal(recovered.trade_setup.entry_zone, '1.10000');
+  assert.equal(recovered.trade_setup.stop_loss, '1.09900');
+  assert.equal(recovered.trade_setup.take_profit, '1.10200');
+  assert.equal(recovered.levelFollowupStatus, 'completed');
+});
+
 test('sanitized provider diagnostics identify field loss without logging price values', () => {
   const summary = summarizeAnalysisPayload({
     status: 'no_trade',
@@ -793,30 +973,35 @@ test('nested and aliased numeric BUY and SELL levels normalize into the canonica
   }
 });
 
-test('multi-timeframe request requires two bounded supported chart images', () => {
-  const chart = { imageBase64: 'x'.repeat(100), mimeType: 'image/jpeg' };
-  const valid = MultiTimeframeInputSchema.safeParse({ pair: 'XAUUSD', charts: { h4: chart, m15: chart } });
-  const missingChart = MultiTimeframeInputSchema.safeParse({ pair: 'XAUUSD', charts: { h4: chart } });
-  const unsupportedImage = MultiTimeframeInputSchema.safeParse({ pair: 'XAUUSD', charts: { h4: chart, m15: { ...chart, mimeType: 'image/gif' } } });
-
-  assert.equal(valid.success, true);
-  assert.equal(missingChart.success, false);
-  assert.equal(unsupportedImage.success, false);
-});
-
-test('both labeled charts are sent together in one multimodal AI message', () => {
-  const image = 'eA==';
-  const messages = buildMultiTimeframeMessages('XAUUSD', {
-    h4: { imageBase64: image, mimeType: 'image/jpeg' },
-    m15: { imageBase64: image, mimeType: 'image/png' },
+test('multi-timeframe chart analysis endpoint is no longer available', async () => {
+  const server = http.createServer(createRequestHandler());
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
   });
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
 
-  assert.equal(messages.length, 2);
-  assert.equal(messages[1].content.filter((part) => part.type === 'image_url').length, 2);
-  assert.match(messages[1].content[0].text, /4H higher-timeframe/);
-  assert.match(messages[1].content[2].text, /15M entry-timeframe/);
-  assert.match(messages[0].content, /analyze the two labeled images together/i);
-  assert.match(messages[0].content, /do not treat them as separate requests or invent an intermediate timeframe/i);
+  try {
+    const statusCode = await new Promise((resolve, reject) => {
+      const request = http.request({
+        hostname: '127.0.0.1',
+        port: address.port,
+        path: '/api/multi-timeframe-analysis',
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+      }, (response) => {
+        response.resume();
+        response.on('end', () => resolve(response.statusCode));
+      });
+      request.once('error', reject);
+      request.end('{}');
+    });
+    assert.equal(statusCode, 404);
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  }
 });
 
 test('multi-timeframe fields survive canonicalization for the unified result', () => {
@@ -840,53 +1025,6 @@ test('multi-timeframe fields survive canonicalization for the unified result', (
   assert.equal(normalized.multiTimeframe.h4.trend, 'bullish');
   assert.equal(normalized.multiTimeframe.m15.confirmation, 'Bullish engulfing.');
   assert.deepEqual(normalized.timeframes_detected.map((item) => item.timeframe), ['H4', 'M15']);
-});
-
-test('conflicting H4 and M15 direction always suppresses the trade setup', () => {
-  const result = enforceMultiTimeframeAlignment({
-    status: 'success',
-    trade_setup: { type: 'buy', entry_zone: '2350', stop_loss: '2340', take_profit: '2380', risk_reward: 3 },
-    marketBias: 'bullish',
-    tradeDecision: 'BUY',
-    multiTimeframe: {
-      alignment: 'aligned',
-      h4: { chartValid: true, trend: 'bearish', structure: 'Lower highs and lower lows.' },
-      m15: { chartValid: true, trend: 'bullish', structure: 'Pullback setup.', confirmation: 'Bullish engulfing.' },
-    },
-    reasons: [],
-  });
-
-  assert.equal(result.multiTimeframe.alignment, 'conflicting');
-  assert.equal(result.status, 'no_trade');
-  assert.equal(result.trade_setup.type, 'buy');
-  assert.equal(result.trade_setup.entry_zone, '2350');
-  assert.equal(result.trade_setup.stop_loss, '2340');
-  assert.equal(result.trade_setup.take_profit, '2380');
-  assert.equal(result.marketBias, 'mixed');
-  assert.equal(result.tradeDecision, 'NONE');
-});
-
-test('aligned labels cannot produce a trade without explicit evidence on both charts', () => {
-  const result = enforceMultiTimeframeAlignment({
-    status: 'success',
-    trade_setup: { type: 'buy', entry_zone: '2350', stop_loss: '2340', take_profit: '2380', risk_reward: 3 },
-    marketBias: 'bullish',
-    tradeDecision: 'BUY',
-    multiTimeframe: {
-      alignment: 'aligned',
-      h4: { chartValid: true, trend: 'bullish', structure: '' },
-      m15: { chartValid: true, trend: 'bullish', structure: '', confirmation: '' },
-    },
-    reasons: [],
-  });
-
-  assert.equal(result.multiTimeframe.alignment, 'unclear');
-  assert.equal(result.status, 'no_trade');
-  assert.equal(result.trade_setup.type, 'buy');
-  assert.equal(result.trade_setup.entry_zone, '2350');
-  assert.equal(result.trade_setup.stop_loss, '2340');
-  assert.equal(result.trade_setup.take_profit, '2380');
-  assert.match(result.reasons.join(' '), /explicit evidence/i);
 });
 
 test('recognizable low-quality charts are analyzed conservatively instead of rejected as non-charts', () => {
@@ -1373,6 +1511,49 @@ test('two-sided review identifies independent BUY and SELL candidates with exact
   }
 });
 
+test('two-sided review tolerates missing evidence metadata while preserving supported levels as conditional', () => {
+  const result = applyTwoSidedCandidateReview(directionalChartWithoutLevels, {
+    status: 'reviewed',
+    buy: {
+      entry_zone: 1.1,
+      stop_loss: 1.099,
+      take_profit_levels: [1.102],
+      setup_status: 'valid',
+      entry_type: 'limit_zone',
+    },
+    sell: {
+      status: 'unsupported',
+    },
+  });
+
+  assert.equal(result.candidateReview.status, 'selected');
+  assert.equal(result.trade_setup.type, 'buy');
+  assert.equal(result.trade_setup.entry_zone, '1.1');
+  assert.equal(result.trade_setup.stop_loss, '1.099');
+  assert.equal(result.trade_setup.take_profit, '1.102');
+  assert.equal(result.tradeDecision, 'WAIT');
+  assert.equal(result.tradeStatus, 'waiting_for_confirmation');
+});
+
+test('one-sided candidate responses normalize into the two-sided review shape', () => {
+  const result = applyTwoSidedCandidateReview(directionalChartWithoutLevels, {
+    status: 'candidate',
+    direction: 'bullish',
+    entry: 1.1,
+    sl: 1.099,
+    tp: 1.102,
+    setup_status: 'valid',
+    entry_type: 'limit_zone',
+  });
+
+  assert.equal(result.candidateReview.status, 'selected');
+  assert.equal(result.trade_setup.type, 'buy');
+  assert.equal(result.trade_setup.entry_zone, '1.1');
+  assert.equal(result.trade_setup.stop_loss, '1.099');
+  assert.equal(result.trade_setup.take_profit, '1.102');
+  assert.equal(result.tradeDecision, 'WAIT');
+});
+
 test('mixed first-pass bias selects the side with stronger explicit evidence', () => {
   const buyWins = applyTwoSidedCandidateReview(
     { ...directionalChartWithoutLevels, marketBias: 'mixed' },
@@ -1559,12 +1740,30 @@ test('partial directional responses pass normalization without becoming actionab
   assert.equal(result.tradeDecision, 'NONE');
 });
 
-test('authenticated chart upload returns a complete plan and reserves invalid_image for non-charts', async () => {
+test('authenticated chart upload allows one free analysis and requires Pro for the next', async () => {
   const previousFetch = global.fetch;
   const previousApiKey = process.env.OPENROUTER_API_KEY;
   const previousRevenueCatKey = process.env.REVENUECAT_SECRET_API_KEY;
+  const persistentStore = require('./persistentStore');
+  const originalGetCounter = persistentStore.getCounter;
+  const originalIncrement = persistentStore.increment;
+  let freeAnalysisUsed = 0;
   let providerCalls = 0;
   let revenueCatEntitlementActive = true;
+  let visiblePriceResponse = {
+    price_scale_visible: true,
+    latest_visible_price: '1.10000',
+    current_price_source: 'visible_price_marker',
+    rightmost_candle: {
+      identified: true,
+      direction: 'bullish',
+      open: '1.09900',
+      high: '1.10100',
+      low: '1.09800',
+      close: '1.10000',
+      reading: 'A bullish candle with a small lower wick; one candle alone does not confirm continuation.',
+    },
+  };
   let providerResponse = {
     status: 'success',
     chart: { is_chart: true, pair: 'EURUSD', timeframe: 'M15', latest_visible_price: 1.1 },
@@ -1575,11 +1774,12 @@ test('authenticated chart upload returns a complete plan and reserves invalid_im
     setup: 'trend_pullback',
     trade_plan: { direction: 'BUY', entry: 1.1, stop_loss: 1.099, take_profit_1: 1.102, take_profit_2: 1.103, risk_reward: 99 },
   };
+  let followupResponse = null;
   const server = http.createServer(createRequestHandler());
 
   process.env.OPENROUTER_API_KEY = 'test-key';
   process.env.REVENUECAT_SECRET_API_KEY = 'test-revenuecat-key';
-  global.fetch = async (url) => {
+  global.fetch = async (url, options) => {
     if (String(url).includes('api.revenuecat.com')) {
       return {
         ok: true,
@@ -1589,11 +1789,22 @@ test('authenticated chart upload returns a complete plan and reserves invalid_im
     }
     assert.match(String(url), /\/chat\/completions$/);
     providerCalls += 1;
+    const requestMessages = JSON.parse(options.body).messages;
+    const isScreenshotReadReview = String(requestMessages[0]?.content || '').includes('verifying the current price and newest candle');
+    const isCandidateReview = String(requestMessages[0]?.content || '').includes('Evaluate BUY and SELL separately');
+    const responseContent = isScreenshotReadReview
+      ? visiblePriceResponse
+      : isCandidateReview
+        ? followupResponse || twoSidedReview(
+        twoSidedCandidate('buy', { status: 'unsupported', reason: 'No supported BUY setup is visible.' }),
+        twoSidedCandidate('sell', { status: 'unsupported', reason: 'No supported SELL setup is visible.' }),
+      )
+      : providerResponse;
     return {
       ok: true,
       status: 200,
       text: async () => JSON.stringify({
-        choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(providerResponse) } }],
+        choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(responseContent) } }],
       }),
     };
   };
@@ -1623,31 +1834,148 @@ test('authenticated chart upload returns a complete plan and reserves invalid_im
         let responseText = '';
         response.setEncoding('utf8');
         response.on('data', (chunk) => { responseText += chunk; });
-        response.on('end', () => resolve({ statusCode: response.statusCode, body: JSON.parse(responseText) }));
+        response.on('end', () => resolve({
+          statusCode: response.statusCode,
+          body: responseText ? JSON.parse(responseText) : null,
+        }));
       });
       request.once('error', reject);
       request.end(requestText);
     });
     const requestBody = { imageBase64: 'x'.repeat(120), mimeType: 'image/jpeg', pair: 'EURUSD', premiumAccess: true };
     const postAnalysis = () => post('/analyze-chart', requestBody);
+    const analyticsResponses = [await post('/api/events', {
+      events: [
+        { name: 'analysis-test-batch-1', properties: {} },
+        { name: 'analysis-test-batch-2', properties: {} },
+      ],
+    })];
+    for (let index = 1; index < 31; index += 1) {
+      analyticsResponses.push(await post('/api/events', { name: `analysis-test-${index}`, properties: {} }));
+    }
+    assert.equal(analyticsResponses.slice(0, 30).every((response) => response.statusCode === 204), true);
+    assert.equal(analyticsResponses[30].statusCode, 429);
+    persistentStore.getCounter = async () => freeAnalysisUsed;
+    persistentStore.increment = async (key, ttlSeconds) => (
+      key.startsWith('fxsnap:free-analysis:')
+        ? ++freeAnalysisUsed
+        : originalIncrement(key, ttlSeconds)
+    );
 
     revenueCatEntitlementActive = false;
-    const unpaid = await postAnalysis();
-    assert.equal(unpaid.statusCode, 402);
-    assert.equal(unpaid.body.code, 'PREMIUM_REQUIRED');
-    assert.equal(providerCalls, 0);
+    const freeAnalysis = await postAnalysis();
+    assert.equal(freeAnalysis.statusCode, 200);
+    assert.equal(freeAnalysis.body.status, 'success');
+    assert.equal(freeAnalysisUsed, 1);
+    assert.equal(providerCalls, 2);
+
+    const secondFreeAnalysis = await postAnalysis();
+    assert.equal(secondFreeAnalysis.statusCode, 402);
+    assert.equal(secondFreeAnalysis.body.code, 'PREMIUM_REQUIRED');
+    assert.equal(providerCalls, 2);
 
     revenueCatEntitlementActive = true;
     const response = await postAnalysis();
     assert.equal(response.statusCode, 200);
-    assert.equal(providerCalls, 1);
+    assert.equal(providerCalls, 4);
     assert.equal(response.body.status, 'success');
     assert.equal(response.body.trade_plan.direction, 'BUY');
     assert.equal(response.body.trade_setup.entry_zone, '1.1');
     assert.equal(response.body.trade_plan.take_profit_1, 1.102);
     assert.equal(response.body.trade_plan.risk_reward, 2);
     assert.equal(response.body.tradeDecision, 'BUY');
+    assert.deepEqual(response.body.chart.rightmost_candle, {
+      identified: true,
+      direction: 'bullish',
+      open: 1.099,
+      high: 1.101,
+      low: 1.098,
+      close: 1.1,
+      reading: 'A bullish candle with a small lower wick; one candle alone does not confirm continuation.',
+    });
 
+    providerResponse = {
+      status: 'success',
+      chart: {
+        is_chart: true,
+        pair: 'XAUUSD',
+        timeframe: 'M15',
+        chart_quality: 'good',
+        price_scale_visible: false,
+        candles_visible: true,
+        has_enough_candles: true,
+        latest_visible_price: null,
+        current_price_source: 'unreadable',
+        current_candle_status: 'forming',
+        latest_candle_timestamp: new Date().toISOString(),
+      },
+      analysis: { trend: 'bullish', structure: 'Higher highs and higher lows.' },
+      levels: { support: [4340.77, 4320], resistance: [4388.55] },
+      bias: 'BUY',
+      trade_plan: { direction: 'BUY', entry: 4340.77, stop_loss: 4320, take_profit_1: 4388.55 },
+    };
+    visiblePriceResponse = {
+      price_scale_visible: true,
+      latest_visible_price: '4340.77',
+      current_price_source: 'visible_price_marker',
+      rightmost_candle: {
+        identified: true,
+        direction: 'bearish',
+        open: '4341.42',
+        high: '4341.42',
+        low: '4339.18',
+        close: '4340.77',
+        reading: 'Small bearish body with a lower wick; short-term pressure is uncertain.',
+      },
+    };
+    const recoveredPrice = await postAnalysis();
+    assert.equal(recoveredPrice.body.chart.latest_visible_price, '4340.77');
+    assert.equal(recoveredPrice.body.chart.current_price_source, 'visible_price_marker');
+    assert.equal(recoveredPrice.body.chart.rightmost_candle.direction, 'bearish');
+    assert.equal(providerCalls, 6);
+
+    providerResponse = {
+      status: 'no_trade',
+      chart: {
+        is_chart: true,
+        pair: 'EURUSD',
+        timeframe: 'M15',
+        chart_quality: 'acceptable',
+        price_scale_visible: true,
+        candles_visible: true,
+        has_enough_candles: true,
+        latest_visible_price: '1.10000',
+        current_price_source: 'visible_price_marker',
+        current_candle_status: 'completed',
+        latest_candle_timestamp: new Date().toISOString(),
+      },
+      analysis: { trend: 'bullish', structure: 'Price is testing visible support.' },
+      levels: { support: ['1.10000'], resistance: ['1.10200'] },
+      bias: 'bullish',
+      verdict_reason: 'The first pass did not provide a complete setup.',
+    };
+    followupResponse = {
+      status: 'reviewed',
+      buy: {
+        entry_zone: 1.1,
+        stop_loss: 1.099,
+        take_profit_levels: [1.102],
+        setup_status: 'valid',
+        entry_type: 'limit_zone',
+      },
+      sell: { status: 'unsupported' },
+    };
+    const recoveredSetup = await postAnalysis();
+    assert.equal(recoveredSetup.body.status, 'no_trade');
+    assert.equal(recoveredSetup.body.trade_setup.type, 'buy');
+    assert.equal(recoveredSetup.body.trade_setup.entry_zone, '1.1');
+    assert.equal(recoveredSetup.body.trade_setup.stop_loss, '1.099');
+    assert.equal(recoveredSetup.body.trade_setup.take_profit, '1.102');
+    assert.equal(recoveredSetup.body.tradeDecision, 'WAIT');
+    assert.equal(recoveredSetup.body.levelFollowupStatus, 'completed');
+    assert.equal(providerCalls, 9);
+
+    followupResponse = null;
     providerResponse = {
       chart: { is_chart: true, chart_quality: 'poor' },
       analysis: { trend: 'neutral' },
@@ -1660,13 +1988,13 @@ test('authenticated chart upload returns a complete plan and reserves invalid_im
     assert.equal(lowResolution.body.status, 'no_trade');
     assert.equal(lowResolution.body.trade_plan, null);
     assert.equal(lowResolution.body.bias, 'NEUTRAL');
-    assert.equal(providerCalls, 2);
+    assert.equal(providerCalls, 12);
 
     providerResponse = { status: 'invalid_image', chart: { is_chart: false } };
     const nonChart = await postAnalysis();
     assert.equal(nonChart.body.status, 'invalid_image');
     assert.equal(nonChart.body.trade_plan, null);
-    assert.equal(providerCalls, 3);
+    assert.equal(providerCalls, 13);
   } finally {
     server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));
@@ -1675,6 +2003,8 @@ test('authenticated chart upload returns a complete plan and reserves invalid_im
     else process.env.OPENROUTER_API_KEY = previousApiKey;
     if (previousRevenueCatKey == null) delete process.env.REVENUECAT_SECRET_API_KEY;
     else process.env.REVENUECAT_SECRET_API_KEY = previousRevenueCatKey;
+    persistentStore.getCounter = originalGetCounter;
+    persistentStore.increment = originalIncrement;
   }
 });
 

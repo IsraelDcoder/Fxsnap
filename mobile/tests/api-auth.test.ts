@@ -2,13 +2,15 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 const require = createRequire(import.meta.url);
 const { createAuth, verifyAuth } = require('../server/auth.js');
-const { API_BASE_URL, resolveApiBaseUrl, normalizeServerAnalysisAccess } = require('../services/apiAuth.ts');
+const apiAuth = require('../services/apiAuth.ts');
+const { API_BASE_URL, resolveApiBaseUrl, normalizeServerAnalysisAccess } = apiAuth;
 const { normalizeChartAnalysisError } = require('../services/chartDetection.ts');
 const { hasRevenueCatEntitlement } = require('../services/revenuecatEntitlements.ts');
 const { normalizePaywallRemoteConfig } = require('../services/paywallConfig.ts');
-const { canViewFullAnalysis, getFeatureAccessDecision, isCommunityFeatureRoute, isDevelopmentPremiumBypassEnabled, isPremiumFeatureRoute, shouldGuardFeatureRoute } = require('../services/featureAccess.ts');
+const { canViewFullAnalysis, getFeatureAccessDecision, isDevelopmentAnalysisPremiumBypassEnabled, isCommunityFeatureRoute, isPremiumFeatureRoute, shouldGuardFeatureRoute } = require('../services/featureAccess.ts');
 const { getInstrument, INSTRUMENTS, INSTRUMENT_GROUPS } = require('../services/instruments.ts');
 
 test('signed anonymous tokens round-trip and reject tampering', () => {
@@ -36,6 +38,195 @@ test('all app API URL resolution targets the production backend', () => {
   assert.equal(resolveApiBaseUrl(), 'https://fxsnap.vercel.app');
   assert.equal(resolveApiBaseUrl('http://localhost:3000', false), 'https://fxsnap.vercel.app');
   assert.equal(resolveApiBaseUrl('http://localhost:3000', true), 'http://localhost:3000');
+});
+
+test('concurrent API header requests share one pending session initialization', async () => {
+  const storage = AsyncStorage as unknown as {
+    getItem: typeof AsyncStorage.getItem;
+    setItem: typeof AsyncStorage.setItem;
+    multiSet: typeof AsyncStorage.multiSet;
+    removeItem: typeof AsyncStorage.removeItem;
+  };
+  const originalGetItem = storage.getItem;
+  const originalSetItem = storage.setItem;
+  const originalMultiSet = storage.multiSet;
+  const originalRemoveItem = storage.removeItem;
+  const originalFetch = global.fetch;
+  const values = new Map<string, string>([
+    ['fxsnap:deviceId', 'concurrent-session-device-123'],
+    ['fxsnap:sessionApiUrl', API_BASE_URL],
+  ]);
+  let sessionRequests = 0;
+  storage.getItem = async (key) => values.get(key) ?? null;
+  storage.setItem = async (key, value) => { values.set(key, value); };
+  storage.multiSet = async (entries) => {
+    for (const [key, value] of entries) values.set(key, value);
+  };
+  storage.removeItem = async (key) => { values.delete(key); };
+  global.fetch = async (input) => {
+    assert.equal(String(input), `${API_BASE_URL}/api/session`);
+    sessionRequests += 1;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    return {
+      ok: true,
+      json: async () => ({ token: 'test-session-token-that-is-long-enough' }),
+    } as Response;
+  };
+
+  try {
+    const headers = await Promise.all(Array.from({ length: 12 }, () => apiAuth.getApiHeaders()));
+    assert.equal(sessionRequests, 1);
+    assert.equal(new Set(headers.map((item: Record<string, string>) => item.authorization)).size, 1);
+  } finally {
+    storage.getItem = originalGetItem;
+    storage.setItem = originalSetItem;
+    storage.multiSet = originalMultiSet;
+    storage.removeItem = originalRemoveItem;
+    global.fetch = originalFetch;
+  }
+});
+
+test('simultaneous cold-start callers persist and request one identical device ID', async () => {
+  const storage = AsyncStorage as unknown as {
+    getItem: typeof AsyncStorage.getItem;
+    setItem: typeof AsyncStorage.setItem;
+    multiSet: typeof AsyncStorage.multiSet;
+    removeItem: typeof AsyncStorage.removeItem;
+  };
+  const originals = {
+    getItem: storage.getItem,
+    setItem: storage.setItem,
+    multiSet: storage.multiSet,
+    removeItem: storage.removeItem,
+    fetch: global.fetch,
+  };
+  const values = new Map<string, string>();
+  const requestedDeviceIds: string[] = [];
+  storage.getItem = async (key) => values.get(key) ?? null;
+  storage.setItem = async (key, value) => { values.set(key, value); };
+  storage.multiSet = async (entries) => {
+    for (const [key, value] of entries) values.set(key, value);
+  };
+  storage.removeItem = async (key) => { values.delete(key); };
+  global.fetch = async (input, init) => {
+    assert.equal(String(input), `${API_BASE_URL}/api/session`);
+    requestedDeviceIds.push(JSON.parse(String(init?.body)).deviceId);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    return { ok: true, json: async () => ({ token: 'cold-start-session-token-is-long-enough' }) } as Response;
+  };
+
+  try {
+    const headers = await Promise.all(Array.from({ length: 16 }, () => apiAuth.getApiHeaders()));
+    const storedDeviceId = values.get('fxsnap:deviceId');
+    assert.ok(storedDeviceId);
+    assert.deepEqual(new Set(requestedDeviceIds), new Set([storedDeviceId]));
+    assert.equal(new Set(headers.map((item: Record<string, string>) => item.authorization)).size, 1);
+  } finally {
+    storage.getItem = originals.getItem;
+    storage.setItem = originals.setItem;
+    storage.multiSet = originals.multiSet;
+    storage.removeItem = originals.removeItem;
+    global.fetch = originals.fetch;
+  }
+});
+
+test('failed session initialization can be retried by subsequent callers', async () => {
+  const storage = AsyncStorage as unknown as {
+    getItem: typeof AsyncStorage.getItem;
+    setItem: typeof AsyncStorage.setItem;
+    multiSet: typeof AsyncStorage.multiSet;
+    removeItem: typeof AsyncStorage.removeItem;
+  };
+  const originals = {
+    getItem: storage.getItem,
+    setItem: storage.setItem,
+    multiSet: storage.multiSet,
+    removeItem: storage.removeItem,
+    fetch: global.fetch,
+  };
+  const values = new Map<string, string>();
+  let requests = 0;
+  storage.getItem = async (key) => values.get(key) ?? null;
+  storage.setItem = async (key, value) => { values.set(key, value); };
+  storage.multiSet = async (entries) => {
+    for (const [key, value] of entries) values.set(key, value);
+  };
+  storage.removeItem = async (key) => { values.delete(key); };
+  global.fetch = async () => {
+    requests += 1;
+    return requests === 1
+      ? { ok: false } as Response
+      : { ok: true, json: async () => ({ token: 'retry-session-token-is-long-enough' }) } as Response;
+  };
+
+  try {
+    await assert.rejects(apiAuth.getApiHeaders(), /Unable to create an API session/);
+    const headers = await apiAuth.getApiHeaders();
+    assert.match(headers.authorization, /^Bearer /);
+    assert.equal(requests, 2);
+  } finally {
+    storage.getItem = originals.getItem;
+    storage.setItem = originals.setItem;
+    storage.multiSet = originals.multiSet;
+    storage.removeItem = originals.removeItem;
+    global.fetch = originals.fetch;
+  }
+});
+
+test('rejected session tokens are refreshed once and preserve other request headers', async () => {
+  const storage = AsyncStorage as unknown as {
+    getItem: typeof AsyncStorage.getItem;
+    multiSet: typeof AsyncStorage.multiSet;
+    removeItem: typeof AsyncStorage.removeItem;
+  };
+  const originals = {
+    getItem: storage.getItem,
+    multiSet: storage.multiSet,
+    removeItem: storage.removeItem,
+    fetch: global.fetch,
+  };
+  const values = new Map<string, string>([
+    ['fxsnap:deviceId', 'expired-session-device-123'],
+    ['fxsnap:sessionToken', 'old-session-token'],
+    ['fxsnap:sessionTokenVersion', '4'],
+    ['fxsnap:sessionApiUrl', API_BASE_URL],
+  ]);
+  const calls: Array<{ url: string; authorization?: string; accountToken?: string }> = [];
+  storage.getItem = async (key) => values.get(key) ?? null;
+  storage.multiSet = async (entries) => {
+    for (const [key, value] of entries) values.set(key, value);
+  };
+  storage.removeItem = async (key) => { values.delete(key); };
+  global.fetch = async (input, init) => {
+    const headers = new Headers(init?.headers);
+    const url = String(input);
+    calls.push({
+      url,
+      authorization: headers.get('authorization') || undefined,
+      accountToken: headers.get('x-fxsnap-account-token') || undefined,
+    });
+    if (url.endsWith('/api/session')) {
+      return { ok: true, json: async () => ({ token: 'refreshed-session-token-is-long-enough' }) } as Response;
+    }
+    return { ok: calls.filter((call) => call.url.endsWith('/api/private')).length > 1, status: calls.filter((call) => call.url.endsWith('/api/private')).length > 1 ? 200 : 401 } as Response;
+  };
+
+  try {
+    const response = await apiAuth.fetchWithApiAuth(`${API_BASE_URL}/api/private`, {
+      headers: { ...(await apiAuth.getApiHeaders()), 'x-fxsnap-account-token': 'preserve-me' },
+    });
+    assert.equal(response.status, 200);
+    const privateCalls = calls.filter((call) => call.url.endsWith('/api/private'));
+    assert.equal(privateCalls.length, 2);
+    assert.equal(privateCalls[0].authorization, 'Bearer old-session-token');
+    assert.equal(privateCalls[1].authorization, 'Bearer refreshed-session-token-is-long-enough');
+    assert.equal(privateCalls[1].accountToken, 'preserve-me');
+  } finally {
+    storage.getItem = originals.getItem;
+    storage.multiSet = originals.multiSet;
+    storage.removeItem = originals.removeItem;
+    global.fetch = originals.fetch;
+  }
 });
 
 test('analysis access accepts subscription status and rejects incomplete responses', () => {
@@ -105,10 +296,10 @@ test('exhausted API quota is shown as a temporary analysis outage instead of a r
   });
 });
 
-test('premium routes are centrally recognized and must gate before navigation', () => {
+test('premium routes are centrally recognized and Community remains available to free users', () => {
   assert.equal(isPremiumFeatureRoute('/analysis'), true);
   assert.equal(isPremiumFeatureRoute('/strategy'), true);
-  assert.equal(isPremiumFeatureRoute('/community'), true);
+  assert.equal(isPremiumFeatureRoute('/community'), false);
   assert.equal(isCommunityFeatureRoute('/community-notifications'), true);
   assert.equal(isCommunityFeatureRoute('/community-member'), true);
   assert.equal(isPremiumFeatureRoute('/risk-management'), false);
@@ -118,8 +309,8 @@ test('premium routes are centrally recognized and must gate before navigation', 
   assert.equal(shouldGuardFeatureRoute('/analysis', true), false);
   assert.equal(shouldGuardFeatureRoute('/strategy', false), true);
   assert.equal(shouldGuardFeatureRoute('/strategy', true), false);
-  assert.equal(shouldGuardFeatureRoute('/community', false), true);
-  assert.equal(shouldGuardFeatureRoute('/community-search', false), true);
+  assert.equal(shouldGuardFeatureRoute('/community', false), false);
+  assert.equal(shouldGuardFeatureRoute('/community-search', false), false);
   assert.equal(shouldGuardFeatureRoute('/community-notifications', true), false);
   assert.equal(shouldGuardFeatureRoute('/lot-size-calculator', false), false);
   assert.equal(shouldGuardFeatureRoute('/risk-management', false), false);
@@ -149,32 +340,24 @@ test('analysis, trade setup, and strategy generation all require an active subsc
   assert.deepEqual(getFeatureAccessDecision('AI_ANALYSIS', true), { allowed: true, requiresPaywall: false });
   assert.deepEqual(getFeatureAccessDecision('TRADE_SETUP', true), { allowed: true, requiresPaywall: false });
   assert.deepEqual(getFeatureAccessDecision('STRATEGY_GENERATOR', true), { allowed: true, requiresPaywall: false });
-  assert.deepEqual(getFeatureAccessDecision('COMMUNITY', false), { allowed: false, requiresPaywall: true });
+  assert.deepEqual(getFeatureAccessDecision('COMMUNITY', false), { allowed: true, requiresPaywall: false });
   assert.deepEqual(getFeatureAccessDecision('COMMUNITY', true), { allowed: true, requiresPaywall: false });
   assert.deepEqual(getFeatureAccessDecision('LOT_SIZE', false), { allowed: true, requiresPaywall: false });
   assert.deepEqual(getFeatureAccessDecision('LIVE_CHARTS', false), { allowed: true, requiresPaywall: false });
 });
 
-test('development premium bypass is opt-in and limited to analysis features', () => {
-  const runtime = globalThis as typeof globalThis & { __DEV__?: boolean };
-  const previousDevFlag = runtime.__DEV__;
+test('analysis premium bypass is opt-in and only active in development builds', () => {
   const previousBypass = process.env.EXPO_PUBLIC_DEV_PREMIUM_BYPASS;
   try {
-    runtime.__DEV__ = true;
     process.env.EXPO_PUBLIC_DEV_PREMIUM_BYPASS = 'true';
-    assert.equal(isDevelopmentPremiumBypassEnabled(), true);
-    assert.deepEqual(getFeatureAccessDecision('AI_ANALYSIS', false), { allowed: true, requiresPaywall: false });
-    assert.deepEqual(getFeatureAccessDecision('TRADE_SETUP', false), { allowed: true, requiresPaywall: false });
-    assert.deepEqual(getFeatureAccessDecision('STRATEGY_GENERATOR', false), { allowed: false, requiresPaywall: true });
-    assert.deepEqual(getFeatureAccessDecision('COMMUNITY', false), { allowed: false, requiresPaywall: true });
-    assert.equal(canViewFullAnalysis(false), true);
-
-    runtime.__DEV__ = false;
-    assert.equal(isDevelopmentPremiumBypassEnabled(), false);
-    assert.deepEqual(getFeatureAccessDecision('AI_ANALYSIS', false), { allowed: false, requiresPaywall: true });
+    assert.equal(isDevelopmentAnalysisPremiumBypassEnabled(process.env, false), false);
+    const developmentBypass = isDevelopmentAnalysisPremiumBypassEnabled(process.env, true);
+    assert.deepEqual(getFeatureAccessDecision('AI_ANALYSIS', false, developmentBypass), { allowed: true, requiresPaywall: false });
+    assert.deepEqual(getFeatureAccessDecision('TRADE_SETUP', false, developmentBypass), { allowed: true, requiresPaywall: false });
+    assert.deepEqual(getFeatureAccessDecision('STRATEGY_GENERATOR', false, developmentBypass), { allowed: false, requiresPaywall: true });
+    assert.deepEqual(getFeatureAccessDecision('COMMUNITY', false, developmentBypass), { allowed: true, requiresPaywall: false });
+    assert.equal(canViewFullAnalysis(false, developmentBypass), true);
   } finally {
-    if (previousDevFlag === undefined) delete runtime.__DEV__;
-    else runtime.__DEV__ = previousDevFlag;
     if (previousBypass === undefined) delete process.env.EXPO_PUBLIC_DEV_PREMIUM_BYPASS;
     else process.env.EXPO_PUBLIC_DEV_PREMIUM_BYPASS = previousBypass;
   }
@@ -182,5 +365,6 @@ test('development premium bypass is opt-in and limited to analysis features', ()
 
 test('full chart analysis details require an active subscription', () => {
   assert.equal(canViewFullAnalysis(false), false);
+  assert.equal(canViewFullAnalysis(false, false, true), true);
   assert.equal(canViewFullAnalysis(true), true);
 });

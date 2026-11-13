@@ -1,7 +1,7 @@
 import { Platform } from 'react-native';
 import * as Application from 'expo-application';
 import Constants from 'expo-constants';
-import { API_BASE_URL } from '@/services/apiAuth';
+import { API_BASE_URL, fetchWithApiAuth } from '@/services/apiAuth';
 import { getFxsnapAccountApiHeaders } from '@/services/account';
 import { getSupabaseClient } from '@/services/supabase';
 
@@ -63,7 +63,7 @@ export function getSupportContext(): SupportContext {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = await getFxsnapAccountApiHeaders();
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await fetchWithApiAuth(`${API_BASE_URL}${path}`, {
     ...init,
     headers: { ...headers, ...(init?.headers || {}) },
   });

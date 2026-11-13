@@ -3,7 +3,7 @@ import * as Linking from 'expo-linking';
 import * as ImagePicker from 'expo-image-picker';
 import * as Sharing from 'expo-sharing';
 import { captureRef } from 'react-native-view-shot';
-import { API_BASE_URL } from '@/services/apiAuth';
+import { API_BASE_URL, fetchWithApiAuth } from '@/services/apiAuth';
 import { getFxsnapAccountApiHeaders } from '@/services/account';
 import { getSupabaseClient } from '@/services/supabase';
 import { handleCommunityPreviewRequest } from '@/services/communityPreview';
@@ -185,7 +185,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error('FXSnap Community is currently available in the mobile app.');
   }
   const headers = await getFxsnapAccountApiHeaders();
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await fetchWithApiAuth(`${API_BASE_URL}${path}`, {
     ...init,
     headers: {
       ...headers,

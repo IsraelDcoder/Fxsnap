@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getOnboardingProgress } from '../services/onboardingProgress';
+import {
+  getOnboardingProgress,
+  requiresPushNotificationSetupBeforePaywall,
+} from '../services/onboardingProgress';
 
 test('onboarding progress shows the rounded percentage and accessible step for all three screens', () => {
   const progress = Array.from({ length: 3 }, (_, step) => getOnboardingProgress(step));
@@ -15,4 +18,11 @@ test('onboarding progress rejects steps outside the three-screen journey', () =>
   assert.throws(() => getOnboardingProgress(-1), RangeError);
   assert.throws(() => getOnboardingProgress(3), RangeError);
   assert.throws(() => getOnboardingProgress(1.5), RangeError);
+});
+
+test('native onboarding requires push setup before the paywall but web preview does not', () => {
+  assert.equal(requiresPushNotificationSetupBeforePaywall('ios', false), true);
+  assert.equal(requiresPushNotificationSetupBeforePaywall('android', false), true);
+  assert.equal(requiresPushNotificationSetupBeforePaywall('ios', true), false);
+  assert.equal(requiresPushNotificationSetupBeforePaywall('web', false), false);
 });

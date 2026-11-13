@@ -3,6 +3,8 @@ const path = require('node:path');
 const config = require('./app.json').expo;
 const googleServicesFile = process.env.GOOGLE_SERVICES_JSON;
 
+config.ios.infoPlist.ITSAppUsesNonExemptEncryption = false;
+
 if (googleServicesFile) {
   const resolvedGoogleServicesFile = path.resolve(googleServicesFile);
   if (!fs.existsSync(resolvedGoogleServicesFile)) {

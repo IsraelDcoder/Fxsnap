@@ -2,11 +2,12 @@
 
 ## EAS
 
-1. Install and authenticate the EAS CLI.
-2. Create or link the Expo project.
-3. Replace `replace_with_eas_project_id` in `app.json` and `.env` with the real EAS project ID.
-4. Confirm `com.fxsnap.mobile` is available and owned by the publishing account.
-5. Build with the production EAS profile.
+1. Install and authenticate the EAS CLI with the Expo account that owns the app.
+2. Verify that the Expo project referenced by `extra.eas.projectId` in
+   `app.json` exists and that the authenticated account has access to it. The
+   project ID is already configured there; do not replace it with a placeholder.
+3. Confirm `com.fxsnap.mobile` is available and owned by the publishing account.
+4. Build with the production EAS profile.
 
 The local `npm run build` command creates a web export. Native release builds use `npm run build:ios`, `npm run build:android`, or `npm run build:all`.
 Android release builds use R8 minification and resource shrinking. Test the resulting release build before submitting it, and verify the updated DEX optimization metrics in Play Console. The app does not lock orientation, so include landscape and large-screen layouts in device testing.
@@ -21,16 +22,19 @@ Configure these exact product identifiers in Apple App Store Connect, Google Pla
 
 Create the existing `premium` entitlement and attach all three products, then set:
 
-- `EXPO_PUBLIC_REVENUECAT_IOS_API_KEY`
-- `EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY`
-- `EXPO_PUBLIC_REVENUECAT_ENTITLEMENT_ID`
+- `EXPO_PUBLIC_RC_IOS_KEY`
+- `EXPO_PUBLIC_RC_ANDROID_KEY`
+- `EXPO_PUBLIC_RC_ENTITLEMENT_ID`
 - `EXPO_PUBLIC_REVENUECAT_WEEKLY_PRODUCT_ID` if the weekly product uses a different identifier
 - `EXPO_PUBLIC_REVENUECAT_MONTHLY_PRODUCT_ID` if the monthly product uses a different identifier
 - `EXPO_PUBLIC_REVENUECAT_YEARLY_PRODUCT_ID` if the yearly product uses a different identifier
 - `REVENUECAT_SECRET_API_KEY` on the server only
 
 Set each country’s weekly, monthly, and yearly price tiers in App Store Connect and Google Play Console. The paywall reads localized prices from RevenueCat and shows “Save 86%” on the yearly plan.
-Test purchases and restores in Apple Sandbox and Google Play license-test tracks. Do not use the public paywall in production until the backend entitlement endpoint returns verified active state.
+
+For the Google Play exit offer, create a RevenueCat offering named `exit_offer` with the yearly product as its `$rc_annual` package. Configure the `yearly-exit-20off` Play offer on that product and verify the returned subscription-option ID ends in `yearly-exit-20off`. On Android, the paywall's close button opens a separate FXSnap-branded exit-offer screen only when RevenueCat returns that option at a price below the regular annual price. The screen displays localized first-year and renewal prices and purchases the discounted subscription option; closing it returns to the hard paywall. No countdown is shown because the offer's actual expiry is not configured in the app. It is not available in the web preview or iOS.
+
+Test purchases and restores in Apple Sandbox and Google Play license-test tracks. Test the discounted exit offer with an eligible Play license tester. Do not use the public paywall in production until the backend entitlement endpoint returns verified active state.
 
 ## Backend secrets
 
@@ -65,7 +69,9 @@ Create a Sentry React Native project, set `EXPO_PUBLIC_SENTRY_DSN`, and configur
 
 ## Before store submission
 
-- Replace draft privacy and terms documents with reviewed, hosted URLs.
+- In-app legal links point to `https://fxsnapp.app/privacy` and
+  `https://fxsnapp.app/termsofuse`. Confirm both hosted pages are reachable
+  before release.
 - Add support and account-deletion URLs.
 - Complete App Store privacy and Google Play Data Safety declarations.
 - Test camera, gallery, image upload, billing, restore, expiration, refund/revocation, sharing, offline errors, and small-screen, landscape, tablet, and foldable layouts on real devices.

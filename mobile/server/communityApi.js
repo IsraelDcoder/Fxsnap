@@ -116,7 +116,6 @@ function createCommunityApi({
   sendJson,
   readJsonBody,
   saveCommunityUsername,
-  requirePremiumSubscription,
   dispatchCommunityPush: sendCommunityPush = dispatchCommunityPush,
 }) {
   function dispatchQueuedNotifications(messageId) {
@@ -259,13 +258,6 @@ function createCommunityApi({
         ? 'Sign in with your linked Google account to join Community.'
         : 'Sign in with your linked Google account to access FXSnap announcements.' });
       return null;
-    }
-    if (requireCommunity) {
-      if (typeof requirePremiumSubscription !== 'function' || typeof actor.deviceId !== 'string' || !actor.deviceId) {
-        sendJson(res, 503, { error: 'Community subscription verification is unavailable. Please try again.' });
-        return null;
-      }
-      if (!await requirePremiumSubscription(actor.deviceId, res)) return null;
     }
     const isAdmin = config.adminUserIds.has(actor.supabaseUserId);
     const result = { ...actor, isAdmin };
@@ -1904,8 +1896,16 @@ function createCommunityApi({
           });
         } else if (input.data.action === 'remove_message') {
           if (!message) return sendJson(res, 400, { error: 'Choose the message to remove.' });
-          await patchRows('fxsnap_community_messages', `id=eq.${encodeURIComponent(message.id)}`, { removed_at: now });
+          const removedRows = parseRows(await patchRows(
+            'fxsnap_community_messages',
+            `id=eq.${encodeURIComponent(message.id)}&removed_at=is.null`,
+            { removed_at: now },
+          ));
+          if (!removedRows.length) {
+            return sendJson(res, 404, { error: 'Community message was already removed or could not be found.' });
+          }
           details.messageId = message.id;
+          console.info('[Community moderation] Removed message.', { messageId: message.id });
         } else if (input.data.action === 'pin' || input.data.action === 'unpin') {
           if (!message) return sendJson(res, 400, { error: 'Choose the message to pin or unpin.' });
           await patchRows('fxsnap_community_messages', `id=eq.${encodeURIComponent(message.id)}`, {

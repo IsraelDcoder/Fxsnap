@@ -1,5 +1,5 @@
 import { Platform } from 'react-native';
-import { API_BASE_URL, getApiHeaders } from '@/services/apiAuth';
+import { API_BASE_URL, fetchWithApiAuth, getApiHeaders } from '@/services/apiAuth';
 import { getFxsnapAccountApiHeaders } from '@/services/account';
 import { getSupabaseClient } from '@/services/supabase';
 
@@ -118,7 +118,7 @@ async function request<T>(path: string, init?: RequestInit, account = false): Pr
   const headers = account ? await getFxsnapAccountApiHeaders() : await getApiHeaders();
   let response: Response;
   try {
-    response = await fetch(`${API_BASE_URL}${path}`, {
+    response = await fetchWithApiAuth(`${API_BASE_URL}${path}`, {
       ...init,
       headers: { ...headers, ...(init?.headers || {}) },
     });

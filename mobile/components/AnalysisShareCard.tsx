@@ -2,6 +2,7 @@ import React from 'react';
 import { Image, View, Text, StyleSheet } from 'react-native';
 import { formatAnalysisDirection, resolveAnalysisDirection } from '@/services/analysisDirection';
 import { formatInstrumentPriceText } from '@/services/priceFormatting';
+import { calculateRiskRewardFromLevels, formatRiskReward } from '@/services/analysisResult';
 
 // Minimal share card component used for off-screen capture.
 // Calls onReady after the first layout + short delay to ensure fonts/assets have rendered.
@@ -47,10 +48,17 @@ const AnalysisShareCard = React.forwardRef(function AnalysisShareCard(props: Pro
     : formatAnalysisDirection(displayDirection, analysis?.status === 'success' && analysis?.tradeStatus === 'actionable');
   const directionColor = isBuy ? '#00E676' : isSell ? '#FF5252' : '#8E8E93';
   const setup = analysis?.tradeSetup;
-  const entry = setup?.entryZone || analysis?.entry;
-  const stopLoss = setup?.stopLoss || analysis?.sl;
-  const takeProfit = setup?.takeProfit || analysis?.tp;
-  const riskReward = setup?.riskReward ?? analysis?.riskReward;
+  const plan = analysis?.tradePlan;
+  const entry = plan?.entry ?? setup?.entryZone ?? analysis?.entry;
+  const stopLoss = plan?.stopLoss ?? setup?.stopLoss ?? analysis?.sl;
+  const takeProfit = plan?.takeProfit1 ?? analysis?.takeProfitLevels?.[0] ?? setup?.takeProfit ?? analysis?.tp;
+  const calculatedRiskReward = calculateRiskRewardFromLevels(
+    entry,
+    stopLoss,
+    takeProfit,
+    plan?.direction ?? setup?.type,
+  );
+  const riskReward = calculatedRiskReward == null ? '—' : formatRiskReward(calculatedRiskReward);
   const structure = analysis?.analysis?.structure;
   const insight = analysis?.analysis?.notes || analysis?.tradeTrigger;
   const whyNotNow = Array.isArray(analysis?.whyNotNow) ? analysis.whyNotNow.join(' ') : analysis?.whyNotNow;

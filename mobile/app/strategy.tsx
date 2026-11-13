@@ -9,7 +9,7 @@ import { router, useFocusEffect } from 'expo-router';
 import * as Haptics from '@/services/haptics';
 import { useApp } from '@/context/AppContext';
 import type { SavedStrategy } from '@/context/AppContext';
-import { API_BASE_URL, getApiHeaders } from '@/services/apiAuth';
+import { API_BASE_URL, fetchWithApiAuth, getApiHeaders } from '@/services/apiAuth';
 import { useColors } from '@/hooks/useColors';
 
 type Stage = 'inputs' | 'generating' | 'result';
@@ -29,7 +29,7 @@ function getFriendlyAiError(payload: { error?: string } | undefined, fallback = 
 }
 
 async function requestAIStrategy(answers: Answers, variation: number): Promise<Strategy> {
-  const response = await fetch(`${API_BASE_URL}/api/strategy`, { method: 'POST', headers: await getApiHeaders(), body: JSON.stringify({ ...answers, variation }) });
+  const response = await fetchWithApiAuth(`${API_BASE_URL}/api/strategy`, { method: 'POST', headers: await getApiHeaders(), body: JSON.stringify({ ...answers, variation }) });
   const payload = await response.json();
   if (!response.ok) throw new Error(getFriendlyAiError(payload));
   return payload as Strategy;

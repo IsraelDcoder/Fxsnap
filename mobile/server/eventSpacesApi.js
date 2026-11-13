@@ -20,7 +20,13 @@ const spaceInput = z.object({
   status: z.enum(['draft', 'scheduled']).default('draft'),
 }).strict();
 
-function createEventSpacesApi({ getActor, sendJson, readJsonBody, livekit = createLiveKitService() }) {
+function createEventSpacesApi({
+  getActor,
+  sendJson,
+  readJsonBody,
+  livekit = createLiveKitService(),
+  sendLiveSpaceNotification = async () => ({ sent: 0 }),
+}) {
   function config() {
     const supabaseUrl = String(process.env.SUPABASE_URL || process.env.SUPABASE_PROJECT_URL || '').replace(/\/+$/, '');
     const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
@@ -345,7 +351,11 @@ function createEventSpacesApi({ getActor, sendJson, readJsonBody, livekit = crea
         if (!Array.isArray(rows) || !rows[0]) {
           throw Object.assign(new Error('The LiveKit room started, but the event status could not be updated.'), { status: 502 });
         }
-        return rows[0];
+        const updatedSpace = rows[0];
+        void Promise.resolve(sendLiveSpaceNotification(updatedSpace)).catch((error) => {
+          console.error('[Events] Live-space notification broadcast failed.', error instanceof Error ? error.message : 'Unknown error.');
+        });
+        return updatedSpace;
       } catch (error) {
         try {
           await livekit.deleteRoom(roomName);

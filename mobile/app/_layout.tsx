@@ -38,7 +38,7 @@ import {
 } from '@/services/notifications';
 import { markSystemAnnouncementRead } from '@/services/community';
 import { trackEvent } from '@/services/telemetry';
-import { isCommunityFeatureRoute, shouldGuardFeatureRoute } from '@/services/featureAccess';
+import { getAccessGateRoute, isCommunityFeatureRoute } from '@/services/featureAccess';
 import { useColors } from '@/hooks/useColors';
 
 SplashScreen.preventAutoHideAsync();
@@ -58,6 +58,7 @@ function StartupBrandReveal({ onComplete }: { onComplete: () => void }) {
   const colors = useColors();
   const reduceMotion = useReducedMotion();
   const { height: windowHeight, width: windowWidth } = useWindowDimensions();
+  const centerY = windowHeight / 2;
   const progress = useSharedValue(0);
 
   useEffect(() => {
@@ -112,13 +113,13 @@ function StartupBrandReveal({ onComplete }: { onComplete: () => void }) {
       style={[styles.startupSplash, { backgroundColor: colors.background }]}
     >
       <Animated.View
-        style={[styles.startupPanel, styles.startupUpperPanel, { backgroundColor: colors.background }, upperPanelStyle]}
+        style={[styles.startupPanel, styles.startupUpperPanel, { backgroundColor: colors.background, height: centerY }, upperPanelStyle]}
       />
       <Animated.View
-        style={[styles.startupPanel, styles.startupLowerPanel, { backgroundColor: colors.background }, lowerPanelStyle]}
+        style={[styles.startupPanel, styles.startupLowerPanel, { backgroundColor: colors.background, height: centerY }, lowerPanelStyle]}
       />
-      <Animated.View style={[styles.startupIgnite, { backgroundColor: colors.buy }, igniteStyle]} />
-      <Animated.View style={[styles.startupHighlight, { backgroundColor: colors.buy }, highlightStyle]} />
+      <Animated.View style={[styles.startupIgnite, { backgroundColor: colors.buy, top: centerY }, igniteStyle]} />
+      <Animated.View style={[styles.startupHighlight, { backgroundColor: colors.buy, top: centerY }, highlightStyle]} />
       <Animated.Text
         accessibilityLabel="FXSnap"
         accessibilityRole="text"
@@ -126,7 +127,7 @@ function StartupBrandReveal({ onComplete }: { onComplete: () => void }) {
       >
         FXSnap
       </Animated.Text>
-      <Animated.View style={[styles.startupSlice, { backgroundColor: colors.buy }, sliceStyle]} />
+      <Animated.View style={[styles.startupSlice, { backgroundColor: colors.buy, top: centerY }, sliceStyle]} />
     </View>
   );
 }
@@ -139,7 +140,6 @@ function RootLayoutNav({ fontsReady }: { fontsReady: boolean }) {
     isSubscribed,
     billingAvailable,
     billingStatusReady,
-    checkFeatureAccess,
   } = useApp();
   const colors = useColors();
   const pathname = usePathname();
@@ -196,34 +196,14 @@ function RootLayoutNav({ fontsReady }: { fontsReady: boolean }) {
       if (!isCommunityPath) setCommunityAccessVerifiedPath(null);
       return;
     }
-    let active = true;
-    setCommunityAccessVerifiedPath(null);
-    void checkFeatureAccess('COMMUNITY', pathname).then((access) => {
-      if (!active) return;
-      if (access.error) {
-        console.error('[ACCESS] Community subscription check failed.', access.error);
-        router.replace({ pathname: '/paywall', params: { source: 'subscription-required' } });
-        return;
-      }
-      if (access.allowed) setCommunityAccessVerifiedPath(pathname);
-    }).catch((error: unknown) => {
-      if (!active) return;
-      console.error('[ACCESS] Could not verify Community subscription.', error);
-      router.replace({ pathname: '/paywall', params: { source: 'subscription-required' } });
-    });
-    return () => { active = false; };
-  }, [checkFeatureAccess, isCommunityPath, isLoading, pathname]);
+    setCommunityAccessVerifiedPath(pathname);
+  }, [isCommunityPath, isLoading, pathname]);
 
   useEffect(() => {
     if (isLoading || (billingAvailable && !billingStatusReady)) return;
-    if (!onboardingComplete && !isSubscribed) {
-      if (pathname === '/' || pathname === '/onboarding' || pathname === '/paywall' || pathname === '/auth/callback') return;
-      router.replace('/onboarding');
-      return;
-    }
-    if (!paywallDismissed || isSubscribed || !shouldGuardFeatureRoute(pathname, isSubscribed)) return;
-    router.replace({ pathname: '/paywall', params: { source: 'subscription-required' } });
-  }, [billingAvailable, billingStatusReady, isLoading, isSubscribed, onboardingComplete, pathname, paywallDismissed]);
+    const gateRoute = getAccessGateRoute(pathname, onboardingComplete, isSubscribed, paywallDismissed);
+    if (gateRoute) router.replace(gateRoute);
+  }, [billingAvailable, billingStatusReady, isLoading, isSubscribed, onboardingComplete, paywallDismissed, pathname]);
 
   useEffect(() => {
     if (Platform.OS === 'web') return;
@@ -291,6 +271,7 @@ function RootLayoutNav({ fontsReady }: { fontsReady: boolean }) {
         <Stack.Screen name="saved" options={{ headerShown: false, animation: 'slide_from_right' }} />
         <Stack.Screen name="saved-briefs" options={{ headerShown: false, animation: 'slide_from_right' }} />
         <Stack.Screen name="paywall" options={{ headerShown: false, animation: 'slide_from_bottom', presentation: 'modal' }} />
+        <Stack.Screen name="exit-offer" options={{ headerShown: false, animation: 'slide_from_right' }} />
         <Stack.Screen name="my-strategies" options={{ headerShown: false, animation: 'slide_from_right' }} />
       </Stack>
       {isCommunityPath && communityAccessVerifiedPath !== pathname ? (
@@ -298,7 +279,7 @@ function RootLayoutNav({ fontsReady }: { fontsReady: boolean }) {
           <ActivityIndicator color={colors.buy} />
         </View>
       ) : null}
-      <CommunityInteractionPrompt enabled={!isLoading && onboardingComplete && isSubscribed && pathname !== '/onboarding' && (!isCommunityPath || communityAccessVerifiedPath === pathname)} />
+      <CommunityInteractionPrompt enabled={!isLoading && onboardingComplete && pathname !== '/onboarding' && (!isCommunityPath || communityAccessVerifiedPath === pathname)} />
       {startupReady && showStartupSplash === true ? (
         <StartupBrandReveal onComplete={finishStartupSplash} />
       ) : null}
@@ -318,7 +299,6 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 0,
     right: 0,
-    height: '50%',
     overflow: 'hidden',
   },
   startupUpperPanel: {
@@ -331,14 +311,12 @@ const styles = StyleSheet.create({
     position: 'absolute',
     width: '58%',
     height: 2,
-    top: '50%',
     marginTop: -1,
   },
   startupHighlight: {
     position: 'absolute',
     width: 70,
     height: 2,
-    top: '50%',
     marginTop: -1,
   },
   startupWordmark: {
@@ -354,7 +332,6 @@ const styles = StyleSheet.create({
     position: 'absolute',
     width: '100%',
     height: 1,
-    top: '50%',
     zIndex: 3,
   },
   accessCheck: {
