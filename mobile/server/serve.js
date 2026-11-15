@@ -158,6 +158,7 @@ const DEFAULT_TRADE_SETUP = {
   risk_reward: null,
   setup_status: 'unknown',
 };
+const MAX_VALIDATED_REWARD_TO_RISK = 10;
 const DEFAULT_CHART_INSTRUMENT_RULES = {
   XAUUSD: { tickSize: 0.01, pricePrecision: 2, maxEntryDistanceTicks: 500 },
   XAGUSD: { tickSize: 0.01, pricePrecision: 2, maxEntryDistanceTicks: 500 },
@@ -800,6 +801,8 @@ function getPriceConsistencyIssues(result, pairHint, now = Date.now()) {
   }
   if (calculated?.issues?.length) {
     issues.push('The stop loss or TP1 is on the wrong side of the proposed entry.');
+  } else if (calculated?.rr > MAX_VALIDATED_REWARD_TO_RISK) {
+    issues.push(`The proposed reward-to-risk ratio of ${calculated.rr.toFixed(2)}:1 exceeds the ${MAX_VALIDATED_REWARD_TO_RISK}:1 safety limit; the stop may be too close to entry or TP1 too distant to support.`);
   }
   return Array.from(new Set(issues));
 }
@@ -821,23 +824,67 @@ function buildNoTradeVerdictFields(result, reason) {
 function holdSetupForPriceValidation(result, issues) {
   const preserved = result && typeof result === 'object' ? { ...result } : {};
   const fallbackReason = issues && issues.length ? issues.join(' ') : 'The chart is legible, so the setup remains valid.';
-  if (preserved.trade_plan) {
-    preserved.status = preserved.status === 'invalid_image' ? 'success' : (preserved.status || 'success');
-    preserved.no_trade_reason = null;
-    preserved.verdict = preserved.verdict || 'TRADE_PLAN';
-    preserved.conviction = preserved.conviction || 'MEDIUM';
-    preserved.verdict_reason = preserved.verdict_reason || fallbackReason;
-    preserved.reasons = mergeUniqueStrings([...(preserved.reasons || []), fallbackReason]);
-    return preserved;
-  }
+  const reason = `No trade: ${fallbackReason}`;
+  const setup = { ...DEFAULT_TRADE_SETUP, take_profit_levels: [] };
   return {
     ...preserved,
-    status: 'success',
-    verdict: 'TRADE_PLAN',
-    conviction: 'MEDIUM',
+    status: 'no_trade',
+    verdict: 'NO_TRADE',
+    conviction: null,
     trade_plan: null,
-    no_trade_reason: null,
-    reasons: mergeUniqueStrings([...(preserved.reasons || []), fallbackReason]),
+    trade_setup: setup,
+    entry: null,
+    sl: null,
+    tp: null,
+    take_profit_levels: [],
+    no_trade_reason: reason,
+    verdict_reason: reason,
+    decision: 'NO_TRADE',
+    tradeDecision: 'NONE',
+    tradeType: 'none',
+    setupDirection: 'none',
+    setupStatus: 'NO_SETUP',
+    tradeStatus: 'no_setup',
+    entryStatus: 'unverified',
+    entryReadiness: 0,
+    setupConfidence: 0,
+    candidateValidationStatus: 'rejected',
+    tradeTrigger: reason,
+    reasons: mergeUniqueStrings([...(preserved.reasons || []), reason]),
+    whyNotNow: mergeUniqueStrings([...(preserved.whyNotNow || []), reason]),
+    dataLimitations: mergeUniqueStrings([...(preserved.dataLimitations || []), fallbackReason]),
+  };
+}
+
+function rejectExcessiveRewardToRiskSetup(result, reason) {
+  const message = reason || `The proposed reward-to-risk ratio exceeds the ${MAX_VALIDATED_REWARD_TO_RISK}:1 safety limit.`;
+  return {
+    ...result,
+    status: 'no_trade',
+    verdict: 'NO_TRADE',
+    conviction: null,
+    verdict_reason: message,
+    trade_plan: null,
+    trade_setup: { ...DEFAULT_TRADE_SETUP, take_profit_levels: [] },
+    entry: null,
+    sl: null,
+    tp: null,
+    take_profit_levels: [],
+    no_trade_reason: message,
+    decision: 'NO_TRADE',
+    tradeDecision: 'NONE',
+    tradeType: 'none',
+    setupDirection: 'none',
+    setupStatus: 'NO_SETUP',
+    tradeStatus: 'no_setup',
+    entryStatus: 'unverified',
+    entryReadiness: 0,
+    setupConfidence: 0,
+    candidateValidationStatus: 'rejected',
+    tradeTrigger: message,
+    reasons: mergeUniqueStrings([...(result.reasons || []), message]),
+    whyNotNow: mergeUniqueStrings([...(result.whyNotNow || []), message]),
+    dataLimitations: mergeUniqueStrings([...(result.dataLimitations || []), message]),
   };
 }
 
@@ -2232,7 +2279,7 @@ function applyMentorStrategy(normalized) {
 }
 
 function getTraderSystemPrompt() {
-  return `You are FXSnap's chart analyst. You receive ONE screenshot of a trading chart. Return valid JSON only, with no markdown or prose. For a readable chart with a supported directional setup, return bias, levels, price_position, setup, verdict: "TRADE_PLAN", conviction, verdict_reason, a complete trade_plan, and no_trade_reason: null. Select BUY or SELL from the visible evidence; never default to BUY, invent a side, or reverse direction just to make a plan fit the levels. If the chart is blurred, the current price is unreadable, the evidence is genuinely mixed, or no defensible setup exists, return verdict: "NO_TRADE", trade_plan: null, and a clear no_trade_reason. Never invent missing chart data. Do not claim a screenshot price is live. Use the rightmost/current price marker or candle, never a historical candle as the current price.
+  return `You are FXSnap's chart analyst. You receive ONE screenshot of a trading chart. Return valid JSON only, with no markdown or prose. Treat the far-right newest visible candle and its current-price marker as the chart's as-of point: analyze older candles only as context, and never base a trade entry on a setup that already occurred on an older candle. Every trade plan must be prospective from that as-of point: its entry must still be available at the latest visible price or depend on a specific, not-yet-observed future trigger. If the entry was missed, price already reached TP1, or price crossed the invalidation level, return NO_TRADE rather than presenting the past setup. For a readable chart with a supported directional setup, return bias, levels, price_position, setup, verdict: "TRADE_PLAN", conviction, verdict_reason, a complete trade_plan, and no_trade_reason: null. Select BUY or SELL from the visible evidence; never default to BUY, invent a side, or reverse direction just to make a plan fit the levels. If the chart is blurred, the current price is unreadable, the evidence is genuinely mixed, no defensible setup exists, or TP1 is more than 10 times the stop risk, return verdict: "NO_TRADE", trade_plan: null, and a clear no_trade_reason. Stops must be beyond a visible invalidation point; do not make a stop artificially tight to inflate reward-to-risk. Never invent missing chart data. Do not claim a screenshot price is live or guarantee execution; the user must verify the latest live price before placing an order. Use the rightmost/current price marker or candle, never a historical candle as the current price.
 
 Always include chart metadata in the JSON: chart.is_chart, chart.pair, chart.timeframe, chart.chart_quality, chart.price_scale_visible, chart.candles_visible, chart.has_enough_candles, chart.latest_visible_price, chart.current_price_source, chart.rightmost_candle, chart.current_candle_status, and chart.latest_candle_timestamp. Read latest_visible_price from the numeric label attached to the current-price horizontal marker when present; otherwise read the close of the rightmost candle only if its scale value is clearly legible. Set current_price_source to "visible_price_marker" or "latest_candle_scale_read" accordingly. Do not use an axis tick, support/resistance level, or older candle as the current price. If neither source is legible, set latest_visible_price to null and current_price_source to "unreadable". Never estimate or derive the price.
 
@@ -3560,7 +3607,7 @@ function buildCandidateLevelFollowupMessages(imageBase64, mimeType, pair, result
   return [
     {
       role: 'system',
-      content: `Evaluate BUY and SELL separately using visible chart evidence; first-pass analysis is context, not proof. When support and resistance are both clear and numeric, provide complete conditional candidates from the boundaries: buy at/near support, SL beyond its visible swing, TP at resistance; sell at/near resistance, SL beyond its visible swing, TP at support. Use the nearer boundary when price is between them. Do not return unsupported just because trend, consolidation or entry trigger is unclear; mark setup_status=unclear (or valid if structure holds), entry_status=waiting_for_trigger. State the specific visible confirmation to wait for in entry_trigger; do not invent a trigger. These are setup directions, not instructions to enter immediately. Only reject a side if levels/defensible SL are genuinely unreadable, structure is invalidated/missed. No invented prices/buffers. A candidate is conditional, not an actionable trade; retain BUY/SELL setup direction while the trigger is pending. When both candidates have equal evidence, prefer the direction supported by the established bias; otherwise prefer the valid entry zone nearer the latest visible price. If both remain equally supported and equally near, do not invent a preference; the server will retain the ambiguity. The server validates actionability and recalculates R:R. Return only:
+      content: `Evaluate BUY and SELL separately using visible chart evidence; first-pass analysis is context only. Anchor candidates to the far-right newest candle and latest visible price; older candles are context, never entry signals. Reject a candidate as missed if price passed its entry, reached TP1, or crossed invalidation. Every candidate must be a prospective entry still available now or by a future, unobserved trigger. When both boundaries are clear, provide conditional levels: buy near support with SL beyond swing and TP at resistance; sell near resistance with SL beyond swing and TP at support. Use the nearer boundary when price is between them. If trend, consolidation or trigger is unclear, mark setup_status=unclear (or valid if structure holds) and entry_status=waiting_for_trigger. State the visible confirmation to wait for; do not invent a trigger. These are setup directions, not immediate-entry instructions. Only reject a side if levels/defensible SL are unreadable, structure is invalidated/missed, or TP1 requires more than 10 times the stop risk. Never tighten a stop to inflate reward-to-risk. No invented prices/buffers. A candidate is conditional, not actionable; retain its BUY/SELL direction while the trigger is pending. If both candidates have equal evidence, prefer the established bias; otherwise prefer the valid entry zone nearer the latest visible price. If still equally supported and near, do not invent a preference; the server retains the ambiguity. The server validates actionability and recalculates R:R. Return only:
 {"status":"reviewed","buy":{"status":"candidate|unsupported","entry_zone":"price/range or omit","stop_loss":"price or omit","take_profit_levels":["TP1","optional TP2"],"setup_status":"valid|missed|invalidated|unclear","entry_status":"waiting_for_trigger|trigger_observed|missed|unverified","entry_type":"limit_zone|breakout|rejection|other|unspecified","entry_trigger":"specific visible trigger to wait for, or omit if unavailable","evidence":{"trend":"buy|sell|neutral|unavailable","structure":"buy|sell|neutral|unavailable","zone":"support|resistance|neutral|unavailable","trigger":"buy|sell|neutral|unavailable","higher_timeframe":"buy|sell|neutral|unavailable","liquidity":"buy|sell|neutral|unavailable","rsi":"buy|sell|neutral|unavailable"},"reason":"visible evidence or why unsupported"},"sell":{"status":"candidate|unsupported","entry_zone":"price/range or omit","stop_loss":"price or omit","take_profit_levels":["TP1","optional TP2"],"setup_status":"valid|missed|invalidated|unclear","entry_status":"waiting_for_trigger|trigger_observed|missed|unverified","entry_type":"limit_zone|breakout|rejection|other|unspecified","entry_trigger":"specific visible trigger to wait for, or omit if unavailable","evidence":{"trend":"buy|sell|neutral|unavailable","structure":"buy|sell|neutral|unavailable","zone":"support|resistance|neutral|unavailable","trigger":"buy|sell|neutral|unavailable","higher_timeframe":"buy|sell|neutral|unavailable","liquidity":"buy|sell|neutral|unavailable","rsi":"buy|sell|neutral|unavailable"},"reason":"visible evidence or why unsupported"}}`,
     },
     {
@@ -3642,6 +3689,8 @@ function addPriceDataLimitations(result, pairHint) {
 async function retryPriceConsistencyOnce(result, pairHint, retryMessages) {
   if (result.levelFollowupStatus === 'completed') {
     const issues = getPriceConsistencyIssues(result, pairHint);
+    const excessiveRewardIssue = issues.find((issue) => /reward-to-risk ratio .* exceeds the \d+:1 safety limit/i.test(issue));
+    if (excessiveRewardIssue) return rejectExcessiveRewardToRiskSetup(result, excessiveRewardIssue);
     if (issues.length === 0) {
       if (result.entryStatus === 'trigger_observed'
         && result.trade_setup?.setup_status === 'valid'
@@ -3662,31 +3711,25 @@ async function retryPriceConsistencyOnce(result, pairHint, retryMessages) {
       }
       return result;
     }
-    const reason = `Candidate levels are shown for analysis only; the setup is not validated as a fresh opportunity. ${issues.join(' ')}`;
+    const reason = `The setup is not validated as a fresh opportunity; candidate levels were cleared. ${issues.join(' ')}`;
     const cannotVerifyFreshness = issues.some((issue) => /current price cannot be reliably read|rightmost candle could not be distinguished|timestamp is unreadable|timestamp is not a reliable|timestamp is stale or in the future|instrument or its tick-size rules could not be verified/i.test(issue));
+    const rejected = holdSetupForPriceValidation(result, [reason]);
     return {
-      ...result,
-      status: 'no_trade',
-      decision: 'NO_TRADE',
-      tradeDecision: 'NONE',
-      tradeStatus: 'no_setup',
-      setupStatus: 'NO_SETUP',
-      entryReadiness: 0,
-      setupConfidence: 0,
-      tradeTrigger: reason,
+      ...rejected,
       analysis: {
         ...(result.analysis || {}),
         notes: mergeUniqueStrings([result.analysis?.notes || '', reason]).join(' '),
       },
-      reasons: mergeUniqueStrings([...(result.reasons || []), reason]),
-      whyNotNow: mergeUniqueStrings([...(result.whyNotNow || []), reason]),
       dataLimitations: mergeUniqueStrings([...(result.dataLimitations || []), ...issues]),
+      candidateReview: { status: 'none', reason },
       candidateValidationStatus: cannotVerifyFreshness || issues.some((issue) => /market-structure validity .* unclear/i.test(issue))
         ? 'unverified'
         : 'rejected',
     };
   }
   const firstIssues = getPriceConsistencyIssues(result, pairHint);
+  const excessiveRewardIssue = firstIssues.find((issue) => /reward-to-risk ratio .* exceeds the \d+:1 safety limit/i.test(issue));
+  if (excessiveRewardIssue) return rejectExcessiveRewardToRiskSetup(result, excessiveRewardIssue);
   if (result.trade_setup?.type !== 'buy' && result.trade_setup?.type !== 'sell') {
     return addPriceDataLimitations(result, pairHint);
   }
@@ -3952,6 +3995,9 @@ function twoSidedGeometryIssue(candidate, direction, result) {
       direction,
     });
     if (calculated.issues.length) return calculated.issues.join(' ');
+    if (calculated.rr > MAX_VALIDATED_REWARD_TO_RISK) {
+      return `The proposed reward-to-risk ratio of ${calculated.rr.toFixed(2)}:1 exceeds the ${MAX_VALIDATED_REWARD_TO_RISK}:1 safety limit; the stop may be too close to entry or TP1 too distant to support.`;
+    }
   }
   const symbol = result?.chart?.pair || result?.detectedPair || '';
   const rule = symbol ? chartInstrumentRule(symbol) : null;
@@ -4425,6 +4471,10 @@ async function analyzeChart(req, res) {
         );
       }
     }
+
+    const excessiveRewardIssue = getPriceConsistencyIssues(result, input.pair || result.detectedPair)
+      .find((issue) => /reward-to-risk ratio .* exceeds the \d+:1 safety limit/i.test(issue));
+    if (excessiveRewardIssue) result = rejectExcessiveRewardToRiskSetup(result, excessiveRewardIssue);
 
     if (result.status === 'success' && result.trade_plan) {
       try {

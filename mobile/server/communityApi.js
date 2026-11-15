@@ -301,7 +301,16 @@ function createCommunityApi({
 
   async function rateLimit(accountId, purpose, maximum, windowSeconds) {
     const count = await persistentStore.increment(`fxsnap:community:rate:${purpose}:${accountId}`, windowSeconds);
-    if (count > maximum) throw new CommunityError('You are sending requests too quickly. Please wait and try again.', 429);
+    if (count > maximum) {
+      console.warn('[RateLimit] Request rejected.', {
+        limiter: `community_${purpose}`,
+        status: 429,
+        count,
+        maximum,
+        windowSeconds,
+      });
+      throw new CommunityError('You are sending requests too quickly. Please wait and try again.', 429);
+    }
   }
 
   async function recordModeration(actor, action, targetAccountId, targetMessageId, details = {}) {
