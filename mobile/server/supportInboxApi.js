@@ -300,7 +300,17 @@ function createSupportInboxApi({ getActor, sendJson, readJsonBody, getPremiumSta
           return sendJson(res, 400, { error: 'Enter a message or attach a JPEG, PNG, or WebP image, and provide valid app context.' });
         }
         const count = await persistentStore.increment(`fxsnap:support:rate:${actor.accountId}`, 3600);
-        if (count > 20) return sendJson(res, 429, { error: 'You have sent several messages recently. Please wait before sending another.' });
+        if (count > 20) {
+          console.warn('[RateLimit] Request rejected.', {
+            limiter: 'support_messages',
+            route: pathname,
+            status: 429,
+            count,
+            maximum: 20,
+            windowSeconds: 3600,
+          });
+          return sendJson(res, 429, { error: 'You have sent several messages recently. Please wait before sending another.' });
+        }
         const existing = parseRows(await getRows(
           'fxsnap_support_messages',
           `sender_account_id=eq.${encodeURIComponent(actor.accountId)}&client_message_id=eq.${encodeURIComponent(input.data.clientMessageId)}&select=id,conversation_id,sender_kind,body,created_at,attachment_path,attachment_content_type&limit=1`,

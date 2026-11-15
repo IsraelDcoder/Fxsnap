@@ -1,36 +1,43 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getAccessGateRoute, shouldGuardFeatureRoute } from '../services/featureAccess';
+import { getAccessGateRoute, getFeatureAccessDecision, shouldGuardFeatureRoute } from '../services/featureAccess';
 
-test('users must complete onboarding before reaching the paywall or app routes', () => {
+test('users must complete onboarding before reaching app routes', () => {
   assert.equal(getAccessGateRoute('/', false, false), null);
   assert.equal(getAccessGateRoute('/onboarding', false, false), null);
   assert.equal(getAccessGateRoute('/analysis', false, false), '/onboarding');
   assert.equal(getAccessGateRoute('/paywall', false, false), null);
   assert.equal(getAccessGateRoute('/exit-offer', false, false), null);
-  assert.equal(getAccessGateRoute('/home', true, false), '/paywall');
+  assert.equal(getAccessGateRoute('/home', true, false), null);
   assert.equal(getAccessGateRoute('/home', true, false, true), null);
   assert.equal(getAccessGateRoute('/(tabs)/home', true, false, true), null);
   assert.equal(getAccessGateRoute('/analysis', true, false, true), null);
-  assert.equal(getAccessGateRoute('/settings', true, false, true), '/paywall');
+  assert.equal(getAccessGateRoute('/settings', true, false, true), null);
   assert.equal(getAccessGateRoute('/exit-offer', true, false), null);
-  assert.equal(getAccessGateRoute('/community', true, false), '/paywall');
-  assert.equal(getAccessGateRoute('/settings', true, false), '/paywall');
-  assert.equal(getAccessGateRoute('/onboarding', true, false), '/paywall');
+  assert.equal(getAccessGateRoute('/community', true, false), null);
+  assert.equal(getAccessGateRoute('/settings', true, false), null);
+  assert.equal(getAccessGateRoute('/onboarding', true, false), null);
   assert.equal(getAccessGateRoute('/paywall', true, false), null);
   assert.equal(getAccessGateRoute('/home', true, true), null);
 });
 
 test('free users are gated from premium features while Community remains available', () => {
-  [
-    '/analysis',
-    '/strategy',
-  ].forEach((route) => assert.equal(shouldGuardFeatureRoute(route, false), true, route));
+  assert.equal(shouldGuardFeatureRoute('/analysis', false), true);
+  assert.equal(shouldGuardFeatureRoute('/analysis', true), false);
+  assert.equal(shouldGuardFeatureRoute('/strategy', false), true);
+  assert.equal(shouldGuardFeatureRoute('/strategy', true), false);
   [
     '/community',
     '/community-search',
     '/community-notifications',
   ].forEach((route) => assert.equal(shouldGuardFeatureRoute(route, false), false, route));
+});
+
+test('chart analysis, trade setup, and strategy generation require subscription access', () => {
+  assert.equal(getFeatureAccessDecision('AI_ANALYSIS', false).requiresPaywall, true);
+  assert.equal(getFeatureAccessDecision('TRADE_SETUP', false).requiresPaywall, true);
+  assert.equal(getFeatureAccessDecision('STRATEGY_GENERATOR', false).requiresPaywall, true);
+  assert.equal(getFeatureAccessDecision('COMMUNITY', false).allowed, true);
 });
 
 test('other app features remain accessible to free users', () => {

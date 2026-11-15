@@ -35,8 +35,7 @@ export function getAccessGateRoute(
   if (isSubscribed || path === '/paywall' || path === '/exit-offer' || path === '/auth/callback') return null;
   if (!onboardingComplete && (path === '/' || path === '/onboarding')) return null;
   if (!onboardingComplete) return '/onboarding';
-  if (paywallDismissed && (path === '/' || path === '/home' || path === '/(tabs)/home' || path === '/analysis')) return null;
-  return '/paywall';
+  return null;
 }
 
 export function getFeatureAccessDecision(

@@ -333,7 +333,7 @@ test('the instrument registry retains supported markets while the asset list hid
   assert.ok(visibleCategories.includes('indices'));
 });
 
-test('analysis, trade setup, and strategy generation all require an active subscription', () => {
+test('analysis and strategy generation require an active subscription', () => {
   assert.deepEqual(getFeatureAccessDecision('AI_ANALYSIS', false), { allowed: false, requiresPaywall: true });
   assert.deepEqual(getFeatureAccessDecision('TRADE_SETUP', false), { allowed: false, requiresPaywall: true });
   assert.deepEqual(getFeatureAccessDecision('STRATEGY_GENERATOR', false), { allowed: false, requiresPaywall: true });

@@ -428,6 +428,43 @@ test('latest-price validation uses instrument-specific ticks and distance limits
   assert.ok(badPrecision.some((issue) => /precision\/tick size/i.test(issue)));
 });
 
+test('excessive reward-to-risk from a tight stop rejects the setup and clears its levels', async () => {
+  const goldSetup = {
+    ...consistentPriceSetup,
+    status: 'no_trade',
+    detectedPair: 'XAUUSD',
+    levelFollowupStatus: 'completed',
+    chart: {
+      ...consistentPriceSetup.chart,
+      pair: 'XAUUSD',
+      latest_visible_price: '4323.30',
+      timeframe: '15m',
+    },
+    trade_setup: {
+      type: 'buy',
+      entry_zone: '4323.30',
+      stop_loss: '4323.20',
+      take_profit: '4388.55',
+      take_profit_levels: ['4388.55'],
+      risk_reward: 652.5,
+      setup_status: 'valid',
+    },
+  };
+  const issues = getPriceConsistencyIssues(goldSetup, 'XAUUSD');
+  assert.ok(issues.some((issue) => /reward-to-risk ratio of 652\.50:1 exceeds the 10:1 safety limit/i.test(issue)));
+
+  const rejected = await retryPriceConsistencyOnce(goldSetup, 'XAUUSD', () => {
+    throw new Error('An excessive reward-to-risk candidate must be rejected without a model retry.');
+  });
+  assert.equal(rejected.status, 'no_trade');
+  assert.equal(rejected.candidateValidationStatus, 'rejected');
+  assert.equal(rejected.tradeDecision, 'NONE');
+  assert.equal(rejected.trade_setup.type, 'none');
+  assert.equal(rejected.trade_setup.entry_zone, 'none');
+  assert.equal(rejected.trade_setup.stop_loss, 'none');
+  assert.equal(rejected.trade_setup.risk_reward, null);
+});
+
 test('failed latest-price validation strips candidate levels and returns an explicit no-trade reason', () => {
   const held = holdSetupForPriceValidation(consistentPriceSetup, ['The entry is stale.']);
   assert.equal(held.status, 'no_trade');
@@ -439,6 +476,46 @@ test('failed latest-price validation strips candidate levels and returns an expl
   assert.match(held.no_trade_reason, /No trade:/i);
   assert.equal(held.tradeDecision, 'NONE');
   assert.match(held.reasons.join(' '), /entry is stale/i);
+
+  const heldPlan = holdSetupForPriceValidation({
+    ...consistentPriceSetup,
+    trade_plan: {
+      direction: 'BUY',
+      entry: 1.1,
+      stop_loss: 1.099,
+      take_profit_1: 1.102,
+    },
+  }, ['The latest price invalidated the setup.']);
+  assert.equal(heldPlan.status, 'no_trade');
+  assert.equal(heldPlan.trade_plan, null);
+  assert.equal(heldPlan.trade_setup.type, 'none');
+  assert.equal(heldPlan.no_trade_reason, 'No trade: The latest price invalidated the setup.');
+});
+
+test('completed candidate review clears levels when latest-candle freshness cannot be verified', async () => {
+  const staleCandidate = {
+    ...consistentPriceSetup,
+    levelFollowupStatus: 'completed',
+    candidateReview: { status: 'selected', direction: 'buy' },
+    chart: {
+      ...consistentPriceSetup.chart,
+      latest_candle_timestamp: '2020-01-01T00:00:00Z',
+      current_candle_status: 'unknown',
+    },
+  };
+  const rejected = await retryPriceConsistencyOnce(staleCandidate, 'EURUSD', () => {
+    throw new Error('A completed candidate review should not retry here.');
+  });
+
+  assert.equal(rejected.status, 'no_trade');
+  assert.equal(rejected.candidateReview.status, 'none');
+  assert.equal(rejected.candidateValidationStatus, 'unverified');
+  assert.equal(rejected.tradeDecision, 'NONE');
+  assert.equal(rejected.trade_setup.type, 'none');
+  assert.equal(rejected.trade_setup.entry_zone, 'none');
+  assert.equal(rejected.trade_setup.stop_loss, 'none');
+  assert.deepEqual(rejected.trade_setup.take_profit_levels, []);
+  assert.equal(rejected.trade_plan, null);
 });
 
 test('failed reanalysis preserves structurally valid chart levels as unverified candidates when screenshot metadata is missing', async () => {
@@ -581,11 +658,14 @@ test('two-sided follow-up prompt sends the same chart and evaluates both directi
   assert.equal(messages.length, 2);
   assert.ok(messages[0].content.length < 3200, `Expected a compact follow-up prompt, got ${messages[0].content.length} characters`);
   assert.match(messages[0].content, /Evaluate BUY and SELL separately/i);
-  assert.match(messages[0].content, /Do not return unsupported just because trend, consolidation or entry trigger is unclear/i);
+  assert.match(messages[0].content, /If trend, consolidation or trigger is unclear, mark setup_status=unclear/i);
   assert.match(messages[0].content, /mark setup_status=unclear.*entry_status=waiting_for_trigger/i);
-  assert.match(messages[0].content, /State the specific visible confirmation to wait for in entry_trigger/i);
-  assert.match(messages[0].content, /retain BUY\/SELL setup direction while the trigger is pending/i);
-  assert.match(messages[0].content, /prefer the direction supported by the established bias/i);
+  assert.match(messages[0].content, /State the visible confirmation to wait for; do not invent a trigger/i);
+  assert.match(messages[0].content, /retain its BUY\/SELL direction while the trigger is pending/i);
+  assert.match(messages[0].content, /Anchor candidates to the far-right newest candle and latest visible price/i);
+  assert.match(messages[0].content, /older candles are context, never entry signals/i);
+  assert.match(messages[0].content, /Reject a candidate as missed if price passed its entry/i);
+  assert.match(messages[0].content, /prefer the established bias/i);
   assert.match(messages[1].content[0].text, /BTCUSD/);
   assert.equal(messages[1].content[1].image_url.url, 'data:image/jpeg;base64,image-data');
 });
@@ -1048,6 +1128,9 @@ test('chart prompt requires a complete level-based plan for every chart image', 
   assert.match(prompt, /Select BUY or SELL from the visible evidence/i);
   assert.match(prompt, /never default to BUY, invent a side, or reverse direction/i);
   assert.match(prompt, /verdict: "NO_TRADE", trade_plan: null/i);
+  assert.match(prompt, /far-right newest visible candle and its current-price marker as the chart's as-of point/i);
+  assert.match(prompt, /never base a trade entry on a setup that already occurred on an older candle/i);
+  assert.match(prompt, /Every trade plan must be prospective from that as-of point/i);
   assert.match(prompt, /rightmost\/current price marker or candle/i);
   assert.match(prompt, /Do not claim a screenshot price is live/i);
 });
@@ -1673,6 +1756,33 @@ test('two-sided candidate selection keeps a geometrically valid low-R:R setup an
   assert.ok(Math.abs(result.trade_setup.risk_reward - 0.5) < 1e-9);
   assert.equal(result.candidateReview.status, 'selected');
   assert.equal(result.candidateReview.rejectedRiskReason, undefined);
+});
+
+test('two-sided review rejects a candidate whose stop is too close for its target', () => {
+  const result = applyTwoSidedCandidateReview(
+    {
+      ...directionalChartWithoutLevels,
+      marketBias: 'neutral',
+      detectedPair: 'XAUUSD',
+      chart: {
+        ...directionalChartWithoutLevels.chart,
+        pair: 'XAUUSD',
+        latest_visible_price: '4323.30',
+      },
+    },
+    twoSidedReview(
+      twoSidedCandidate('buy', {
+        entry_zone: '4323.30',
+        stop_loss: '4323.20',
+        take_profit_levels: ['4388.55'],
+      }),
+      { ...twoSidedCandidate('sell'), status: 'unsupported' },
+    ),
+  );
+
+  assert.equal(result.candidateReview.status, 'none');
+  assert.equal(result.trade_setup.type, 'none');
+  assert.match(result.candidateReview.reason, /reward-to-risk ratio .* exceeds the 10:1 safety limit/i);
 });
 
 test('conditional candidate levels stay unverified without timestamp or reliable screenshot price', async () => {

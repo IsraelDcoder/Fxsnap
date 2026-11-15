@@ -908,7 +908,7 @@ const styles = StyleSheet.create({
   signalDirection: { fontSize: 11, fontFamily: 'Inter_700Bold' },
   signalGrid: { flexDirection: 'row', flexWrap: 'wrap', rowGap: 10 },
   compactSignalGrid: { rowGap: 7 },
-  signalValue: { width: '50%', gap: 3 },
+  signalValue: { flexBasis: 0, flexGrow: 1, minWidth: '48%', gap: 3 },
   signalLabel: { fontSize: 9, letterSpacing: 0.5, fontFamily: 'Inter_600SemiBold' },
   signalText: { fontSize: 12, fontFamily: 'Inter_600SemiBold' },
   signalReasoning: { fontSize: 11, lineHeight: 16, fontFamily: 'Inter_400Regular' },
