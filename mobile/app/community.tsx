@@ -191,6 +191,28 @@ function firstParam(value: string | string[] | undefined) {
 }
 
 function buildAnalysisSnapshot(analysis: AnalysisResult): CommunityAnalysisSnapshot {
+  if (analysis.setup) {
+    const setup = analysis.setup;
+    return {
+      source: 'fxsnap_ai',
+      sourceAnalysisId: analysis.id,
+      sourceCreatedAt: analysis.createdAt,
+      status: setup.status,
+      pair: setup.pair,
+      timeframe: setup.timeframe,
+      direction: setup.direction,
+      entry: String(setup.entry),
+      stopLoss: String(setup.stop_loss),
+      takeProfits: [
+        String(setup.take_profit_1),
+        ...(setup.take_profit_2 === undefined ? [] : [String(setup.take_profit_2)]),
+      ],
+      riskReward: setup.risk_reward,
+      marketBias: setup.trend,
+      reasoning: setup.reasoning.slice(0, 4),
+    };
+  }
+
   const setup = analysis.tradeSetup;
   const targets = [
     ...(analysis.takeProfitLevels || []),

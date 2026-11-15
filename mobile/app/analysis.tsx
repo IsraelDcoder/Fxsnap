@@ -35,9 +35,9 @@ type QuickTimeframe = '1m' | '5m' | '15m' | '30m' | '1H' | '4H' | '1D';
 const QUICK_TIMEFRAMES: QuickTimeframe[] = ['1m', '5m', '15m', '30m', '1H', '4H', '1D'];
 
 const ANALYSIS_STEPS = [
-  { title: 'Cooking your analysis', detail: 'Reading the newest visible candles and current price action.' },
-  { title: 'Mapping the market structure', detail: 'Checking nearby support, resistance, and momentum.' },
-  { title: 'Checking setup quality and risk', detail: 'Checking whether the visible chart supports a setup; the analysis is not a prediction.' },
+  { title: 'Preparing your chart', detail: 'Sending the image, selected pair, and timeframe.' },
+  { title: 'Generating your setup', detail: 'Reading the chart and returning one complete setup as JSON.' },
+  { title: 'Validating levels', detail: 'Checking the levels and recalculating risk/reward before display.' },
 ];
 
 function AnalyzingView({ ready = false }: { ready?: boolean }) {
@@ -255,7 +255,7 @@ export default function AnalysisScreen() {
     console.log('[ANALYSIS] API response received', {
       status: chart.status,
       pair,
-      message: chart.message,
+      message: chart.status === 'ok' || chart.status === 'not_a_chart' ? undefined : chart.message,
       elapsedMs: Date.now() - analysisStartedAt,
       isSubscribed,
     });
@@ -270,21 +270,21 @@ export default function AnalysisScreen() {
     const remainingMinimumTime = Math.max(0, 2500 - (Date.now() - analysisStartedAt));
     await new Promise((resolve) => setTimeout(resolve, remainingMinimumTime));
 
-    if (chart.status === 'ai_unavailable' || chart.status === 'ai_invalid_response') {
+    if (chart.status === 'error') {
       trackEvent('analysis_ai_unavailable', { pair });
     }
 
-    if (chart.status === 'invalid_image') {
+    if (chart.status === 'not_a_chart') {
       trackEvent('analysis_invalid_image', { pair });
     }
 
     const result = buildAnalysisResult(chart, pair, sourceImageUri);
-    if (chart.status === 'success' || chart.status === 'no_trade') {
+    if (chart.status === 'ok') {
       clearAnalysisRetryRequest();
       setRetryingExistingChart(false);
     }
     setCurrentAnalysis(result);
-    if (chart.status === 'success' || chart.status === 'no_trade') {
+    if (chart.status === 'ok') {
       trackEvent('analysis_succeeded', { pair, status: chart.status, confidence: chart.confidence });
       await recordRatingEligibleAnalysis();
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -344,7 +344,7 @@ export default function AnalysisScreen() {
       console.log('[ANALYSIS] Result received', {
         pair,
         status: chart.status,
-        confidence: chart.confidence,
+        confidence: chart.status === 'ok' ? chart.confidence : undefined,
         renderStage: 'analysis-result',
       });
     } catch (error) {
