@@ -287,12 +287,12 @@ test('the working premium entitlement remains valid while Pro aliases stay suppo
 
 test('exhausted API quota is shown as a temporary analysis outage instead of a raw provider error', () => {
   assert.deepEqual(normalizeChartAnalysisError({ error: 'insufficient_quota' }), {
-    status: 'ai_unavailable',
-    message: 'Analysis is not available at the moment. Please try again later.',
+    status: 'error',
+    message: 'Chart analysis is temporarily unavailable. Please try again.',
   });
   assert.deepEqual(normalizeChartAnalysisError({ error: { message: 'You exceeded your current quota, please check your plan and billing details.' } }), {
-    status: 'ai_unavailable',
-    message: 'Analysis is not available at the moment. Please try again later.',
+    status: 'error',
+    message: 'Chart analysis is temporarily unavailable. Please try again.',
   });
 });
 

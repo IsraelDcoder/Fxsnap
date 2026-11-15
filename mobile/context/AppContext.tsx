@@ -13,19 +13,21 @@ import {
   saveFxsnapAccountData,
 } from '@/services/account';
 import { subscribeToAccountDataChanges } from '@/services/accountDataEvents';
+import type { SetupAnalysisJson } from '@/services/chartDetection';
 
 export const APP_DATA_VERSION = 3;
 const DATA_VERSION_KEY = 'fxsnap:dataVersion';
 const BACKUP_VERSION = 1;
 const RISK_ACTIVITY_KEY = 'fxsnap:riskActivity';
 
-export type AnalysisStatus = 'success' | 'no_trade' | 'invalid_image' | 'ai_unavailable' | 'ai_invalid_response' | 'premium_required';
+export type AnalysisStatus = 'success' | 'no_trade' | 'invalid_image' | 'ai_unavailable' | 'ai_invalid_response' | 'premium_required' | 'not_a_chart';
 
 export interface AnalysisResult {
   id: string;
   pair: string;
   status?: AnalysisStatus;
   message?: string;
+  setup?: SetupAnalysisJson;
   freeAnalysis?: boolean;
   direction?: 'BUY' | 'SELL';
   timeframe?: string;

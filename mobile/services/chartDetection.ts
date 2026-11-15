@@ -2,528 +2,111 @@ import { fetchWithApiAuth, getApiHeaders, resolveApiBaseUrl } from '@/services/a
 
 const API_URL = resolveApiBaseUrl();
 
-export type AnalysisStatus = 'success' | 'no_trade' | 'invalid_image' | 'ai_unavailable' | 'ai_invalid_response' | 'premium_required';
+export interface SetupAnalysisJson {
+  status: 'ok';
+  pair: string;
+  timeframe: string;
+  direction: 'BUY' | 'SELL';
+  entry: number;
+  stop_loss: number;
+  take_profit_1: number;
+  take_profit_2?: number;
+  risk_reward: number;
+  support: number[];
+  resistance: number[];
+  trend: string;
+  structure: string;
+  rightmost_candle: {
+    type: string;
+    bias: string;
+  };
+  next_candle_prediction: string;
+  confidence: number;
+  levels_estimated: boolean;
+  reasoning: string[];
+  invalidation: string;
+}
 
-export function normalizeChartAnalysisError(payload: any): { status: AnalysisStatus; message: string } {
-  const code = typeof payload?.code === 'string' ? payload.code : typeof payload?.error === 'string' ? payload.error : '';
-  const reason = typeof payload?.reason === 'string' ? payload.reason : '';
-  const combined = `${code} ${reason} ${payload?.message || ''} ${typeof payload?.error === 'object' && payload?.error ? payload.error.message || '' : ''}`.toLowerCase();
+export type ChartAnalysisResult =
+  | SetupAnalysisJson
+  | { status: 'not_a_chart' }
+  | { status: 'error'; message: string }
+  | { status: 'premium_required'; message: string };
 
-  if (code === 'PREMIUM_REQUIRED' || combined.includes('premium_required')) {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function isSetupAnalysisJson(value: unknown): value is SetupAnalysisJson {
+  if (!isRecord(value)
+    || value.status !== 'ok'
+    || typeof value.pair !== 'string'
+    || typeof value.timeframe !== 'string'
+    || (value.direction !== 'BUY' && value.direction !== 'SELL')
+    || ![value.entry, value.stop_loss, value.take_profit_1, value.risk_reward, value.confidence].every(isNumber)
+    || !Array.isArray(value.support) || !value.support.every(isNumber)
+    || !Array.isArray(value.resistance) || !value.resistance.every(isNumber)
+    || typeof value.trend !== 'string'
+    || typeof value.structure !== 'string'
+    || !isRecord(value.rightmost_candle)
+    || typeof value.rightmost_candle.type !== 'string'
+    || typeof value.rightmost_candle.bias !== 'string'
+    || typeof value.next_candle_prediction !== 'string'
+    || typeof value.levels_estimated !== 'boolean'
+    || !Array.isArray(value.reasoning) || !value.reasoning.every((line) => typeof line === 'string')
+    || typeof value.invalidation !== 'string') return false;
+  return value.take_profit_2 === undefined || isNumber(value.take_profit_2);
+}
+
+export function normalizeChartAnalysisError(payload: unknown): ChartAnalysisResult {
+  if (isRecord(payload) && (payload.code === 'PREMIUM_REQUIRED' || payload.error === 'premium_required')) {
     return {
       status: 'premium_required',
-      message: 'A Premium subscription is required for chart analysis.',
+      message: typeof payload.message === 'string'
+        ? payload.message
+        : 'A Premium subscription is required for chart analysis.',
     };
   }
-
-  const quotaLike = combined.includes('quota')
-    || combined.includes('exceeded your current quota')
-    || combined.includes('insufficient_quota')
-    || combined.includes('rate limit')
-    || combined.includes('billing details')
-    || combined.includes('credit')
-    || combined.includes('limit reached');
-
-  if (quotaLike) {
-    return {
-      status: 'ai_unavailable',
-      message: 'Analysis is not available at the moment. Please try again later.',
-    };
-  }
-
   return {
-    status: 'ai_unavailable',
-    message: payload?.message || payload?.error || 'Chart AI is unavailable right now. Please try again shortly.',
+    status: 'error',
+    message: isRecord(payload) && typeof payload.message === 'string'
+      ? payload.message
+      : 'Chart analysis is temporarily unavailable. Please try again.',
   };
 }
 
-export interface ChartAnalysisResult {
-  status: AnalysisStatus;
-  message?: string;
-  freeAnalysis?: boolean;
-  detectedPair?: string | null;
-  timeframe?: string | null;
-  latestVisiblePrice?: number;
-  rightmostCandle?: {
-    identified: boolean;
-    direction: 'bullish' | 'bearish' | 'doji' | 'unclear';
-    open: number | null;
-    high: number | null;
-    low: number | null;
-    close: number | null;
-    reading: string;
-  };
-  liveMarketData?: {
-    status: 'verified' | 'stale' | 'unavailable' | 'symbol_mismatch';
-    price: number | null;
-    timestamp: string | null;
-    source: string | null;
-    checkedAt: string;
-    reason?: string;
-  };
-  signalMetadata?: {
-    candle_open_time: string | null;
-    candle_close_time: string | null;
-    data_timestamp: string | null;
-    timeframe: string | null;
-    price_at_signal: number | null;
-    is_candle_forming: boolean | null;
-    data_source: string | null;
-  };
-  priceSeries?: number[];
-  reasoning?: string[];
-  supportResistance?: {
-    support: string[];
-    resistance: string[];
-  };
-  analysis: {
-    trend: 'bullish' | 'bearish' | 'neutral';
-    structure: string;
-    volatility: 'low' | 'moderate' | 'high';
-    volume: 'low' | 'moderate' | 'high' | 'visible' | 'not_visible';
-    sentiment: 'bullish' | 'bearish' | 'neutral';
-    indicators: string;
-    notes: string;
-  };
-  zones: {
-    support: string;
-    resistance: string;
-    liquidity: string;
-  };
-  trade_setup: {
-    type: 'buy' | 'sell' | 'none';
-    entry_zone: string;
-    stop_loss: string;
-    take_profit: string;
-    take_profit_levels?: string[];
-    risk_reward: number | string;
-  };
-  tradePlan?: {
-    direction: 'BUY' | 'SELL';
-    entryType: 'market' | 'trigger';
-    triggerEvent: string | null;
-    entry: number;
-    stopLoss: number;
-    takeProfit1: number;
-    takeProfit2: number | null;
-    riskReward: number;
-  } | null;
-  verdict?: 'TRADE_PLAN' | 'CONDITIONAL_PLAN' | 'NO_TRADE';
-  conviction?: 'HIGH' | 'MEDIUM' | 'LOW' | null;
-  verdictReason?: string;
-  noTradeReason?: string | null;
-  marketBias?: 'bullish' | 'bearish' | 'neutral' | 'mixed';
-  marketBiasConfidence?: number;
-  // Canonical analysis scores
-  marketConfidence?: number;
-  entryReadiness?: number;
-  tradeDecision?: 'BUY' | 'SELL' | 'WAIT' | 'NONE';
-  tradeStatus?: string;
-  setupStatus?: string;
-  setupConfidence?: number;
-  tradeTrigger?: string;
-  whyNotNow?: string[];
-  dataLimitations?: string[];
-  entryStatus?: 'waiting_for_trigger' | 'trigger_observed' | 'missed' | 'unverified';
-  setupType?: 'limit_zone' | 'breakout' | 'rejection' | 'other' | 'unspecified';
-  candidateReview?: {
-    status: 'selected' | 'none' | 'ambiguous' | 'invalid_response';
-    direction?: 'buy' | 'sell';
-    evidenceScore?: number;
-    reason: string;
-  };
-  breakdown?: {
-    trend?: number;
-    zone?: number;
-    priceLocation?: number;
-    liquidity?: number;
-    confirmation?: number;
-    bos?: number;
-    rsi?: number;
-    rawScore?: number;
-  };
-  confidence: number;
-  multiTimeframe?: {
-    alignment: 'aligned' | 'conflicting' | 'unclear';
-    summary: string;
-    h4: { trend: 'bullish' | 'bearish' | 'neutral'; structure: string };
-    m15: { trend: 'bullish' | 'bearish' | 'neutral'; structure: string; confirmation: string };
-  };
-}
-
-function emptyAnalysis(status: AnalysisStatus, message: string): ChartAnalysisResult {
-  return {
-    status,
-    message,
-    analysis: {
-      trend: 'neutral',
-      structure: '',
-      volatility: 'low',
-      volume: 'not_visible',
-      sentiment: 'neutral',
-      indicators: 'none',
-      notes: message,
-    },
-    zones: {
-      support: 'not_clear',
-      resistance: 'not_clear',
-      liquidity: 'not_clear',
-    },
-    trade_setup: {
-      type: 'none',
-      entry_zone: 'none',
-      stop_loss: 'none',
-      take_profit: 'none',
-      risk_reward: 'none',
-    },
-    marketBias: 'neutral',
-    marketBiasConfidence: 0,
-      marketConfidence: 0,
-      entryReadiness: 0,
-      tradeDecision: 'NONE',
-    tradeStatus: 'no_setup',
-    setupStatus: 'NO_SETUP',
-    setupConfidence: 0,
-    tradeTrigger: '',
-    whyNotNow: [],
-    dataLimitations: [],
-    confidence: 0,
-  };
-}
-
-function firstAnalysisValue(...values: unknown[]): unknown {
-  return values.find((value) => value != null && String(value).trim() !== ''
-    && !['none', 'not_clear', 'unknown', 'n/a', 'na'].includes(String(value).trim().toLowerCase()));
-}
-
-export function normalizeChartTradeSetup(payload: unknown): ChartAnalysisResult['trade_setup'] {
-  const root = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
-  const nested = root.trade_setup && typeof root.trade_setup === 'object'
-    ? root.trade_setup as Record<string, unknown>
-    : root.tradeSetup && typeof root.tradeSetup === 'object'
-      ? root.tradeSetup as Record<string, unknown>
-      : {};
-  const rawTarget = firstAnalysisValue(
-    nested.take_profit,
-    nested.takeProfit,
-    nested.take_profit_price,
-    nested.tp,
-    nested.target,
-    root.take_profit,
-    root.takeProfit,
-    root.tp,
-    root.target,
-  );
-  const rawTargetLevels = [
-    nested.take_profit_levels,
-    nested.takeProfitLevels,
-    nested.targets,
-    root.take_profit_levels,
-    root.takeProfitLevels,
-    root.targets,
-  ].find((levels) => Array.isArray(levels) && levels.length > 0);
-  const splitTargetList = (value: string) => value.split(/(?:,\s+|,(?!\d{3}(?:\D|$))|[;|\n])+/)
-    .map((level) => level.trim())
-    .filter((level) => firstAnalysisValue(level) != null)
-    .slice(0, 2);
-  const takeProfitLevels = Array.isArray(rawTargetLevels)
-    ? rawTargetLevels.map((level) => String(level).trim()).filter((level) => firstAnalysisValue(level) != null).slice(0, 2)
-    : Array.isArray(rawTarget)
-      ? rawTarget.map((level) => String(level).trim()).filter((level) => firstAnalysisValue(level) != null).slice(0, 2)
-      : typeof rawTarget === 'string'
-        ? splitTargetList(rawTarget)
-        : rawTarget == null ? [] : [String(rawTarget).trim()];
-  const rawType = String(firstAnalysisValue(
-    nested.type,
-    nested.trade_type,
-    nested.direction,
-    root.trade_type,
-    root.trade_direction,
-    root.direction,
-  ) ?? 'none').trim().toLowerCase();
-  const type = ['buy', 'long'].includes(rawType) ? 'buy'
-    : ['sell', 'short'].includes(rawType) ? 'sell' : 'none';
-  const entry = firstAnalysisValue(
-    nested.entry_zone,
-    nested.entry,
-    nested.entry_price,
-    root.entry_zone,
-    root.entry,
-    root.entry_price,
-  );
-  const stop = firstAnalysisValue(
-    nested.stop_loss,
-    nested.stopLoss,
-    nested.stop_loss_price,
-    nested.sl,
-    nested.stop,
-    root.stop_loss,
-    root.stopLoss,
-    root.sl,
-    root.stop,
-  );
-  const takeProfit = takeProfitLevels[0] ?? rawTarget;
-  const rawRiskReward = firstAnalysisValue(nested.risk_reward, nested.riskReward, nested.rr, root.risk_reward, root.riskReward, root.rr);
-
-  return {
-    type,
-    entry_zone: entry == null ? 'none' : String(entry).trim(),
-    stop_loss: stop == null ? 'none' : String(stop).trim(),
-    take_profit: takeProfit == null ? 'none' : String(takeProfit).trim(),
-    take_profit_levels: takeProfitLevels,
-    risk_reward: typeof rawRiskReward === 'number' || typeof rawRiskReward === 'string' ? rawRiskReward : 'none',
-  };
-}
-
-export function normalizeChartTradePlan(payload: unknown): NonNullable<ChartAnalysisResult['tradePlan']> | null {
-  if (!payload || typeof payload !== 'object') return null;
-  const plan = (payload as Record<string, unknown>).trade_plan;
-  if (!plan || typeof plan !== 'object' || Array.isArray(plan)) return null;
-  const raw = plan as Record<string, unknown>;
-  const direction = raw.direction;
-  const entryType = raw.entry_type;
-  const prices = [raw.entry, raw.stop_loss, raw.take_profit_1, raw.risk_reward].map(Number);
-  if ((direction !== 'BUY' && direction !== 'SELL')
-    || (entryType !== 'market' && entryType !== 'trigger')
-    || !prices.every((price) => Number.isFinite(price) && price > 0)) return null;
-  const takeProfit2 = raw.take_profit_2 == null ? null : Number(raw.take_profit_2);
-  if (takeProfit2 != null && (!Number.isFinite(takeProfit2) || takeProfit2 <= 0)) return null;
-  return {
-    direction,
-    entryType,
-    triggerEvent: typeof raw.trigger_event === 'string' ? raw.trigger_event : null,
-    entry: prices[0],
-    stopLoss: prices[1],
-    takeProfit1: prices[2],
-    takeProfit2,
-    riskReward: prices[3],
-  };
-}
-
-export function normalizeLatestVisiblePrice(payload: unknown): number | undefined {
-  if (!payload || typeof payload !== 'object') return undefined;
-  const root = payload as Record<string, unknown>;
-  const chart = root.chart && typeof root.chart === 'object'
-    ? root.chart as Record<string, unknown>
-    : {};
-  const hasReadableSource = chart.price_scale_visible === true
-    && ['visible_price_marker', 'latest_candle_scale_read'].includes(String(chart.current_price_source));
-  if (!hasReadableSource) return undefined;
-
-  const rawPrice = chart.latest_visible_price;
-  const normalizedPrice = typeof rawPrice === 'string' && /^\d{1,3}(?:,\d{3})+(?:\.\d+)?$/.test(rawPrice.trim())
-    ? rawPrice.trim().replace(/,/g, '')
-    : rawPrice;
-  const price = typeof normalizedPrice === 'number'
-    ? normalizedPrice
-    : typeof normalizedPrice === 'string' && /^\d+(?:\.\d+)?$/.test(normalizedPrice.trim())
-      ? Number(normalizedPrice.trim())
-      : Number.NaN;
-  return Number.isFinite(price) && price > 0 ? price : undefined;
-}
-
-function normalizeVisibleCandlePrice(value: unknown): number | null {
-  if (typeof value !== 'number' && typeof value !== 'string') return null;
-  const raw = typeof value === 'string' ? value.trim().replace(/,/g, '') : value;
-  if (raw === '') return null;
-  const price = typeof raw === 'number' ? raw : /^\d+(?:\.\d+)?$/.test(raw) ? Number(raw) : Number.NaN;
-  return Number.isFinite(price) && price > 0 ? price : null;
-}
-
-/**
- * Send a chart image to the backend for strict, disciplined price-action
- * analysis. The server enforces the full system prompt + validation layer and
- * returns exactly one clean state: success | no_trade | invalid_image |
- * ai_unavailable.
- */
 export async function analyzeChartImage(
   imageBase64: string,
-  mimeType = 'image/jpeg',
-  pair?: string,
-  timeframe?: string,
+  mimeType: string,
+  pair: string,
+  timeframe: string,
 ): Promise<ChartAnalysisResult> {
-  return sendChartAnalysis('/analyze-chart', { imageBase64, mimeType, pair, timeframe });
-}
-
-async function sendChartAnalysis(path: string, body: Record<string, unknown>): Promise<ChartAnalysisResult> {
   try {
-    const response = await fetchWithApiAuth(`${API_URL}${path}`, {
+    const body = {
+      imageBase64,
+      mimeType,
+      pair,
+      timeframe,
+    };
+    const response = await fetchWithApiAuth(`${API_URL}/analyze-chart`, {
       method: 'POST',
       headers: await getApiHeaders(),
       body: JSON.stringify(body),
     });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      const normalized = normalizeChartAnalysisError(payload);
-      if (normalized.status === 'premium_required') {
-        return emptyAnalysis(normalized.status, normalized.message);
-      }
-      return emptyAnalysis('ai_unavailable', normalized.message);
-    }
-
-    const status: AnalysisStatus = ['success', 'no_trade', 'invalid_image', 'ai_unavailable', 'ai_invalid_response'].includes(payload.status)
-      ? payload.status
-      : 'ai_unavailable';
-
-    if (status === 'ai_unavailable' || status === 'ai_invalid_response') {
-      return emptyAnalysis(status, payload.message || 'Chart AI is unavailable right now. Please try again shortly.');
-    }
-
-    const tradeSetup = normalizeChartTradeSetup(payload);
-    const tradePlan = normalizeChartTradePlan(payload);
-    const takeProfitLevels = tradeSetup.take_profit_levels ?? [];
-    const rawSeries = payload.price_series ?? payload.chart_data?.price_series;
-    const priceSeries = Array.isArray(rawSeries)
-      ? rawSeries.map((point: unknown) => {
-        if (typeof point === 'number') return point;
-        if (point && typeof point === 'object') {
-          const value = Number((point as { price?: unknown; close?: unknown }).price ?? (point as { close?: unknown }).close);
-          return value;
-        }
-        return Number.NaN;
-      }).filter(Number.isFinite)
-      : [];
-    const latestVisiblePrice = normalizeLatestVisiblePrice(payload);
-    const suppliedSupportResistance = payload.support_resistance ?? {};
-    const supportLevels = Array.isArray(suppliedSupportResistance.support) && suppliedSupportResistance.support.length
-      ? suppliedSupportResistance.support.map(String)
-      : tradePlan?.direction === 'BUY' ? [String(tradePlan.entry)] : [];
-    const resistanceLevels = Array.isArray(suppliedSupportResistance.resistance) && suppliedSupportResistance.resistance.length
-      ? suppliedSupportResistance.resistance.map(String)
-      : tradePlan?.direction === 'BUY' ? [String(tradePlan.takeProfit1)] : [];
-    const resolvedSupportResistance = {
-      support: supportLevels.length ? supportLevels : tradePlan?.direction === 'SELL' ? [String(tradePlan.takeProfit1)] : [],
-      resistance: resistanceLevels.length ? resistanceLevels : tradePlan?.direction === 'SELL' ? [String(tradePlan.entry)] : [],
-    };
-
-    return {
-      status,
-      message: payload.message || undefined,
-      freeAnalysis: payload.freeAnalysis === true,
-      detectedPair: payload.detectedPair ?? null,
-      timeframe: payload.timeframe ?? null,
-      latestVisiblePrice,
-      rightmostCandle: payload.chart?.rightmost_candle && typeof payload.chart.rightmost_candle === 'object'
-        ? {
-          identified: payload.chart.rightmost_candle.identified === true,
-          direction: ['bullish', 'bearish', 'doji', 'unclear'].includes(payload.chart.rightmost_candle.direction)
-            ? payload.chart.rightmost_candle.direction
-            : 'unclear',
-          open: normalizeVisibleCandlePrice(payload.chart.rightmost_candle.open),
-          high: normalizeVisibleCandlePrice(payload.chart.rightmost_candle.high),
-          low: normalizeVisibleCandlePrice(payload.chart.rightmost_candle.low),
-          close: normalizeVisibleCandlePrice(payload.chart.rightmost_candle.close),
-          reading: typeof payload.chart.rightmost_candle.reading === 'string' ? payload.chart.rightmost_candle.reading : '',
-        }
-        : undefined,
-      liveMarketData: payload.liveMarketData && typeof payload.liveMarketData === 'object'
-        ? {
-          status: ['verified', 'stale', 'unavailable', 'symbol_mismatch'].includes(payload.liveMarketData.status)
-            ? payload.liveMarketData.status
-            : 'unavailable',
-          price: typeof payload.liveMarketData.price === 'number' && Number.isFinite(payload.liveMarketData.price)
-            ? payload.liveMarketData.price
-            : null,
-          timestamp: typeof payload.liveMarketData.timestamp === 'string' ? payload.liveMarketData.timestamp : null,
-          source: typeof payload.liveMarketData.source === 'string' ? payload.liveMarketData.source : null,
-          checkedAt: typeof payload.liveMarketData.checkedAt === 'string' ? payload.liveMarketData.checkedAt : '',
-          reason: typeof payload.liveMarketData.reason === 'string' ? payload.liveMarketData.reason : undefined,
-        }
-        : undefined,
-      signalMetadata: payload.signalMetadata && typeof payload.signalMetadata === 'object'
-        ? {
-          candle_open_time: typeof payload.signalMetadata.candle_open_time === 'string' ? payload.signalMetadata.candle_open_time : null,
-          candle_close_time: typeof payload.signalMetadata.candle_close_time === 'string' ? payload.signalMetadata.candle_close_time : null,
-          data_timestamp: typeof payload.signalMetadata.data_timestamp === 'string' ? payload.signalMetadata.data_timestamp : null,
-          timeframe: typeof payload.signalMetadata.timeframe === 'string' ? payload.signalMetadata.timeframe : null,
-          price_at_signal: typeof payload.signalMetadata.price_at_signal === 'number' && Number.isFinite(payload.signalMetadata.price_at_signal)
-            ? payload.signalMetadata.price_at_signal
-            : null,
-          is_candle_forming: typeof payload.signalMetadata.is_candle_forming === 'boolean' ? payload.signalMetadata.is_candle_forming : null,
-          data_source: typeof payload.signalMetadata.data_source === 'string' ? payload.signalMetadata.data_source : null,
-        }
-        : undefined,
-      priceSeries,
-      reasoning: Array.isArray(payload.reasoning)
-        ? payload.reasoning.map((item: unknown) => String(item).trim()).filter(Boolean).slice(0, 5)
-        : Array.isArray(payload.analysis?.reasoning)
-          ? payload.analysis.reasoning.map((item: unknown) => String(item).trim()).filter(Boolean).slice(0, 5)
-          : [],
-      supportResistance: {
-        support: resolvedSupportResistance.support,
-        resistance: resolvedSupportResistance.resistance,
-      },
-      analysis: {
-        trend: payload.analysis?.trend || 'neutral',
-        structure: payload.analysis?.structure || '',
-        volatility: payload.analysis?.volatility || 'low',
-        volume: payload.analysis?.volume || 'not_visible',
-        sentiment: payload.analysis?.sentiment || 'neutral',
-        indicators: payload.analysis?.indicators || 'none',
-        notes: payload.analysis?.notes || '',
-      },
-      zones: {
-        support: payload.zones?.support || 'not_clear',
-        resistance: payload.zones?.resistance || 'not_clear',
-        liquidity: payload.zones?.liquidity || 'not_clear',
-      },
-      trade_setup: tradeSetup,
-      tradePlan,
-      verdict: ['TRADE_PLAN', 'CONDITIONAL_PLAN', 'NO_TRADE'].includes(payload.verdict) ? payload.verdict : undefined,
-      conviction: ['HIGH', 'MEDIUM', 'LOW'].includes(payload.conviction) ? payload.conviction : payload.conviction === null ? null : undefined,
-      verdictReason: typeof payload.verdict_reason === 'string' ? payload.verdict_reason : undefined,
-      noTradeReason: typeof payload.no_trade_reason === 'string' ? payload.no_trade_reason : payload.no_trade_reason === null ? null : undefined,
-      marketBias: payload.marketBias || 'neutral',
-      marketBiasConfidence: Math.max(0, Math.min(100, Number(payload.marketBiasConfidence) || 0)),
-      tradeStatus: payload.tradeStatus || 'no_setup',
-      setupStatus: payload.setupStatus || 'NO_SETUP',
-      setupConfidence: Math.max(0, Math.min(100, Number(payload.setupConfidence) || 0)),
-      marketConfidence: Math.max(0, Math.min(100, Number(payload.marketConfidence) || 0)),
-      entryReadiness: Math.max(0, Math.min(100, Number(payload.entryReadiness) || 0)),
-      tradeDecision: payload.tradeDecision || 'NONE',
-      tradeTrigger: payload.tradeTrigger || '',
-      entryStatus: ['waiting_for_trigger', 'trigger_observed', 'missed', 'unverified'].includes(payload.entryStatus)
-        ? payload.entryStatus
-        : undefined,
-      setupType: ['limit_zone', 'breakout', 'rejection', 'other', 'unspecified'].includes(payload.setupType)
-        ? payload.setupType
-        : undefined,
-      candidateReview: payload.candidateReview && typeof payload.candidateReview === 'object'
-        ? {
-          status: ['selected', 'none', 'ambiguous', 'invalid_response'].includes(payload.candidateReview.status)
-            ? payload.candidateReview.status
-            : 'invalid_response',
-          direction: ['buy', 'sell'].includes(payload.candidateReview.direction)
-            ? payload.candidateReview.direction
-            : undefined,
-          evidenceScore: typeof payload.candidateReview.evidenceScore === 'number'
-            ? payload.candidateReview.evidenceScore
-            : undefined,
-          reason: typeof payload.candidateReview.reason === 'string' ? payload.candidateReview.reason : '',
-        }
-        : undefined,
-      whyNotNow: Array.isArray(payload.whyNotNow) ? payload.whyNotNow.map(String) : [],
-      dataLimitations: Array.isArray(payload.dataLimitations) ? payload.dataLimitations.map(String) : [],
-      confidence: Math.max(0, Math.min(100, Number(payload.confidence) || 0)),
-      multiTimeframe: payload.multiTimeframe && typeof payload.multiTimeframe === 'object' ? {
-        alignment: ['aligned', 'conflicting', 'unclear'].includes(payload.multiTimeframe.alignment) ? payload.multiTimeframe.alignment : 'unclear',
-        summary: typeof payload.multiTimeframe.summary === 'string' ? payload.multiTimeframe.summary : '',
-        h4: {
-          trend: ['bullish', 'bearish', 'neutral'].includes(payload.multiTimeframe.h4?.trend) ? payload.multiTimeframe.h4.trend : 'neutral',
-          structure: typeof payload.multiTimeframe.h4?.structure === 'string' ? payload.multiTimeframe.h4.structure : '',
-        },
-        m15: {
-          trend: ['bullish', 'bearish', 'neutral'].includes(payload.multiTimeframe.m15?.trend) ? payload.multiTimeframe.m15.trend : 'neutral',
-          structure: typeof payload.multiTimeframe.m15?.structure === 'string' ? payload.multiTimeframe.m15.structure : '',
-          confirmation: typeof payload.multiTimeframe.m15?.confirmation === 'string' ? payload.multiTimeframe.m15.confirmation : '',
-        },
-      } : undefined,
-    };
+    const payload: unknown = await response.json().catch(() => null);
+    if (!response.ok) return normalizeChartAnalysisError(payload);
+    if (isRecord(payload) && payload.status === 'not_a_chart') return { status: 'not_a_chart' };
+    if (isRecord(payload) && payload.status === 'error') return normalizeChartAnalysisError(payload);
+    if (isSetupAnalysisJson(payload)) return payload;
+    return { status: 'error', message: "Couldn't generate a valid setup, try again" };
   } catch (error) {
-    console.error('[Chart Detection] Error:', error);
-    return emptyAnalysis(
-      'ai_unavailable',
-      error instanceof Error ? error.message : 'Unable to analyze image.'
-    );
+    return {
+      status: 'error',
+      message: error instanceof Error ? error.message : 'Chart analysis is temporarily unavailable. Please try again.',
+    };
   }
 }
