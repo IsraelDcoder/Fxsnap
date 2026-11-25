@@ -51,6 +51,24 @@ async function supabaseSet(key, value, ttlSeconds) {
   return true;
 }
 
+async function touchAnonymousDevice(deviceId, accountId) {
+  if (!supabaseEnabled) return false;
+  if (!/^[a-zA-Z0-9_-]{16,128}$/.test(deviceId) || !/^device_[a-f0-9]{32}$/.test(accountId)) {
+    throw new Error('Invalid anonymous device identity.');
+  }
+  const response = await fetch(`${supabaseUrl}/rest/v1/fxsnap_anonymous_devices?on_conflict=device_id`, {
+    method: 'POST',
+    headers: supabaseHeaders('resolution=merge-duplicates,return=minimal'),
+    body: JSON.stringify({
+      device_id: deviceId,
+      account_id: accountId,
+      last_active_at: new Date().toISOString(),
+    }),
+  });
+  if (!response.ok) throw new Error(`Supabase anonymous-device registry failed with ${response.status}.`);
+  return true;
+}
+
 function getTtlKey(key, ttlSeconds) {
   return `${key}:${ttlSeconds}`;
 }
@@ -204,6 +222,7 @@ async function appendJson(key, value, maxItems, ttlSeconds) {
 module.exports = {
   enabled: Boolean(redisUrl || supabaseEnabled),
   supabaseEnabled,
+  touchAnonymousDevice,
   connect,
   increment,
   getCounter,

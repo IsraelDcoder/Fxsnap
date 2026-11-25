@@ -21,10 +21,3 @@ export function getOnboardingProgress(stepIndex: number): OnboardingProgress {
     accessibleLabel: `Onboarding progress, ${stepNumber} of ${ONBOARDING_STEP_COUNT}.`,
   };
 }
-
-export function requiresPushNotificationSetupBeforePaywall(
-  platform: string,
-  pushNotificationsReady: boolean,
-): boolean {
-  return platform !== 'web' && !pushNotificationsReady;
-}

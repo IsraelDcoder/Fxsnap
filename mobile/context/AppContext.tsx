@@ -8,7 +8,7 @@ import { setHapticsEnabled } from '@/services/haptics';
 import { getServerAnalysisAccess } from '@/services/apiAuth';
 import { createDailyRiskActivity, getLocalRiskDateKey, normalizeDailyRiskActivity, type DailyRiskActivity, type OpenRiskPosition } from '@/services/risk';
 import {
-  getAuthenticatedAccount,
+  getAnonymousAccount,
   getFxsnapAccountData,
   saveFxsnapAccountData,
 } from '@/services/account';
@@ -251,10 +251,6 @@ interface AppContextValue {
   closeRiskPosition: (positionId: string, realizedPnl: number) => Promise<void>;
   exportData: () => Promise<string>;
   importData: (backupJson: string) => Promise<void>;
-  deleteAccount: () => Promise<void>;
-  syncAccountData: () => Promise<void>;
-  stopAccountDataSync: () => void;
-  accountSyncStatus: 'signed_out' | 'syncing' | 'synced' | 'error';
 }
 
 const defaultSettings: AppSettings = {
@@ -456,7 +452,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [billingStatusReady, setBillingStatusReady] = useState(!billingIsConfigured());
   const [cloudSyncEnabled, setCloudSyncEnabled] = useState(false);
   const [accountDataRevision, setAccountDataRevision] = useState(0);
-  const [accountSyncStatus, setAccountSyncStatus] = useState<AppContextValue['accountSyncStatus']>('signed_out');
   const [pendingFeatureRoute, setPendingFeatureRoute] = useState<string | null>(null);
   const analysisAccessGrant = useRef(false);
   const accountSyncQueue = useRef<Promise<void>>(Promise.resolve());
@@ -740,48 +735,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setRiskActivity(normalizeDailyRiskActivity(backup.riskActivity || null, getLocalRiskDateKey()));
   };
 
-  const syncAccountData = async () => {
-    if (Platform.OS === 'web') throw new Error('Account data sync is available in the FXSnap mobile app.');
-    setAccountSyncStatus('syncing');
-    try {
-      const cloudData = await getFxsnapAccountData();
-      if (cloudData) {
-        await importData(JSON.stringify(cloudData));
-      } else {
-        const initialData = JSON.parse(await exportData()) as Record<string, unknown>;
-        await saveFxsnapAccountData(initialData);
-      }
-      setCloudSyncEnabled(true);
-      setAccountSyncStatus('synced');
-    } catch (error) {
-      setAccountSyncStatus('error');
-      throw error;
-    }
-  };
-
-  const stopAccountDataSync = () => {
-    setCloudSyncEnabled(false);
-    setAccountSyncStatus('signed_out');
-  };
-
   useEffect(() => {
     if (isLoading || Platform.OS === 'web') return;
     let active = true;
-    void getAuthenticatedAccount()
-      .then(async (account) => {
+    void getAnonymousAccount()
+      .then(async () => {
         if (!active) return;
-        if (!account) {
-          setAccountSyncStatus('signed_out');
-          return null;
-        }
         const cloudData = await getFxsnapAccountData();
         if (cloudData) await importData(JSON.stringify(cloudData));
         setCloudSyncEnabled(true);
-        setAccountSyncStatus('synced');
-        return cloudData;
       })
-      .catch(() => {
-        if (active) setAccountSyncStatus('error');
+      .catch((error: unknown) => {
+        if (active) console.error('[Account] Anonymous device data sync could not start.', error);
       });
     return () => { active = false; };
   }, [isLoading]);
@@ -793,7 +758,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!cloudSyncEnabled || isLoading) return;
     const timeout = setTimeout(() => {
-      setAccountSyncStatus('syncing');
       void exportData()
         .then((backup) => {
           const data = JSON.parse(backup) as Record<string, unknown>;
@@ -802,10 +766,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             .then(() => saveFxsnapAccountData(data));
           return accountSyncQueue.current;
         })
-        .then(() => setAccountSyncStatus('synced'))
         .catch((error: unknown) => {
           console.error('[Account] FXSnap data sync failed.', error instanceof Error ? error.message : 'Unknown error');
-          setAccountSyncStatus('error');
         });
     }, 900);
     return () => clearTimeout(timeout);
@@ -820,34 +782,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     riskActivity,
     accountDataRevision,
   ]);
-
-  const deleteAccount = async () => {
-    setCloudSyncEnabled(false);
-    setAccountSyncStatus('signed_out');
-    await AsyncStorage.multiRemove([
-      'onboardingComplete',
-      'paywallDismissed',
-      'settings',
-      'savedAnalyses',
-      'savedStrategies',
-      'savedBriefs',
-      RISK_ACTIVITY_KEY,
-      'fxsnap:dailyBrief:assignments:v1',
-      'fxsnap:dailyBrief:reads:v1',
-      'fxsnap:learningHub:v1',
-      DATA_VERSION_KEY,
-    ]);
-    setOnboardingComplete(false);
-    setPaywallDismissed(false);
-    setIsSubscribed(false);
-    setSettings(defaultSettings);
-    setHapticsEnabled(defaultSettings.hapticsEnabled);
-    setSavedAnalyses([]);
-    setSavedStrategies([]);
-    setSavedBriefs([]);
-    setRiskActivity(createDailyRiskActivity(getLocalRiskDateKey()));
-    setCurrentAnalysis(null);
-  };
 
   return (
     <AppContext.Provider
@@ -885,10 +819,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         closeRiskPosition,
         exportData,
         importData,
-        deleteAccount,
-        syncAccountData,
-        stopAccountDataSync,
-        accountSyncStatus,
       }}
     >
       {children}

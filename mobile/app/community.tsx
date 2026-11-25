@@ -42,13 +42,12 @@ import * as Clipboard from 'expo-clipboard';
 import Svg, { Polyline } from 'react-native-svg';
 import { useApp, type AnalysisResult } from '@/context/AppContext';
 import { useColors } from '@/hooks/useColors';
-import { signInWithGoogle, getAuthenticatedAccount, type FxsnapAccount } from '@/services/account';
+import { getAnonymousAccount, type FxsnapAccount } from '@/services/account';
 import { createCommunityPreviewAccount } from '@/services/communityPreview';
 import { fetchMarketCandles, fetchMarketQuotes } from '@/services/market';
 import {
   COMMUNITY_CATEGORIES,
   COMMUNITY_REACTIONS,
-  COMMUNITY_RULES_VERSION,
   blockCommunityMember,
   checkCommunityUsername,
   createCommunityClientId,
@@ -307,7 +306,7 @@ export default function CommunityScreen() {
   const { currentAnalysis, savedAnalyses, isSubscribed } = useApp();
   const [account, setAccount] = useState<FxsnapAccount | null>(null);
   const [profile, setProfile] = useState<CommunityProfile | null>(null);
-  const [stage, setStage] = useState<'loading' | 'signed_out' | 'onboarding' | 'feed' | 'error'>('loading');
+  const [stage, setStage] = useState<'loading' | 'onboarding' | 'feed' | 'error'>('loading');
   const [screenError, setScreenError] = useState('');
   const [feed, setFeed] = useState<CommunityFeed>('global');
   const [feedTab, setFeedTab] = useState<CommunityFeedTab>('For You');
@@ -327,9 +326,7 @@ export default function CommunityScreen() {
   const [username, setUsername] = useState('');
   const [usernameStatus, setUsernameStatus] = useState<{ available: boolean; reason: string | null } | null>(null);
   const [checkingUsername, setCheckingUsername] = useState(false);
-  const [acceptedRules, setAcceptedRules] = useState(false);
   const [joining, setJoining] = useState(false);
-  const [signingIn, setSigningIn] = useState(false);
   const [composerVisible, setComposerVisible] = useState(false);
   const [composerIntent, setComposerIntent] = useState<ComposerIntent>('post');
   const [createMenuOpen, setCreateMenuOpen] = useState(false);
@@ -506,8 +503,8 @@ export default function CommunityScreen() {
       setNextCursor(page.nextCursor);
       setHasMore(page.hasMore);
       setFollowingEmpty(page.followingEmpty === true);
-      if (reset && profile && account?.email) {
-        void writeCommunityFeedCache(account.email, feed, category, profile, {
+      if (reset && profile && account?.userId) {
+        void writeCommunityFeedCache(account.userId, feed, category, profile, {
           ...page,
           messages: visibleMessages,
         }).catch((error) => {
@@ -521,7 +518,7 @@ export default function CommunityScreen() {
       setLoadingMore(false);
       setRefreshing(false);
     }
-  }, [account?.email, category, feed, nextCursor, profile, stage]);
+  }, [account?.userId, category, feed, nextCursor, profile, stage]);
 
   const removeMessageFromCommunityState = useCallback((messageId: string) => {
     removedMessageIdsRef.current.add(messageId);
@@ -533,15 +530,15 @@ export default function CommunityScreen() {
     setEditingPost((previous) => previous?.id === messageId ? null : previous);
     setPostActionsPost((previous) => previous?.id === messageId ? null : previous);
 
-    if (account?.email) {
-      void removeCommunityPostFromFeedCache(account.email, messageId).catch((error) => {
+    if (account?.userId) {
+      void removeCommunityPostFromFeedCache(account.userId, messageId).catch((error) => {
         console.error('[Community] Could not invalidate the removed post in the feed cache.', {
           messageId,
           errorName: error instanceof Error ? error.name : 'UnknownError',
         });
       });
     }
-  }, [account?.email]);
+  }, [account?.userId]);
 
   const refreshNotifications = useCallback(async () => {
     const result = await getCommunityNotifications();
@@ -553,17 +550,12 @@ export default function CommunityScreen() {
     setStage('loading');
     setScreenError('');
     try {
-      const linkedAccount = LOCAL_COMMUNITY_PREVIEW
+      const currentAccount = LOCAL_COMMUNITY_PREVIEW
         ? createCommunityPreviewAccount()
-        : await getAuthenticatedAccount();
-      if (!linkedAccount) {
-        setAccount(null);
-        setStage('signed_out');
-        return;
-      }
-      setAccount(linkedAccount);
+        : await getAnonymousAccount();
+      setAccount(currentAccount);
       const initialCategory = COMMUNITY_CATEGORIES.find((item) => item.id === categoryParam)?.id || null;
-      cachedFeed = await readCommunityFeedCache(linkedAccount.email, 'global', initialCategory)
+      cachedFeed = await readCommunityFeedCache(currentAccount.userId, 'global', initialCategory)
         .catch((error: unknown) => {
           console.warn('[Community] Could not read the feed cache.', error);
           return null;
@@ -592,7 +584,7 @@ export default function CommunityScreen() {
       setHasMore(membership.hasMore);
       setFollowingEmpty(membership.followingEmpty === true);
       void writeCommunityFeedCache(
-        linkedAccount.email,
+        currentAccount.userId,
         'global',
         initialCategory,
         membership.profile,
@@ -830,7 +822,7 @@ export default function CommunityScreen() {
   useEffect(() => {
     const normalized = username.trim().toLowerCase();
     setUsernameStatus(null);
-    if (!/^[a-z0-9_]{3,24}$/.test(normalized)) {
+    if (!/^[a-z0-9_]{3,20}$/.test(normalized)) {
       setCheckingUsername(false);
       return;
     }
@@ -851,21 +843,8 @@ export default function CommunityScreen() {
     };
   }, [username]);
 
-  const signIn = async () => {
-    setSigningIn(true);
-    setScreenError('');
-    try {
-      await signInWithGoogle();
-      await bootstrap();
-    } catch (error) {
-      setScreenError(apiErrorMessage(error));
-    } finally {
-      setSigningIn(false);
-    }
-  };
-
   const finishJoin = async () => {
-    if (!acceptedRules || !usernameStatus?.available || joining) return;
+    if (!usernameStatus?.available || joining) return;
     setJoining(true);
     setScreenError('');
     try {
@@ -1527,6 +1506,7 @@ export default function CommunityScreen() {
       { text: 'Share trading signal', onPress: () => openComposer('signal', 'chart_analysis') },
       ...(profile?.isAdmin ? [{ text: 'Post announcement', onPress: () => openComposer('text', 'events') }] : []),
       { text: 'Manage blocked traders', onPress: () => void openBlockedMembers() },
+      { text: 'Community settings', onPress: () => router.push('/profile') },
       { text: 'Contact FXSnap support', onPress: () => router.push('/support-chat') },
       ...(profile?.isAdmin ? [{ text: 'Moderation tools', onPress: () => router.push('/community-admin') }] : []),
       { text: 'Cancel', style: 'cancel' },
@@ -1659,22 +1639,6 @@ export default function CommunityScreen() {
     return <CenteredMessage colors={colors} insets={insets} title="Opening FXSnap Community" body="Connecting to the trading floor." />;
   }
 
-  if (stage === 'signed_out') {
-    return (
-      <CenteredMessage
-        colors={colors}
-        insets={insets}
-        title="Join the trading conversation"
-        body="Sign in with your existing Google-linked FXSnap account. No extra password or account is needed."
-        actionLabel={signingIn ? 'Connecting…' : 'Continue with Google'}
-        onAction={() => void signIn()}
-        loading={signingIn}
-        error={screenError}
-        onBack={() => router.back()}
-      />
-    );
-  }
-
   if (stage === 'error') {
     return (
       <CenteredMessage
@@ -1693,66 +1657,43 @@ export default function CommunityScreen() {
     return (
       <NativeKeyboardAvoidingView style={[styles.screen, { backgroundColor: colors.background }]} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <View style={[styles.onboardingHeader, { paddingTop: insets.top + 10 }]}>
-          <TouchableOpacity onPress={() => router.back()} style={styles.headerIcon} accessibilityLabel="Go back">
-            <Feather name="arrow-left" size={20} color={colors.text} />
-          </TouchableOpacity>
+          <View style={styles.headerIcon} />
           <Text style={[styles.headerTitle, { color: colors.text }]}>Join Community</Text>
           <View style={styles.headerIcon} />
         </View>
         <ScrollView contentContainerStyle={styles.onboardingContent} keyboardShouldPersistTaps="handled">
-          <View style={[styles.communityMark, { backgroundColor: `${colors.buy}18` }]}>
-            <Feather name="users" size={27} color={colors.buy} />
-          </View>
-          <Text style={[styles.heroTitle, { color: colors.text }]}>Learn with traders, not at them.</Text>
+          <Text style={[styles.heroTitle, { color: colors.text }]}>Choose your username</Text>
           <Text style={[styles.heroBody, { color: colors.textSecondary }]}>
-            Share chart ideas, talk through the markets, and build your trading knowledge together.
-          </Text>
-          <Text style={[styles.metaText, { color: colors.textMuted }]}>
-            Joining as {account?.displayName || account?.email || 'your FXSnap account'}
+            Join traders sharing charts and market ideas.
           </Text>
           <Text style={[styles.fieldLabel, { color: colors.text }]}>Choose your community username</Text>
           <View style={[styles.usernameField, { backgroundColor: colors.card, borderColor: usernameStatus?.available ? colors.buy : colors.cardBorder }]}>
             <Text style={[styles.atSign, { color: colors.textMuted }]}>@</Text>
             <TextInput
               value={username}
-              onChangeText={(value) => setUsername(value.toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 24))}
+              onChangeText={(value) => setUsername(value.toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 20))}
               placeholder="your_trader_name"
               placeholderTextColor={colors.textMuted}
               autoCapitalize="none"
               autoCorrect={false}
-              maxLength={24}
+              maxLength={20}
               style={[styles.usernameInput, { color: colors.text }]}
               accessibilityLabel="Community username"
             />
             {checkingUsername ? <ActivityIndicator size="small" color={colors.buy} /> : null}
           </View>
           <Text style={[styles.helperText, { color: usernameStatus?.available ? colors.buy : colors.textMuted }]}>
-            {usernameStatus?.reason || (usernameStatus?.available ? 'That username is available.' : '3–24 lowercase letters, numbers, or underscores.')}
+            {usernameStatus?.reason || (usernameStatus?.available ? 'That username is available.' : '3–20 letters, numbers, or underscores.')}
           </Text>
-          <View style={[styles.rulesCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
-            <Text style={[styles.rulesTitle, { color: colors.text }]}>A trading-first community</Text>
-            <RuleLine text="Discuss forex, gold, crypto, charts, and market education respectfully." colors={colors} />
-            <RuleLine text="Share evidence and uncertainty. Never promise guaranteed outcomes." colors={colors} />
-            <RuleLine text="Signals are member opinions, not official FXSnap recommendations." colors={colors} />
-            <RuleLine text="Report scams or abuse; do not post personal or account credentials." colors={colors} />
-          </View>
-          <TouchableOpacity onPress={() => setAcceptedRules((value) => !value)} style={styles.acceptRow} accessibilityRole="checkbox" accessibilityState={{ checked: acceptedRules }}>
-            <View style={[styles.checkbox, { borderColor: acceptedRules ? colors.buy : colors.cardBorder, backgroundColor: acceptedRules ? colors.buy : 'transparent' }]}>
-              {acceptedRules ? <Feather name="check" size={13} color={colors.primaryForeground} /> : null}
-            </View>
-            <Text style={[styles.acceptText, { color: colors.textSecondary }]}>
-              I accept the FXSnap Community rules ({COMMUNITY_RULES_VERSION}).
-            </Text>
-          </TouchableOpacity>
+          <Text style={[styles.privacyNote, { color: colors.textMuted }]}>By continuing, you agree to follow the Community rules.</Text>
           {screenError ? <Text style={[styles.errorText, { color: colors.sell }]}>{screenError}</Text> : null}
           <TouchableOpacity
             onPress={() => void finishJoin()}
-            disabled={!acceptedRules || !usernameStatus?.available || joining}
-            style={[styles.primaryButton, { backgroundColor: acceptedRules && usernameStatus?.available ? colors.buy : colors.surface }]}
+            disabled={!usernameStatus?.available || joining}
+            style={[styles.primaryButton, { backgroundColor: usernameStatus?.available ? colors.buy : colors.surface }]}
           >
-            {joining ? <ActivityIndicator color={colors.primaryForeground} /> : <Text style={[styles.primaryButtonText, { color: acceptedRules && usernameStatus?.available ? colors.primaryForeground : colors.textMuted }]}>Join FXSnap Community</Text>}
+            {joining ? <ActivityIndicator color={colors.primaryForeground} /> : <Text style={[styles.primaryButtonText, { color: usernameStatus?.available ? colors.primaryForeground : colors.textMuted }]}>Continue</Text>}
           </TouchableOpacity>
-          <Text style={[styles.privacyNote, { color: colors.textMuted }]}>Your FXSnap account is used to secure your community identity. Your email is not shown in posts.</Text>
         </ScrollView>
       </NativeKeyboardAvoidingView>
     );
@@ -2382,10 +2323,6 @@ function CenteredMessage({
   );
 }
 
-function RuleLine({ text, colors }: { text: string; colors: ReturnType<typeof useColors> }) {
-  return <View style={styles.ruleLine}><Feather name="check" size={14} color={colors.buy} /><Text style={[styles.ruleText, { color: colors.textSecondary }]}>{text}</Text></View>;
-}
-
 function CommentCard({
   comment,
   colors,
@@ -2756,12 +2693,5 @@ const styles = StyleSheet.create({
   atSign: { fontSize: 14, fontFamily: 'Inter_700Bold' },
   usernameInput: { flex: 1, height: 46, fontSize: 13, fontFamily: 'Inter_500Medium' },
   helperText: { minHeight: 15, fontSize: 10, fontFamily: 'Inter_400Regular' },
-  rulesCard: { gap: 10, borderWidth: 1, borderRadius: 14, padding: 14 },
-  rulesTitle: { fontSize: 12, fontFamily: 'Inter_700Bold', marginBottom: 1 },
-  ruleLine: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
-  ruleText: { flex: 1, fontSize: 10, lineHeight: 15, fontFamily: 'Inter_400Regular' },
-  acceptRow: { flexDirection: 'row', alignItems: 'center', gap: 9, paddingVertical: 3 },
-  checkbox: { width: 20, height: 20, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderRadius: 6 },
-  acceptText: { flex: 1, fontSize: 10, lineHeight: 15, fontFamily: 'Inter_500Medium' },
   privacyNote: { fontSize: 9, lineHeight: 14, textAlign: 'center', fontFamily: 'Inter_400Regular', marginTop: 3 },
 });

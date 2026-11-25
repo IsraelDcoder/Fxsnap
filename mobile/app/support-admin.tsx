@@ -49,6 +49,12 @@ function topicLabel(topic: string | null) {
   return topic ? topic.replace('_', ' ') : 'not specified';
 }
 
+function memberLabel(conversation: Pick<SupportAdminConversation, 'account_id' | 'display_name' | 'community_username'>) {
+  return conversation.community_username
+    ? `@${conversation.community_username}`
+    : conversation.display_name || conversation.account_id;
+}
+
 function AdminSupportMessage({
   message,
   fromAdmin,
@@ -145,7 +151,7 @@ export default function SupportAdminScreen() {
       if (notify && previousTotal !== null && newlyUnread) {
         Alert.alert(
           'New FXSnap support message',
-          `${newlyUnread.display_name || newlyUnread.account_id} sent a private support message.`,
+          `${memberLabel(newlyUnread)} sent a private support message.`,
           [{ text: 'View inbox' }],
         );
       }
@@ -215,7 +221,7 @@ export default function SupportAdminScreen() {
         ? (replyTarget.body.trim() || (replyTarget.attachment ? 'Photo attachment' : 'Message')).replace(/\s+/g, ' ').slice(0, 240)
         : '';
       const replyBody = replyTarget
-        ? `Replying to ${replyTarget.sender_kind === 'admin' ? 'FXSnap Support' : selected.display_name || 'user'}:\n> ${quotedText}\n\n${draft.trim()}`
+        ? `Replying to ${replyTarget.sender_kind === 'admin' ? 'FXSnap Support' : memberLabel(selected)}:\n> ${quotedText}\n\n${draft.trim()}`
         : draft.trim();
       const result = await sendSupportAdminReply(selected.id, replyBody.slice(0, 2000));
       setMessages((current) => result.duplicate || current.some((message) => message.id === result.message.id)
@@ -270,7 +276,7 @@ export default function SupportAdminScreen() {
           <Feather name={selected ? 'arrow-left' : 'x'} size={18} color={colors.text} />
         </TouchableOpacity>
         <View style={styles.headerCopy}>
-          <Text style={[styles.title, { color: colors.text }]}>{selected ? (selected.display_name || 'Support conversation') : 'Support inbox'}</Text>
+          <Text style={[styles.title, { color: colors.text }]}>{selected ? memberLabel(selected) : 'Support inbox'}</Text>
           <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
             {selected ? `Private · ${selected.status}` : `${unreadTotal} unread · live updates`}
           </Text>
@@ -306,6 +312,7 @@ export default function SupportAdminScreen() {
               <Text selectable style={[styles.contextAccount, { color: colors.textSecondary }]}>{selected.account_id}</Text>
               <View style={styles.contextGrid}>
                 <ContextItem label="SUBSCRIPTION" value={selected.subscription_status} colors={colors} />
+                <ContextItem label="COMMUNITY USERNAME" value={selected.community_username ? `@${selected.community_username}` : 'not set'} colors={colors} />
                 <ContextItem label="APP VERSION" value={selected.app_version || 'unknown'} colors={colors} />
                 <ContextItem label="PLATFORM" value={selected.platform || 'unknown'} colors={colors} />
                 <ContextItem label="TOPIC" value={topicLabel(selected.topic)} colors={colors} />
@@ -349,7 +356,7 @@ export default function SupportAdminScreen() {
                 <View style={[styles.replyAccent, { backgroundColor: colors.buy }]} />
                 <View style={styles.replyPreviewCopy}>
                   <Text style={[styles.replyPreviewTitle, { color: colors.buy }]}>
-                    Replying to {replyTarget.sender_kind === 'admin' ? 'FXSnap Support' : selected.display_name || 'user'}
+                    Replying to {replyTarget.sender_kind === 'admin' ? 'FXSnap Support' : memberLabel(selected)}
                   </Text>
                   <Text numberOfLines={1} style={[styles.replyPreviewBody, { color: colors.textSecondary }]}>
                     {replyTarget.body.trim() || (replyTarget.attachment ? 'Photo attachment' : 'Message')}
@@ -443,14 +450,14 @@ export default function SupportAdminScreen() {
                 onPress={() => void loadConversation(conversation)}
                 style={[styles.conversationCard, { backgroundColor: colors.card, borderColor: conversation.unread_count ? `${colors.buy}75` : colors.cardBorder }]}
                 accessibilityRole="button"
-                accessibilityLabel={`Open conversation from ${conversation.display_name || conversation.account_id}${conversation.unread_count ? `, ${conversation.unread_count} unread` : ''}`}
+                accessibilityLabel={`Open conversation from ${memberLabel(conversation)}${conversation.unread_count ? `, ${conversation.unread_count} unread` : ''}`}
               >
                 <View style={[styles.userAvatar, { backgroundColor: `${colors.buy}18` }]}>
                   <Feather name="user" size={17} color={colors.buy} />
                 </View>
                 <View style={styles.conversationCopy}>
                   <View style={styles.conversationTitleRow}>
-                    <Text numberOfLines={1} style={[styles.conversationTitle, { color: colors.text }]}>{conversation.display_name || conversation.account_id}</Text>
+                    <Text numberOfLines={1} style={[styles.conversationTitle, { color: colors.text }]}>{memberLabel(conversation)}</Text>
                     <Text style={[styles.conversationTime, { color: colors.textMuted }]}>{formatTime(conversation.latest_message_at)}</Text>
                   </View>
                   <Text numberOfLines={1} style={[styles.conversationAccount, { color: colors.textMuted }]}>{conversation.account_id}</Text>

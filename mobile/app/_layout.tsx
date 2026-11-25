@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Platform, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { ActivityIndicator, AppState, Platform, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
@@ -186,9 +186,17 @@ function RootLayoutNav({ fontsReady }: { fontsReady: boolean }) {
   }, [isLoading, onboardingComplete]);
 
   useEffect(() => {
-    if (!isLoading && onboardingComplete) {
-      void syncRegisteredPushNotifications().catch(() => undefined);
-    }
+    if (isLoading || !onboardingComplete) return undefined;
+    const syncPushRegistration = () => {
+      void syncRegisteredPushNotifications().catch((error: unknown) => {
+        console.error('[Startup] Could not sync optional push registration.', error);
+      });
+    };
+    syncPushRegistration();
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') syncPushRegistration();
+    });
+    return () => subscription.remove();
   }, [isLoading, onboardingComplete]);
 
   useEffect(() => {
@@ -255,7 +263,6 @@ function RootLayoutNav({ fontsReady }: { fontsReady: boolean }) {
         <Stack.Screen name="events-admin" options={{ headerShown: false, animation: 'slide_from_right' }} />
         <Stack.Screen name="event-room" options={{ headerShown: false, animation: 'slide_from_right' }} />
         <Stack.Screen name="settings" options={{ headerShown: false, animation: 'slide_from_right' }} />
-        <Stack.Screen name="auth/callback" options={{ headerShown: false, animation: 'none' }} />
         <Stack.Screen name="support-chat" options={{ headerShown: false, animation: 'slide_from_right' }} />
         <Stack.Screen name="support-admin" options={{ headerShown: false, animation: 'slide_from_right' }} />
         <Stack.Screen name="community" options={{ headerShown: false, animation: 'slide_from_right' }} />

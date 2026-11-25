@@ -101,7 +101,7 @@ function createHarness() {
     getActor: async (req, res) => {
       if (!req.actor) {
         res.statusCode = 401;
-        res.body = { error: 'A signed-in account is required.' };
+        res.body = { error: 'A valid device identity is required.' };
         return null;
       }
       return req.actor;
@@ -143,6 +143,7 @@ test('private support persists member messages and gates admin workflow', async 
       accountId: MEMBER_ID,
       deviceId: 'support-member-device',
       displayName: 'Member One',
+      communityUsername: 'member_one',
       supabaseUserId: '00000000-0000-4000-8000-000000000011',
       isAdmin: false,
     };
@@ -165,6 +166,7 @@ test('private support persists member messages and gates admin workflow', async 
     });
     assert.equal(created.statusCode, 201);
     assert.equal(harness.conversations[0].account_id, MEMBER_ID);
+    assert.equal(harness.conversations[0].community_username, 'member_one');
     assert.equal(harness.conversations[0].subscription_status, 'active');
     assert.equal(harness.conversations[0].app_version, '2.4.0');
     assert.equal(harness.conversations[0].platform, 'android');
@@ -186,10 +188,12 @@ test('private support persists member messages and gates admin workflow', async 
     assert.equal(inbox.statusCode, 200);
     assert.equal(inbox.body.conversations.length, 1);
     assert.equal(inbox.body.conversations[0].unread_count, 1);
+    assert.equal(inbox.body.conversations[0].community_username, 'member_one');
 
     const opened = await harness.call(`/api/admin/support/conversations/${harness.conversations[0].id}`, { actor: admin });
     assert.equal(opened.statusCode, 200);
     assert.equal(opened.body.messages.length, 1);
+    assert.equal(opened.body.conversation.community_username, 'member_one');
     assert.ok(harness.conversations[0].admin_last_read_at);
 
     const pending = await harness.call(`/api/admin/support/conversations/${harness.conversations[0].id}`, {

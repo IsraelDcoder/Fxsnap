@@ -17,6 +17,14 @@ create table if not exists public.fxsnap_push_devices (
   registered_at timestamptz not null default now(),
   last_notification_at timestamptz
 );
+create table if not exists public.fxsnap_anonymous_devices (
+  device_id text primary key,
+  account_id text not null unique,
+  created_at timestamptz not null default now(),
+  last_active_at timestamptz not null default now()
+);
+create index if not exists fxsnap_anonymous_devices_last_active_idx
+  on public.fxsnap_anonymous_devices (last_active_at desc);
 alter table public.fxsnap_push_devices
   add column if not exists account_id text,
   add column if not exists supabase_user_id uuid;
@@ -28,10 +36,13 @@ alter table public.fxsnap_push_devices
 
 alter table public.fxsnap_kv enable row level security;
 alter table public.fxsnap_push_devices enable row level security;
+alter table public.fxsnap_anonymous_devices enable row level security;
 revoke all on table public.fxsnap_kv from anon, authenticated;
 revoke all on table public.fxsnap_push_devices from anon, authenticated;
+revoke all on table public.fxsnap_anonymous_devices from anon, authenticated;
 grant all on table public.fxsnap_kv to service_role;
 grant all on table public.fxsnap_push_devices to service_role;
+grant all on table public.fxsnap_anonymous_devices to service_role;
 
 create table if not exists public.fxsnap_paywall_reminder_sequences (
   id bigint generated always as identity primary key,

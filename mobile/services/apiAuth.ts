@@ -23,8 +23,10 @@ let legacyFreeAnalysisIdCleanup: Promise<void> | null = null;
 let sessionTokenRequest: Promise<string> | null = null;
 let deviceIdRequest: Promise<string> | null = null;
 
-function randomId() {
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+async function createDeviceId() {
+  if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID();
+  const { randomUUID } = await import('expo-crypto');
+  return randomUUID();
 }
 
 export async function getDeviceId() {
@@ -32,7 +34,7 @@ export async function getDeviceId() {
     const request = (async () => {
       let deviceId = await AsyncStorage.getItem(DEVICE_ID_KEY);
       if (!deviceId) {
-        deviceId = randomId();
+        deviceId = await createDeviceId();
         await AsyncStorage.setItem(DEVICE_ID_KEY, deviceId);
       }
       return deviceId;

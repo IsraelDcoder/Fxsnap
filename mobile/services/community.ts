@@ -697,39 +697,6 @@ export function subscribeToCommunityChanges(onChange: (eventType: string | null,
   return () => { void getSupabaseClient().removeChannel(channel); };
 }
 
-export function subscribeToSystemAnnouncementChanges(onChange: () => void) {
-  const client = getSupabaseClient();
-  let active = true;
-  let channel: ReturnType<typeof client.channel> | null = null;
-  void client.auth.getUser().then(({ data, error }) => {
-    if (!active) return;
-    if (error) {
-      console.error('[Notifications] Could not subscribe to system announcements.', error);
-      return;
-    }
-    if (!data.user) return;
-    channel = client
-      .channel(`fxsnap-system-announcements-${newId()}`)
-      .on('postgres_changes', {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'fxsnap_system_announcement_recipients',
-        filter: `recipient_supabase_user_id=eq.${data.user.id}`,
-      }, onChange)
-      .subscribe((status) => {
-        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-          console.error('[Notifications] System announcement subscription failed.', status);
-        }
-      });
-  }).catch((error: unknown) => {
-    console.error('[Notifications] Could not subscribe to system announcements.', error);
-  });
-  return () => {
-    active = false;
-    if (channel) void client.removeChannel(channel);
-  };
-}
-
 export function subscribeToCommunityPresence(accountId: string, onCountChange: (count: number) => void) {
   const client = getSupabaseClient();
   const channel = client.channel('fxsnap-community-presence', {

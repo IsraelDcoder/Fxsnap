@@ -19,7 +19,7 @@ const {
   getRegisteredTokens: () => Promise<Array<Record<string, unknown>>>;
   dispatchCommunityPushNotifications: (objectId?: string | null, limit?: number) => Promise<Record<string, unknown>>;
   registerPushToken: (deviceId: string, payload: Record<string, unknown>) => Promise<boolean>;
-  unregisterPushToken: (deviceId: string, accountId: string) => Promise<boolean>;
+  unregisterPushToken: (deviceId: string) => Promise<boolean>;
   startPaywallReminderSequence: (deviceId: string, startedAt?: Date) => Promise<boolean>;
   sendPaywallReminderSequences: (
     now: Date,
@@ -139,7 +139,7 @@ test('campaigns respect disabled categories', () => {
   assert.equal(buildCampaign(entry, [], now, false), null);
 });
 
-test('push tokens are bound to the authenticated device and can be removed', async () => {
+test('push tokens are bound to the signed device and can be removed after account migration', async () => {
   const deviceId = 'device-push-test-123456';
   const originalFetch = globalThis.fetch;
   const originalUrl = process.env.SUPABASE_URL;
@@ -161,9 +161,8 @@ test('push tokens are bound to the authenticated device and can be removed', asy
     }
     if (method === 'DELETE') {
       const target = new URL(url).searchParams.get('device_id')?.replace(/^eq\./, '');
-      const accountId = new URL(url).searchParams.get('account_id')?.replace(/^eq\./, '');
       for (let index = rows.length - 1; index >= 0; index--) {
-        if (rows[index].device_id === target && rows[index].account_id === accountId) rows.splice(index, 1);
+        if (rows[index].device_id === target) rows.splice(index, 1);
       }
       return new Response(null, { status: 204 });
     }
@@ -206,7 +205,7 @@ test('push tokens are bound to the authenticated device and can be removed', asy
       preferences: { enabled: true, dailyBrief: true, inactivity: false, weekly: true, community: false, systemAnnouncements: false },
     });
     assert.equal((await getRegisteredTokens()).filter((entry) => entry.accountId === 'usr_push-test-member').length, 2);
-    await unregisterPushToken(deviceId, 'usr_push-test-member');
+    await unregisterPushToken(deviceId);
     assert.equal((await getRegisteredTokens()).some((entry) => entry.deviceId === deviceId), false);
     assert.equal((await getRegisteredTokens()).some((entry) => entry.deviceId === 'device-push-test-234567'), true);
     assert.ok(calls.some((call) => call.includes('fxsnap_push_devices')));

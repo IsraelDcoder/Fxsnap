@@ -33,9 +33,14 @@ async function registerPushToken(deviceId, payload) {
   if (!['ios', 'android'].includes(payload.platform)) throw new Error('Unsupported push platform.');
   const preferences = payload.preferences;
   if (!preferences || preferences.enabled !== true) throw new Error('Push notifications are not enabled.');
-  const isSignedIn = typeof payload.accountId === 'string' && Boolean(payload.accountId)
-    && typeof payload.supabaseUserId === 'string'
-    && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(payload.supabaseUserId);
+  const accountId = typeof payload.accountId === 'string'
+    && /^[a-zA-Z0-9_-]{1,128}$/.test(payload.accountId)
+    ? payload.accountId
+    : null;
+  const supabaseUserId = typeof payload.supabaseUserId === 'string'
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(payload.supabaseUserId)
+    ? payload.supabaseUserId
+    : null;
   const normalizedPreferences = {
     dailyBrief: preferences.dailyBrief !== false,
     inactivity: preferences.inactivity !== false,
@@ -48,14 +53,14 @@ async function registerPushToken(deviceId, payload) {
     payload.token,
     payload.platform,
     normalizedPreferences,
-    isSignedIn ? payload.accountId : null,
-    isSignedIn ? payload.supabaseUserId : null,
+    accountId,
+    supabaseUserId,
   );
   return true;
 }
 
-async function unregisterPushToken(deviceId, accountId) {
-  await supabasePushStore.remove(deviceId, accountId);
+async function unregisterPushToken(deviceId) {
+  await supabasePushStore.remove(deviceId);
   return true;
 }
 
@@ -117,7 +122,7 @@ async function sendCampaign({ type, title, body, route, token, deviceId, campaig
 
 async function sendScheduledCampaigns(now = new Date(), isPremium = async () => false) {
   if (!process.env.EXPO_ACCESS_TOKEN) return { sent: 0, skipped: 'EXPO_ACCESS_TOKEN is not configured.' };
-  const entries = (await getRegisteredTokens()).filter((entry) => entry.accountId && entry.supabaseUserId);
+  const entries = (await getRegisteredTokens()).filter((entry) => entry.accountId);
   const activeReminderDeviceIds = await supabasePushStore.listActivePaywallReminderDeviceIds();
   const dayKeys = Array.from({ length: 8 }, (_, offset) => {
     const date = new Date(now);

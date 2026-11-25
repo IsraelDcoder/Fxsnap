@@ -9,6 +9,8 @@ process.env.FXSNAP_COMMUNITY_ADMIN_SUPABASE_USER_IDS = '00000000-0000-4000-8000-
 const { createCommunityApi } = require('./communityApi');
 const ADMIN_ID = '00000000-0000-4000-8000-000000000091';
 const USER_ID = '00000000-0000-4000-8000-000000000092';
+const ACCOUNT_ID = `device_${'a'.repeat(32)}`;
+const DEVICE_ID = 'system-announcement-device-1234';
 const ANNOUNCEMENT_ID = '00000000-0000-4000-8000-000000000093';
 const IDEMPOTENCY_KEY = '00000000-0000-4000-8000-000000000094';
 
@@ -32,7 +34,7 @@ function makeHarness({ userId = USER_ID, dispatch = async () => {} } = {}) {
       body: options.body ? JSON.parse(options.body) : null,
     };
     requests.push(request);
-    if (path === 'rpc/fxsnap_system_announcement_inbox') {
+    if (path === 'rpc/fxsnap_system_announcement_inbox_for_account') {
       return makeResponse(200, [{
         id: ANNOUNCEMENT_ID,
         title: 'Service update',
@@ -64,14 +66,7 @@ function makeHarness({ userId = USER_ID, dispatch = async () => {} } = {}) {
   };
 
   const api = createCommunityApi({
-    getActor: async (_request, response) => {
-      if (!userId) {
-        response.statusCode = 401;
-        response.body = { error: 'Sign in required.' };
-        return null;
-      }
-      return { accountId: 'usr_system-announcements-test', supabaseUserId: userId };
-    },
+    getActor: async () => ({ accountId: ACCOUNT_ID, deviceId: DEVICE_ID, supabaseUserId: userId }),
     sendJson: (response, status, body) => {
       response.statusCode = status;
       response.body = body;
@@ -102,13 +97,14 @@ const validInput = {
   channels: { in_app_banner: true, notification_center: true, push: false },
 };
 
-test('system announcements authenticate without Community membership or Community enablement', async () => {
-  const harness = makeHarness();
+test('anonymous devices receive the system announcement inbox without Community membership', async () => {
+  const harness = makeHarness({ userId: null });
   const response = await harness.call('/api/system-announcements');
 
   assert.equal(response.statusCode, 200);
   assert.equal(response.body.announcements[0].id, ANNOUNCEMENT_ID);
-  assert.equal(harness.requests[0].path, 'rpc/fxsnap_system_announcement_inbox');
+  assert.equal(harness.requests[0].path, 'rpc/fxsnap_system_announcement_inbox_for_account');
+  assert.deepEqual(harness.requests[0].body, { p_account_id: ACCOUNT_ID });
 });
 
 test('regular users cannot access admin announcement endpoints', async () => {
@@ -181,12 +177,12 @@ test('publishing a draft triggers queued push delivery without waiting for the w
   assert.deepEqual(dispatched, [null]);
 });
 
-test('recipient banner dismissal only updates the authenticated user record', async () => {
-  const harness = makeHarness();
+test('anonymous device can dismiss only its own announcement recipient record', async () => {
+  const harness = makeHarness({ userId: null });
   const response = await harness.call(`/api/system-announcements/${ANNOUNCEMENT_ID}/dismiss`, { method: 'POST' });
 
   assert.equal(response.statusCode, 200);
   const patch = harness.requests.find((request) => request.method === 'PATCH');
-  assert.match(patch.query, new RegExp(USER_ID));
+  assert.match(patch.query, new RegExp(ACCOUNT_ID));
   assert.equal(typeof patch.body.banner_dismissed_at, 'string');
 });

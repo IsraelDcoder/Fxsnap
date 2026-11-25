@@ -14,14 +14,15 @@ test('users must complete onboarding before reaching app routes', () => {
   assert.equal(getAccessGateRoute('/analysis', true, false, true), null);
   assert.equal(getAccessGateRoute('/settings', true, false, true), null);
   assert.equal(getAccessGateRoute('/exit-offer', true, false), null);
-  assert.equal(getAccessGateRoute('/community', true, false), null);
+  assert.equal(getAccessGateRoute('/community', true, false), '/paywall');
+  assert.equal(getAccessGateRoute('/community', true, true), null);
   assert.equal(getAccessGateRoute('/settings', true, false), null);
   assert.equal(getAccessGateRoute('/onboarding', true, false), null);
   assert.equal(getAccessGateRoute('/paywall', true, false), null);
   assert.equal(getAccessGateRoute('/home', true, true), null);
 });
 
-test('free users are gated from premium features while Community remains available', () => {
+test('free users are gated from premium features and Community', () => {
   assert.equal(shouldGuardFeatureRoute('/analysis', false), true);
   assert.equal(shouldGuardFeatureRoute('/analysis', true), false);
   assert.equal(shouldGuardFeatureRoute('/strategy', false), true);
@@ -30,14 +31,17 @@ test('free users are gated from premium features while Community remains availab
     '/community',
     '/community-search',
     '/community-notifications',
-  ].forEach((route) => assert.equal(shouldGuardFeatureRoute(route, false), false, route));
+    '/(tabs)/community',
+  ].forEach((route) => assert.equal(shouldGuardFeatureRoute(route, false), true, route));
+  assert.equal(shouldGuardFeatureRoute('/community', true), false);
 });
 
 test('chart analysis, trade setup, and strategy generation require subscription access', () => {
   assert.equal(getFeatureAccessDecision('AI_ANALYSIS', false).requiresPaywall, true);
   assert.equal(getFeatureAccessDecision('TRADE_SETUP', false).requiresPaywall, true);
   assert.equal(getFeatureAccessDecision('STRATEGY_GENERATOR', false).requiresPaywall, true);
-  assert.equal(getFeatureAccessDecision('COMMUNITY', false).allowed, true);
+  assert.equal(getFeatureAccessDecision('COMMUNITY', false).allowed, false);
+  assert.equal(getFeatureAccessDecision('COMMUNITY', true).allowed, true);
 });
 
 test('other app features remain accessible to free users', () => {
@@ -48,7 +52,6 @@ test('other app features remain accessible to free users', () => {
     '/settings',
     '/profile',
     '/support-chat',
-    '/auth/callback',
     '/onboarding',
     '/paywall',
     '/daily-brief',

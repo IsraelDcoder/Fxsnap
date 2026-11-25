@@ -191,7 +191,8 @@ function response(status: number, body: unknown): Response {
 
 export function createCommunityPreviewAccount() {
   return {
-    provider: 'google' as const,
+    userId: 'local-preview-device',
+    provider: 'anonymous' as const,
     email: 'preview@local.invalid',
     emailVerified: true,
     displayName: 'Local Preview',

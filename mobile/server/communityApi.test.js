@@ -9,6 +9,7 @@ process.env.FXSNAP_COMMUNITY_ADMIN_SUPABASE_USER_IDS = '';
 const { createCommunityApi, detectMessageImageMimeType } = require('./communityApi');
 
 const MEMBER_ID = '00000000-0000-4000-8000-000000000010';
+const STAFF_ID = '00000000-0000-4000-8000-000000000011';
 const ACCOUNT_ID = 'usr_community-test-member';
 const RULES_VERSION = 'community-rules-v1';
 
@@ -471,7 +472,7 @@ function makeHarness({
     getActor: async (_request, response) => {
       if (!actor) {
         response.statusCode = 401;
-        response.body = { error: 'Sign in with Google.' };
+        response.body = { error: 'A valid device session is required.' };
         return null;
       }
       return actor;
@@ -512,12 +513,27 @@ function makeHarness({
   };
 }
 
-test('community API requests allow linked accounts without a premium subscription', async () => {
+test('subscribers can access Community API routes', async () => {
   const harness = makeHarness();
 
   const response = await harness.call('/api/community/bootstrap');
 
   assert.equal(response.statusCode, 200);
+});
+
+test('non-subscribers are stopped before Community data is accessed', async () => {
+  const harness = makeHarness({
+    requirePremiumSubscription: async (_deviceId, response) => {
+      response.statusCode = 402;
+      response.body = { error: 'An active subscription is required.' };
+      return false;
+    },
+  });
+
+  const response = await harness.call('/api/community/bootstrap');
+
+  assert.equal(response.statusCode, 402);
+  assert.equal(harness.requests.length, 0);
 });
 
 test('members can load and publish replies in a post discussion', async () => {
@@ -1239,7 +1255,7 @@ test('public Community allows linked accounts without a beta allowlist', async (
   }
 });
 
-test('unauthenticated accounts cannot make protected Community requests', async () => {
+test('requests without a device identity cannot make protected Community requests', async () => {
   let storageRequests = 0;
   global.fetch = async () => {
     storageRequests += 1;
@@ -1248,7 +1264,7 @@ test('unauthenticated accounts cannot make protected Community requests', async 
   const api = createCommunityApi({
     getActor: async (_request, response) => {
       response.statusCode = 401;
-      response.body = { error: 'Sign in with Google.' };
+      response.body = { error: 'A valid device session is required.' };
       return null;
     },
     sendJson: (response, status, body) => {
@@ -1486,8 +1502,27 @@ test('reserved official username cannot be claimed by a member', async () => {
   const response = await harness.call('/api/community/username?value=fxsnap_official');
   assert.equal(response.statusCode, 200);
   assert.equal(response.body.available, false);
-  assert.match(response.body.reason, /reserved/i);
+  assert.equal(response.body.reason, 'Username is not available');
   assert.equal(harness.requests.length, 0);
+});
+
+test('username checks are case-insensitive and new usernames are limited to 20 characters', async () => {
+  const harness = makeHarness({
+    initialProfiles: [{
+      account_id: 'usr_another-member',
+      username: 'chartpro',
+      accepted_rules_version: RULES_VERSION,
+      status: 'active',
+    }],
+  });
+  const taken = await harness.call('/api/community/username?value=CHARTPRO');
+  assert.deepEqual(taken.body, { available: false, reason: 'Username is not available' });
+
+  const tooLong = await harness.call('/api/community/join', {
+    method: 'POST',
+    body: { username: 'abcdefghijklmnopqrstu', acceptedRulesVersion: RULES_VERSION },
+  });
+  assert.equal(tooLong.statusCode, 400);
 });
 
 test('username join validates acceptance and stores the name on the account', async () => {
@@ -1532,7 +1567,7 @@ test('username uniqueness conflict is returned without replacing the existing pr
     body: { username: 'chartpro', acceptedRulesVersion: RULES_VERSION },
   });
   assert.equal(response.statusCode, 409);
-  assert.match(response.body.error, /already taken/i);
+  assert.equal(response.body.error, 'Username is not available');
   assert.equal(harness.profiles.length, 1);
 });
 
@@ -1568,6 +1603,7 @@ test('community username updates are validated, unique, and synchronized to the 
     body: { username: 'marketmentor' },
   });
   assert.equal(duplicate.statusCode, 409);
+  assert.equal(duplicate.body.error, 'Username is not available');
   assert.equal(harness.profiles[0].username, 'chartpro');
 
   const updated = await harness.call('/api/community/profile', {
@@ -1603,6 +1639,33 @@ test('a non-admin member cannot access admin reports', async () => {
   assert.equal(harness.requests.filter((request) => request.table === 'fxsnap_community_reports').length, 0);
   const supportInbox = await harness.call('/api/admin/community/support');
   assert.equal(supportInbox.statusCode, 403);
+});
+
+test('allowlisted staff can use Community admin APIs without a member profile or subscription', async () => {
+  const previous = process.env.FXSNAP_COMMUNITY_ADMIN_SUPABASE_USER_IDS;
+  process.env.FXSNAP_COMMUNITY_ADMIN_SUPABASE_USER_IDS = STAFF_ID;
+  let subscriptionChecks = 0;
+  try {
+    const harness = makeHarness({
+      actor: {
+        accountId: `staff_${STAFF_ID}`,
+        deviceId: null,
+        supabaseUserId: STAFF_ID,
+      },
+      requirePremiumSubscription: async () => {
+        subscriptionChecks += 1;
+        return false;
+      },
+    });
+
+    const response = await harness.call('/api/admin/community/reports');
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(subscriptionChecks, 0);
+    assert.equal(harness.requests.some((request) => request.table === 'fxsnap_community_profiles'), false);
+  } finally {
+    process.env.FXSNAP_COMMUNITY_ADMIN_SUPABASE_USER_IDS = previous;
+  }
 });
 
 test('a member can load only their own private support history', async () => {

@@ -38,7 +38,8 @@ function detectMessageImageMimeType(bytes) {
 }
 const COMMUNITY_CATEGORIES = ['trading', 'investing', 'finance', 'market_discussion', 'learning', 'chart_analysis', 'questions', 'events'];
 const MESSAGE_REACTIONS = ['love', 'fire', 'funny', 'clap', 'wow'];
-const USERNAME_PATTERN = /^[a-z0-9_]{3,24}$/;
+const USERNAME_PATTERN = /^[a-z0-9_]{3,20}$/;
+const LEGACY_USERNAME_PATTERN = /^[a-z0-9_]{3,24}$/;
 const RESERVED_USERNAMES = new Set(['admin', 'administrator', 'fxsnap', 'fxsnap_official', 'moderator', 'support', 'system']);
 
 class CommunityError extends Error {
@@ -58,7 +59,7 @@ function getServerConfig() {
     ready: Boolean(supabaseUrl && serviceKey && persistentStore.supabaseEnabled),
     enabled: process.env.FXSNAP_COMMUNITY_ENABLED === 'true',
     adminUserIds: new Set((process.env.FXSNAP_COMMUNITY_ADMIN_SUPABASE_USER_IDS || '')
-      .split(',').map((id) => id.trim()).filter(Boolean)),
+      .split(',').map((id) => id.trim().toLowerCase()).filter(Boolean)),
   };
 }
 
@@ -116,6 +117,7 @@ function createCommunityApi({
   sendJson,
   readJsonBody,
   saveCommunityUsername,
+  requirePremiumSubscription,
   dispatchCommunityPush: sendCommunityPush = dispatchCommunityPush,
 }) {
   function dispatchQueuedNotifications(messageId) {
@@ -237,9 +239,9 @@ function createCommunityApi({
     headers: { prefer: 'return=minimal' },
   });
 
-  async function authorize(req, res, { joined = true, requireCommunity = true } = {}) {
+  async function authorize(req, res, { joined = true, requireCommunity = true, staffRoute = false } = {}) {
     const config = getServerConfig();
-    if (requireCommunity && !config.enabled) {
+    if (requireCommunity && !staffRoute && !config.enabled) {
       sendJson(res, 503, { error: 'Community is not enabled yet.' });
       return null;
     }
@@ -253,15 +255,17 @@ function createCommunityApi({
     }
     const actor = await getActor(req, res);
     if (!actor) return null;
-    if (typeof actor.supabaseUserId !== 'string' || !actor.supabaseUserId) {
-      sendJson(res, 403, { error: requireCommunity
-        ? 'Sign in with your linked Google account to join Community.'
-        : 'Sign in with your linked Google account to access FXSnap announcements.' });
-      return null;
+    if (requireCommunity && !staffRoute) {
+      if (typeof requirePremiumSubscription !== 'function') {
+        sendJson(res, 503, { error: 'Community subscription verification is unavailable.' });
+        return null;
+      }
+      if (!(await requirePremiumSubscription(actor.deviceId, res))) return null;
     }
-    const isAdmin = config.adminUserIds.has(actor.supabaseUserId);
+    const isAdmin = typeof actor.supabaseUserId === 'string'
+      && config.adminUserIds.has(actor.supabaseUserId);
     const result = { ...actor, isAdmin };
-    if (!joined) return result;
+    if (!joined || staffRoute) return result;
     const profiles = parseRows(await getRows(
       'fxsnap_community_profiles',
       `account_id=eq.${encodeURIComponent(actor.accountId)}&select=account_id,supabase_user_id,username,picture_url,status,muted_until,accepted_rules_version,joined_at&limit=1`,
@@ -270,8 +274,8 @@ function createCommunityApi({
       sendJson(res, 409, { error: 'Complete Community onboarding before continuing.', onboardingRequired: true });
       return null;
     }
-    if (profiles[0].supabase_user_id !== actor.supabaseUserId) {
-      sendJson(res, 403, { error: 'The signed-in account does not match this Community profile.' });
+    if (profiles[0].supabase_user_id && profiles[0].supabase_user_id !== actor.supabaseUserId) {
+      sendJson(res, 403, { error: 'This Community profile belongs to a different identity.' });
       return null;
     }
     result.profile = profiles[0];
@@ -830,7 +834,7 @@ function createCommunityApi({
 
   async function memberProfile(actor, username) {
     const normalized = String(username || '').trim().toLowerCase();
-    if (!USERNAME_PATTERN.test(normalized)) return null;
+    if (!LEGACY_USERNAME_PATTERN.test(normalized)) return null;
     return parseRows(await getRows(
       'fxsnap_community_profiles',
       `username=eq.${encodeURIComponent(normalized)}&select=account_id,supabase_user_id,username,picture_url,status,muted_until,joined_at&limit=1`,
@@ -849,6 +853,7 @@ function createCommunityApi({
         requireCommunity: !isSystemAnnouncementPath,
         joined: !isSystemAnnouncementPath
           && !['/api/community/me', '/api/community/username', '/api/community/join', '/api/community/bootstrap', '/api/community/notifications'].includes(pathname),
+        staffRoute: pathname.startsWith('/api/admin/'),
       });
       if (!actor) return true;
       const config = getServerConfig();
@@ -856,25 +861,27 @@ function createCommunityApi({
 
       if (isSystemAnnouncementPath) {
         if (pathname === '/api/system-announcements' && req.method === 'GET') {
-          const announcements = parseRows(await database('rpc/fxsnap_system_announcement_inbox', {
+          if (!actor.accountId) return sendJson(res, 401, { error: 'A valid device identity is required.' });
+          const announcements = parseRows(await database('rpc/fxsnap_system_announcement_inbox_for_account', {
             method: 'POST',
-            body: JSON.stringify({ p_user_id: actor.supabaseUserId }),
+            body: JSON.stringify({ p_account_id: actor.accountId }),
           }));
           return sendJson(res, 200, { announcements });
         }
 
         const announcementUserMatch = pathname.match(/^\/api\/system-announcements\/([0-9a-f-]+)\/(read|dismiss)$/i);
         if (announcementUserMatch && req.method === 'POST') {
+          if (!actor.accountId) return sendJson(res, 401, { error: 'A valid device identity is required.' });
           const [, announcementId, action] = announcementUserMatch;
           const recipients = parseRows(await getRows(
             'fxsnap_system_announcement_recipients',
-            `announcement_id=eq.${encodeURIComponent(announcementId)}&recipient_supabase_user_id=eq.${encodeURIComponent(actor.supabaseUserId)}&select=announcement_id&limit=1`,
+            `announcement_id=eq.${encodeURIComponent(announcementId)}&recipient_account_id=eq.${encodeURIComponent(actor.accountId)}&select=announcement_id&limit=1`,
           ));
-          if (!recipients.length) return sendJson(res, 404, { error: 'This announcement is not available to your account.' });
+          if (!recipients.length) return sendJson(res, 404, { error: 'This announcement is not available to this device.' });
           const field = action.toLowerCase() === 'read' ? 'read_at' : 'banner_dismissed_at';
           await patchRows(
             'fxsnap_system_announcement_recipients',
-            `announcement_id=eq.${encodeURIComponent(announcementId)}&recipient_supabase_user_id=eq.${encodeURIComponent(actor.supabaseUserId)}&${field}=is.null`,
+            `announcement_id=eq.${encodeURIComponent(announcementId)}&recipient_account_id=eq.${encodeURIComponent(actor.accountId)}&${field}=is.null`,
             { [field]: new Date().toISOString() },
           );
           return sendJson(res, 200, { updated: true });
@@ -995,8 +1002,8 @@ function createCommunityApi({
         ));
         let profile = profiles[0];
         if (!profile) return sendJson(res, 200, { profile: null, messages: [], nextCursor: null, hasMore: false });
-        if (profile.supabase_user_id !== actor.supabaseUserId) {
-          return sendJson(res, 403, { error: 'The signed-in account does not match this Community profile.' });
+        if (profile.supabase_user_id && profile.supabase_user_id !== actor.supabaseUserId) {
+          return sendJson(res, 403, { error: 'This Community profile belongs to a different identity.' });
         }
         if (['suspended', 'banned'].includes(profile.status)) {
           return sendJson(res, 403, { error: 'This Community account is currently unavailable.' });
@@ -1028,15 +1035,15 @@ function createCommunityApi({
 
       if (pathname === '/api/community/username' && req.method === 'GET') {
         const username = String(url.searchParams.get('value') || '').trim().toLowerCase();
-        if (!USERNAME_PATTERN.test(username)) return sendJson(res, 200, { available: false, reason: 'Use 3–24 lowercase letters, numbers, or underscores.' });
-        if (isUsernameReserved(username, actor.isAdmin)) return sendJson(res, 200, { available: false, reason: 'That username is reserved.' });
+        if (!USERNAME_PATTERN.test(username)) return sendJson(res, 200, { available: false, reason: 'Use 3–20 letters, numbers, or underscores.' });
+        if (isUsernameReserved(username, actor.isAdmin)) return sendJson(res, 200, { available: false, reason: 'Username is not available' });
         const matches = parseRows(await getRows(
           'fxsnap_community_profiles',
           `username=ilike.${encodeURIComponent(username)}&select=account_id&limit=1`,
         ));
         return sendJson(res, 200, {
           available: matches.length === 0 || matches[0].account_id === actor.accountId,
-          reason: matches.length && matches[0].account_id !== actor.accountId ? 'That username is already taken.' : null,
+          reason: matches.length && matches[0].account_id !== actor.accountId ? 'Username is not available' : null,
         });
       }
 
@@ -1046,8 +1053,8 @@ function createCommunityApi({
           `${profileQuery(actor.accountId)}&select=account_id,supabase_user_id,username,picture_url,status,muted_until,accepted_rules_version,joined_at&limit=1`,
         ));
         if (existingProfiles.length) {
-          if (existingProfiles[0].supabase_user_id !== actor.supabaseUserId) {
-            return sendJson(res, 403, { error: 'The signed-in account does not match this Community profile.' });
+          if (existingProfiles[0].supabase_user_id && existingProfiles[0].supabase_user_id !== actor.supabaseUserId) {
+            return sendJson(res, 403, { error: 'This Community profile belongs to a different identity.' });
           }
           if (saveCommunityUsername) await saveCommunityUsername(actor.accountId, existingProfiles[0].username);
           return sendJson(res, 200, { profile: profileForClient(existingProfiles[0], actor.isAdmin) });
@@ -1056,9 +1063,9 @@ function createCommunityApi({
           username: z.string().trim().toLowerCase().regex(USERNAME_PATTERN),
           acceptedRulesVersion: z.literal(RULES_VERSION),
         }).safeParse(await readJsonBody(req));
-        if (!input.success) return sendJson(res, 400, { error: 'Choose a valid username and accept the current Community rules.' });
+        if (!input.success) return sendJson(res, 400, { error: 'Choose a valid Community username.' });
         const username = input.data.username;
-        if (isUsernameReserved(username, actor.isAdmin)) return sendJson(res, 400, { error: 'That username is reserved.' });
+        if (isUsernameReserved(username, actor.isAdmin)) return sendJson(res, 409, { error: 'Username is not available' });
         try {
           const rows = parseRows(await insertRows('fxsnap_community_profiles', {
             account_id: actor.accountId,
@@ -1071,7 +1078,7 @@ function createCommunityApi({
           if (saveCommunityUsername) await saveCommunityUsername(actor.accountId, username);
           return sendJson(res, 201, { profile: profileForClient(rows[0], actor.isAdmin) });
         } catch (error) {
-          if (error.status === 409) return sendJson(res, 409, { error: 'That username is already taken. Choose another.' });
+          if (error.status === 409) return sendJson(res, 409, { error: 'Username is not available' });
           throw error;
         }
       }
@@ -1080,9 +1087,9 @@ function createCommunityApi({
         const input = z.object({
           username: z.string().trim().toLowerCase().regex(USERNAME_PATTERN),
         }).strict().safeParse(await readJsonBody(req));
-        if (!input.success) return sendJson(res, 400, { error: 'Use 3–24 lowercase letters, numbers, or underscores for your username.' });
+        if (!input.success) return sendJson(res, 400, { error: 'Use 3–20 letters, numbers, or underscores for your username.' });
         const username = input.data.username;
-        if (isUsernameReserved(username, actor.isAdmin)) return sendJson(res, 400, { error: 'That username is reserved.' });
+        if (isUsernameReserved(username, actor.isAdmin)) return sendJson(res, 409, { error: 'Username is not available' });
         if (username.toLowerCase() === actor.profile.username.toLowerCase()) {
           return sendJson(res, 200, { profile: profileForClient(actor.profile, actor.isAdmin) });
         }
@@ -1095,7 +1102,7 @@ function createCommunityApi({
           if (saveCommunityUsername) await saveCommunityUsername(actor.accountId, username);
           return sendJson(res, 200, { profile: profileForClient(rows[0], actor.isAdmin) });
         } catch (error) {
-          if (error.status === 409) return sendJson(res, 409, { error: 'That username is already taken. Choose another.' });
+          if (error.status === 409) return sendJson(res, 409, { error: 'Username is not available' });
           throw error;
         }
       }

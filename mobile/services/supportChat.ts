@@ -3,7 +3,6 @@ import * as Application from 'expo-application';
 import Constants from 'expo-constants';
 import { API_BASE_URL, fetchWithApiAuth } from '@/services/apiAuth';
 import { getFxsnapAccountApiHeaders } from '@/services/account';
-import { getSupabaseClient } from '@/services/supabase';
 
 export type SupportStatus = 'open' | 'pending' | 'resolved';
 export type SupportTopic = 'account' | 'billing' | 'analysis' | 'navigation' | 'other';
@@ -30,6 +29,7 @@ export interface SupportConversation {
 export interface SupportAdminConversation extends SupportConversation {
   account_id: string;
   display_name: string | null;
+  community_username: string | null;
   subscription_status: 'active' | 'free' | 'unavailable';
   app_version: string | null;
   platform: 'ios' | 'android' | 'web' | 'unknown' | null;
@@ -117,7 +117,7 @@ export function getSupportAdminInbox(query = '') {
 export function getSupportAdminConversation(id: string) {
   return request<{
     conversation: Pick<SupportAdminConversation,
-      'id' | 'account_id' | 'display_name' | 'subscription_status' | 'app_version'
+      'id' | 'account_id' | 'display_name' | 'community_username' | 'subscription_status' | 'app_version'
       | 'platform' | 'topic' | 'status' | 'created_at' | 'updated_at'
     >;
     messages: Array<SupportChatMessage & { sender_account_id: string }>;
@@ -139,19 +139,6 @@ export function updateSupportConversationStatus(id: string, status: SupportStatu
 }
 
 export function subscribeToSupportConversation(id: string, onMessage: () => void) {
-  const client = getSupabaseClient();
-  const channel = client
-    .channel(`fxsnap-support-${id}`)
-    .on('postgres_changes', {
-      event: 'INSERT',
-      schema: 'public',
-      table: 'fxsnap_support_messages',
-      filter: `conversation_id=eq.${id}`,
-    }, onMessage)
-    .subscribe((status) => {
-      if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-        console.error('[Support] Realtime subscription failed; polling fallback remains active.', status);
-      }
-    });
-  return () => { void client.removeChannel(channel); };
+  const interval = setInterval(onMessage, 5000);
+  return () => clearInterval(interval);
 }

@@ -329,6 +329,30 @@ function createEventSpacesApi({
     return sendJson(res, 409, { error: 'That participant action is not valid for their current status.' });
   }
 
+  async function handleAdminParticipants(req, res, match) {
+    const [, id] = match;
+    const actor = await adminActor(req, res);
+    if (!actor) return true;
+    const space = await getSpace(id);
+    if (!['waiting_room_open', 'live'].includes(space.status)) {
+      return sendJson(res, 409, { error: 'Participants can only be managed while the room is open.' });
+    }
+    const rows = await database(
+      `fxsnap_event_participants?event_space_id=eq.${space.id}&select=account_id,display_name,livekit_identity,status,joined_at&status=neq.removed&order=joined_at.asc`,
+    );
+    const liveParticipants = space.status === 'live' && space.livekit_room_name
+      ? await livekit.listParticipants(space.livekit_room_name)
+      : [];
+    const onlineIdentities = new Set(liveParticipants.map((participant) => participant.identity));
+    const roster = (Array.isArray(rows) ? rows : []).map((participant) => ({
+      accountId: participant.account_id,
+      displayName: participant.display_name,
+      status: participant.status,
+      online: onlineIdentities.has(participant.livekit_identity),
+    }));
+    return sendJson(res, 200, { roster });
+  }
+
   async function transitionLiveState(space, action) {
     const now = new Date().toISOString();
     if (action === 'start_live') {
@@ -454,6 +478,14 @@ function createEventSpacesApi({
         return await handleParticipantModeration(req, res, moderationRoute);
       } catch (error) {
         return sendJson(res, error.status || 500, { error: error.message || 'Could not update the event participant.' });
+      }
+    }
+    const adminParticipantsRoute = pathname.match(/^\/api\/admin\/event-spaces\/([0-9a-f-]+)\/participants$/i);
+    if (adminParticipantsRoute && UUID_PATTERN.test(adminParticipantsRoute[1]) && req.method === 'GET') {
+      try {
+        return await handleAdminParticipants(req, res, adminParticipantsRoute);
+      } catch (error) {
+        return sendJson(res, error.status || 500, { error: error.message || 'Could not load event participants.' });
       }
     }
     if (!pathname.startsWith('/api/admin/event-spaces')) return false;

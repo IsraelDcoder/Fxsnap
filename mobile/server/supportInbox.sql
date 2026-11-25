@@ -14,6 +14,7 @@ alter table public.fxsnap_support_conversations
 
 alter table public.fxsnap_support_conversations
   add column if not exists display_name text,
+  add column if not exists community_username text,
   add column if not exists supabase_user_id uuid,
   add column if not exists subscription_status text not null default 'unavailable'
     check (subscription_status in ('active', 'free', 'unavailable')),

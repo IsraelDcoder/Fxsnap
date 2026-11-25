@@ -7,12 +7,10 @@ import Animated, { FadeInDown, FadeOutUp } from 'react-native-reanimated';
 import { AnimatedTouchableOpacity as TouchableOpacity } from '@/components/AnimatedTouchableOpacity';
 import { useColors } from '@/hooks/useColors';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { getAuthenticatedAccount } from '@/services/account';
 import {
   getCommunityNotifications,
   dismissSystemAnnouncementBanner,
   markCommunityNotificationRead,
-  subscribeToSystemAnnouncementChanges,
   subscribeToCommunityChanges,
   type CommunityNotification,
 } from '@/services/community';
@@ -39,8 +37,6 @@ export default function CommunityInteractionPrompt({ enabled }: { enabled: boole
     if (promptOpen.current) return;
     checking.current = true;
     try {
-      const account = await getAuthenticatedAccount();
-      if (!account) return;
       const response = await getCommunityNotifications();
       const unread = response.notifications.filter((item) => {
         if (item.kind === 'system_announcement') {
@@ -98,9 +94,6 @@ export default function CommunityInteractionPrompt({ enabled }: { enabled: boole
         void checkForInteractions();
       }
     });
-    const unsubscribeAnnouncements = subscribeToSystemAnnouncementChanges(() => {
-      if (AppState.currentState === 'active') void checkForInteractions();
-    });
     const pushSubscription = Notifications.addNotificationReceivedListener((notification) => {
       if (notification.request.content.data.type === 'system_announcement') {
         void checkForInteractions();
@@ -109,7 +102,6 @@ export default function CommunityInteractionPrompt({ enabled }: { enabled: boole
     return () => {
       appStateSubscription.remove();
       unsubscribe();
-      unsubscribeAnnouncements();
       pushSubscription.remove();
     };
   }, [checkForInteractions, enabled]);
