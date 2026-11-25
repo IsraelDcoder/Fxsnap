@@ -49,11 +49,8 @@ async function register(deviceId, token, platform, preferences, accountId, supab
   });
 }
 
-async function remove(deviceId, accountId) {
-  const accountFilter = accountId
-    ? `&account_id=eq.${encodeURIComponent(accountId)}`
-    : '&account_id=is.null';
-  await request(`${TABLE}?device_id=eq.${encodeURIComponent(deviceId)}${accountFilter}`, { method: 'DELETE' });
+async function remove(deviceId) {
+  await request(`${TABLE}?device_id=eq.${encodeURIComponent(deviceId)}`, { method: 'DELETE' });
 }
 
 async function list() {

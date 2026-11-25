@@ -21,23 +21,12 @@ import { getSubscriptionDetails, type SubscriptionDetails } from '@/services/bil
 import { PRIVACY_POLICY_URL, TERMS_OF_USE_URL } from '@/constants/legalUrls';
 import { trackEvent } from '@/services/telemetry';
 import {
-  deleteFxsnapAccount,
-  getAuthenticatedAccount,
-  signInWithGoogle,
-  signOutOfFxsnapAccount,
-  type FxsnapAccount,
-} from '@/services/account';
-import {
-  clearNotificationPreferences,
   getNotificationPreferences,
-  hasPushNotificationPermission,
   requestAndRegisterPushNotifications,
   saveNotificationPreferences,
   unregisterPushToken,
   type NotificationPreferences,
 } from '@/services/notifications';
-import { getSystemAnnouncementAdminAccess } from '@/services/community';
-import { getSupportAdminAccess } from '@/services/supportChat';
 
 type ThemeMode = 'light' | 'dark' | 'system';
 type SettingsIcon = React.ComponentProps<typeof Feather>['name'];
@@ -68,17 +57,7 @@ export default function SettingsScreen() {
     isSubscribed,
     billingAvailable,
     restorePurchases,
-    deleteAccount,
-    syncAccountData,
-    stopAccountDataSync,
-    accountSyncStatus,
   } = useApp();
-  const [account, setAccount] = useState<FxsnapAccount | null>(null);
-  const [accountLoading, setAccountLoading] = useState(Platform.OS !== 'web');
-  const [accountBusy, setAccountBusy] = useState(false);
-  const [accountError, setAccountError] = useState<string | null>(null);
-  const [systemAnnouncementAdmin, setSystemAnnouncementAdmin] = useState(false);
-  const [supportInboxAdmin, setSupportInboxAdmin] = useState(false);
   const [subscriptionDetails, setSubscriptionDetails] = useState<SubscriptionDetails | null>(null);
   const [subscriptionLoading, setSubscriptionLoading] = useState(true);
   const [subscriptionError, setSubscriptionError] = useState<string | null>(null);
@@ -101,27 +80,7 @@ export default function SettingsScreen() {
   useEffect(() => {
     let active = true;
     void getNotificationPreferences()
-      .then(async (preferences) => {
-        if (!active) return;
-        if (preferences.enabled && Platform.OS !== 'web' && !(await hasPushNotificationPermission())) {
-          const disabledPreferences = { ...preferences, enabled: false };
-          await saveNotificationPreferences(disabledPreferences);
-          if (active) {
-            setNotificationPreferences(disabledPreferences);
-            setNotificationMessage('Push notifications were turned off because device permission is disabled.');
-          }
-          try {
-            await unregisterPushToken();
-          } catch (error) {
-            console.error('[Settings] Unable to unregister push token after permission was revoked.', error);
-            if (active) {
-              setNotificationError('Device permission is off, but the saved push registration could not be removed. Retry after reconnecting.');
-            }
-          }
-          return;
-        }
-        if (active) setNotificationPreferences(preferences);
-      })
+      .then((preferences) => { if (active) setNotificationPreferences(preferences); })
       .catch((error: unknown) => {
         if (active) setNotificationError(error instanceof Error ? error.message : 'Unable to load notification preferences.');
       })
@@ -130,28 +89,6 @@ export default function SettingsScreen() {
       });
     return () => { active = false; };
   }, []);
-
-  useEffect(() => {
-    let active = true;
-    if (!account) {
-      setSystemAnnouncementAdmin(false);
-      setSupportInboxAdmin(false);
-      return () => { active = false; };
-    }
-    void getSystemAnnouncementAdminAccess()
-      .then((access) => { if (active) setSystemAnnouncementAdmin(access.allowed); })
-      .catch((error: unknown) => {
-        console.error('[Settings] Could not check system announcement admin access.', error);
-        if (active) setSystemAnnouncementAdmin(false);
-      });
-    void getSupportAdminAccess()
-      .then((access) => { if (active) setSupportInboxAdmin(access.allowed); })
-      .catch((error: unknown) => {
-        console.error('[Settings] Could not check support inbox admin access.', error);
-        if (active) setSupportInboxAdmin(false);
-      });
-    return () => { active = false; };
-  }, [account]);
 
   useFocusEffect(useCallback(() => {
     let active = true;
@@ -169,100 +106,6 @@ export default function SettingsScreen() {
       });
     return () => { active = false; };
   }, []));
-
-  useFocusEffect(useCallback(() => {
-    if (Platform.OS === 'web') return;
-    let active = true;
-    setAccountLoading(true);
-    void getAuthenticatedAccount()
-      .then((profile) => {
-        if (active) setAccount(profile);
-      })
-      .catch((error: unknown) => {
-        if (active) setAccountError(error instanceof Error ? error.message : 'Unable to load your FXSnap account.');
-      })
-      .finally(() => {
-        if (active) setAccountLoading(false);
-      });
-    return () => { active = false; };
-  }, []));
-
-  const continueWithGoogle = async () => {
-    if (Platform.OS === 'web') {
-      setAccountError('Google sign-in can only be tested in an installed FXSnap iOS or Android build. The web preview cannot handle the mobile OAuth callback.');
-      return;
-    }
-    setAccountBusy(true);
-    setAccountError(null);
-    try {
-      const profile = await signInWithGoogle();
-      if (profile) {
-        setAccount(profile);
-        try {
-          await syncAccountData();
-        } catch {
-          setAccountError('You are signed in, but your app data could not sync. Check your connection and try again.');
-        }
-      }
-    } catch (error) {
-      setAccountError(error instanceof Error ? error.message : 'Google sign-in failed. Please try again.');
-    } finally {
-      setAccountBusy(false);
-    }
-  };
-
-  const confirmSignOut = () => {
-    Alert.alert(
-      'Sign out of FXSnap?',
-      'This signs you out of your FXSnap account on this device. It does not cancel your subscription or change your device identity.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Sign out',
-          onPress: async () => {
-            setAccountBusy(true);
-            setAccountError(null);
-            try {
-              await signOutOfFxsnapAccount();
-              stopAccountDataSync();
-              setAccount(null);
-            } catch (error) {
-              setAccountError(error instanceof Error ? error.message : 'Unable to securely sign out.');
-            } finally {
-              setAccountBusy(false);
-            }
-          },
-        },
-      ],
-    );
-  };
-
-  const confirmDeleteAccount = () => {
-    Alert.alert(
-      'Delete account?',
-      'This permanently removes your FXSnap account and this device’s saved FXSnap data. It does not cancel an App Store or Google Play subscription. This cannot be undone.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete account',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              if (notificationPreferences.enabled && Platform.OS !== 'web') {
-                await unregisterPushToken();
-              }
-              if (account) await deleteFxsnapAccount();
-              await clearNotificationPreferences();
-              await deleteAccount();
-              router.replace('/onboarding');
-            } catch (error) {
-              Alert.alert('Unable to delete account', error instanceof Error ? error.message : 'Please try again.');
-            }
-          },
-        },
-      ],
-    );
-  };
 
   const setAppearance = (mode: ThemeMode) => {
     void updateSettings({
@@ -346,7 +189,11 @@ export default function SettingsScreen() {
           const disabledPreferences = { ...next, enabled: false };
           await saveNotificationPreferences(disabledPreferences);
           setNotificationPreferences(disabledPreferences);
-          setNotificationMessage('Notification permission was not granted. Enable it in device settings to receive updates.');
+          try {
+            await unregisterPushToken();
+          } catch (unregisterError) {
+            console.error('[Settings] Could not clear an old push registration after permission was declined.', unregisterError);
+          }
           return;
         }
       } else if (next.enabled && Platform.OS !== 'web') {
@@ -412,7 +259,7 @@ export default function SettingsScreen() {
         </TouchableOpacity>
         <View style={styles.headerCopy}>
           <Text style={[styles.headerTitle, { color: colors.text }]}>Settings</Text>
-          <Text style={[styles.headerSubtitle, { color: colors.textSecondary }]}>Manage your account and preferences.</Text>
+          <Text style={[styles.headerSubtitle, { color: colors.textSecondary }]}>Manage your profile and preferences.</Text>
         </View>
         <View style={styles.headerSpacer} />
       </View>
@@ -504,62 +351,8 @@ export default function SettingsScreen() {
           ) : null}
         </SettingsGroup>
 
-        <SettingsGroup title="Account" colors={colors}>
-          <View style={[styles.emailRow, { borderBottomColor: colors.cardBorder }]}>
-            <View style={[styles.rowIcon, { backgroundColor: `${colors.buy}18` }]}>
-              <Feather name="mail" size={18} color={colors.buy} />
-            </View>
-            <View style={styles.emailDetails}>
-              <Text style={[styles.emailLabel, { color: colors.textSecondary }]}>Email</Text>
-              <Text style={[styles.emailValue, { color: colors.text }]} numberOfLines={1}>
-                {accountLoading ? 'Loading account…' : account?.email || 'Guest account'}
-              </Text>
-            </View>
-          </View>
-          {account ? (
-            <SettingsRow icon="user" label="Personal profile" colors={colors} onPress={() => router.push('/profile')} />
-          ) : null}
-          <SettingsRow
-            icon={account ? 'check-circle' : 'log-in'}
-            label={account ? 'Google account linked' : 'Continue with Google'}
-            colors={colors}
-            onPress={account ? undefined : () => void continueWithGoogle()}
-            trailing={accountBusy || accountLoading
-              ? <ActivityIndicator size="small" color={colors.textSecondary} />
-              : account ? <Text style={[styles.accountProvider, { color: colors.buy }]}>Google</Text> : undefined}
-            last
-          />
-          {account?.emailVerified ? (
-            <Text style={[styles.accountSyncStatus, { color: colors.textSecondary }]}>Email address verified by Google.</Text>
-          ) : null}
-          {accountError ? (
-            <Text style={[styles.accountError, { color: colors.sell }]}>{accountError}</Text>
-          ) : null}
-          {account ? (
-            <Text style={[styles.accountSyncStatus, { color: accountSyncStatus === 'error' ? colors.sell : colors.textSecondary }]}>
-              {accountSyncStatus === 'syncing'
-                ? 'Syncing your FXSnap data…'
-                : accountSyncStatus === 'synced'
-                  ? 'Your app data is synced to your account.'
-                  : accountSyncStatus === 'error'
-                    ? 'Your app data could not sync. Check your connection.'
-                    : ''}
-            </Text>
-          ) : null}
-        </SettingsGroup>
-
-        <SettingsGroup title="Security" colors={colors}>
-          <View style={styles.infoRow}>
-            <View style={[styles.rowIcon, { backgroundColor: `${colors.buy}18` }]}>
-              <Feather name="shield" size={18} color={colors.buy} />
-            </View>
-            <View style={styles.infoCopy}>
-              <Text style={[styles.rowLabel, { color: colors.text }]}>Sign-in security</Text>
-              <Text style={[styles.infoDescription, { color: colors.textSecondary }]}>
-                {account ? 'Your account uses Google sign-in. Password changes and two-step verification are managed by Google.' : 'Sign in with Google to secure and sync your FXSnap account.'}
-              </Text>
-            </View>
-          </View>
+        <SettingsGroup title="Profile" colors={colors}>
+          <SettingsRow icon="user" label="Personal profile" colors={colors} onPress={() => router.push('/profile')} last />
         </SettingsGroup>
 
         <SettingsGroup title="Notifications" colors={colors}>
@@ -636,24 +429,6 @@ export default function SettingsScreen() {
           {notificationError ? (
             <Text style={[styles.inlineMessage, { color: colors.sell }]}>{notificationError}</Text>
           ) : null}
-          {systemAnnouncementAdmin ? (
-            <SettingsRow
-              icon="send"
-              label="System announcement admin"
-              colors={colors}
-              onPress={() => router.push({ pathname: '/community-admin', params: { tab: 'announcements', systemOnly: 'true' } })}
-              last={!supportInboxAdmin}
-            />
-          ) : null}
-          {supportInboxAdmin ? (
-            <SettingsRow
-              icon="inbox"
-              label="Customer support inbox"
-              colors={colors}
-              onPress={() => router.push('/support-admin')}
-              last
-            />
-          ) : null}
         </SettingsGroup>
 
         <SettingsGroup title="Appearance" colors={colors}>
@@ -686,39 +461,10 @@ export default function SettingsScreen() {
           />
           <SettingsRow icon="file-text" label="Terms of Service" colors={colors} onPress={() => void openLegalDocument('terms')} last />
           <Text style={[styles.inlineMessage, { color: colors.textSecondary }]}>
-            Community profile visibility controls are not currently supported. Your email is not shown in community posts.
+            Community profile visibility controls are not currently supported.
           </Text>
         </SettingsGroup>
 
-        {account ? (
-          <SettingsGroup title="Account access" colors={colors}>
-            <SettingsRow
-              icon="log-out"
-              label="Sign out"
-              colors={colors}
-              onPress={confirmSignOut}
-              trailing={accountBusy ? <ActivityIndicator size="small" color={colors.textSecondary} /> : undefined}
-              last
-            />
-          </SettingsGroup>
-        ) : null}
-
-        {account ? (
-          <View style={[styles.deleteSection, { borderTopColor: colors.cardBorder }]}>
-            <Text style={[styles.deleteExplanation, { color: colors.textSecondary }]}>
-              Deleting your FXSnap account does not cancel subscriptions billed by an app store.
-            </Text>
-            <TouchableOpacity
-              onPress={confirmDeleteAccount}
-              style={styles.deleteAction}
-              accessibilityRole="button"
-              disabled={accountBusy}
-            >
-              <Feather name="trash-2" size={18} color={colors.destructive} />
-              <Text style={[styles.deleteText, { color: colors.destructive }]}>Delete account</Text>
-            </TouchableOpacity>
-          </View>
-        ) : null}
       </ScrollView>
     </View>
   );
@@ -883,18 +629,7 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_700Bold',
     letterSpacing: 0.8,
   },
-  emailRow: {
-    minHeight: 61,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 14,
-    borderBottomWidth: 1,
-  },
   rowIcon: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
-  emailDetails: { flex: 1, gap: 8 },
-  emailLabel: { fontSize: 13, fontFamily: 'Inter_400Regular' },
-  emailValue: { fontSize: 17, fontFamily: 'Inter_500Medium' },
   subscriptionState: { minHeight: 76, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 15, paddingVertical: 14 },
   stateText: { flex: 1, fontSize: 13, lineHeight: 19, fontFamily: 'Inter_400Regular' },
   retryLabel: { padding: 8, fontSize: 13, fontFamily: 'Inter_600SemiBold' },
@@ -908,15 +643,11 @@ const styles = StyleSheet.create({
   subscriptionDate: { fontSize: 12, lineHeight: 17, fontFamily: 'Inter_500Medium' },
   subscriptionAction: { minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 15, borderRadius: 12 },
   subscriptionActionText: { fontSize: 14, fontFamily: 'Inter_700Bold' },
-  infoRow: { minHeight: 78, flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14 },
-  infoCopy: { flex: 1, gap: 5 },
-  infoDescription: { fontSize: 12, lineHeight: 18, fontFamily: 'Inter_400Regular' },
   notificationRow: { minHeight: 72, flexDirection: 'row', alignItems: 'center', gap: 11, paddingHorizontal: 14, paddingVertical: 10 },
   notificationCopy: { flex: 1, gap: 3 },
   notificationTitle: { fontSize: 14, fontFamily: 'Inter_500Medium' },
   notificationDescription: { fontSize: 11, lineHeight: 16, fontFamily: 'Inter_400Regular' },
   inlineMessage: { paddingHorizontal: 14, paddingVertical: 10, fontSize: 11, lineHeight: 16, fontFamily: 'Inter_400Regular' },
-  accountProvider: { fontSize: 12, fontFamily: 'Inter_600SemiBold' },
   appearanceSection: { minHeight: 99, justifyContent: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1 },
   appearanceHeading: { textTransform: 'uppercase', fontSize: 13, fontFamily: 'Inter_700Bold', letterSpacing: 0.6 },
   appearanceControl: { minHeight: 42, flexDirection: 'row', alignItems: 'stretch', borderRadius: 14, padding: 3 },
@@ -930,10 +661,4 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
   },
   rowLabel: { flex: 1, fontSize: 16, fontFamily: 'Inter_500Medium' },
-  accountError: { paddingHorizontal: 12, paddingBottom: 12, fontSize: 13, fontFamily: 'Inter_500Medium' },
-  accountSyncStatus: { paddingHorizontal: 12, paddingBottom: 12, fontSize: 12, fontFamily: 'Inter_400Regular' },
-  deleteSection: { minHeight: 76, marginTop: 8, borderTopWidth: 1, alignItems: 'center', paddingTop: 16, gap: 8 },
-  deleteExplanation: { maxWidth: 340, paddingHorizontal: 16, fontSize: 11, lineHeight: 16, textAlign: 'center', fontFamily: 'Inter_400Regular' },
-  deleteAction: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 10 },
-  deleteText: { fontSize: 16, fontFamily: 'Inter_500Medium' },
 });

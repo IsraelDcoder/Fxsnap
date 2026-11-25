@@ -24,7 +24,7 @@ import { useApp } from '@/context/AppContext';
 import { useColors } from '@/hooks/useColors';
 import {
   getCachedFxsnapProfile,
-  getAuthenticatedAccount,
+  getAnonymousAccount,
   type FxsnapAccount,
   type CachedFxsnapProfile,
 } from '@/services/account';
@@ -123,7 +123,7 @@ export default function ProfileScreen() {
         } else {
           setAccountLoading(true);
         }
-        const currentAccount = await getAuthenticatedAccount();
+        const currentAccount = await getAnonymousAccount();
         setAccount(currentAccount);
         const communityUsername = currentAccount?.communityUsername || cachedAccountProfile?.communityUsername || '';
         if (communityUsername) {
@@ -213,8 +213,8 @@ export default function ProfileScreen() {
       return;
     }
     const candidate = draftUsername.trim().toLowerCase();
-    if (!/^[a-z0-9_]{3,24}$/.test(candidate)) {
-      setUsernameStatus({ available: false, reason: 'Use 3–24 lowercase letters, numbers, or underscores.' });
+    if (!/^[a-z0-9_]{3,20}$/.test(candidate)) {
+      setUsernameStatus({ available: false, reason: 'Use 3–20 letters, numbers, or underscores.' });
       setCheckingUsername(false);
       return;
     }
@@ -311,7 +311,7 @@ export default function ProfileScreen() {
     try {
       if (usernameChanged) {
         await updateCommunityUsername(nextUsername);
-        const latestAccount = await getAuthenticatedAccount();
+        const latestAccount = await getAnonymousAccount();
         setAccount(latestAccount);
       }
       const saved = await saveTraderProfile({
@@ -462,18 +462,6 @@ export default function ProfileScreen() {
               <ActivityIndicator size="small" color={colors.buy} />
               <Text style={[styles.helperText, { color: colors.textSecondary }]}>Loading account profile…</Text>
             </View>
-          ) : !account && !cachedProfile && Platform.OS !== 'web' ? (
-            <TouchableOpacity
-              onPress={() => router.push('/settings')}
-              style={styles.signInPrompt}
-              accessibilityRole="button"
-            >
-              <Feather name="cloud" size={15} color={colors.buy} />
-              <Text style={[styles.signInPromptText, { color: colors.textSecondary }]}>
-                Sign in from Settings to sync your profile across devices.
-              </Text>
-              <Feather name="chevron-right" size={16} color={colors.textMuted} />
-            </TouchableOpacity>
           ) : null}
         </View>
 
@@ -716,8 +704,8 @@ export default function ProfileScreen() {
                     <Text style={[styles.atSign, { color: colors.textMuted }]}>@</Text>
                     <TextInput
                       value={draftUsername}
-                      onChangeText={(value) => setDraftUsername(value.toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 24))}
-                      maxLength={24}
+                      onChangeText={(value) => setDraftUsername(value.toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 20))}
+                      maxLength={20}
                       autoCapitalize="none"
                       autoCorrect={false}
                       placeholder="trader_name"
@@ -729,7 +717,7 @@ export default function ProfileScreen() {
                   <Text style={[styles.helperText, { color: usernameStatus?.available ? colors.buy : colors.textMuted }]}>
                     {draftUsername.trim().toLowerCase() === username.toLowerCase()
                       ? 'Your current username.'
-                      : usernameStatus?.reason || (usernameStatus?.available ? 'Username available.' : '3–24 lowercase letters, numbers, or underscores.')}
+                      : usernameStatus?.reason || (usernameStatus?.available ? 'Username available.' : '3–20 letters, numbers, or underscores.')}
                   </Text>
                 </>
               ) : (
@@ -937,8 +925,6 @@ const styles = StyleSheet.create({
   profileStatCount: { fontSize: 16, lineHeight: 20, fontFamily: 'Inter_700Bold' },
   profileStatLabel: { fontSize: 11, fontFamily: 'Inter_500Medium' },
   profileStatDivider: { width: StyleSheet.hairlineWidth, height: 30 },
-  signInPrompt: { minHeight: 42, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  signInPromptText: { flex: 1, fontSize: 11, lineHeight: 16, fontFamily: 'Inter_400Regular' },
   loadingLine: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   helperText: { fontSize: 11, lineHeight: 16, fontFamily: 'Inter_400Regular' },
   completionCard: { gap: 10 },

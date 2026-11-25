@@ -61,15 +61,44 @@ create index if not exists fxsnap_system_announcements_status_idx
 
 create table if not exists public.fxsnap_system_announcement_recipients (
   announcement_id uuid not null references public.fxsnap_system_announcements(id) on delete cascade,
-  recipient_supabase_user_id uuid not null references auth.users(id) on delete cascade,
+  recipient_supabase_user_id uuid references auth.users(id) on delete cascade,
+  recipient_account_id text,
   created_at timestamptz not null default now(),
   read_at timestamptz,
   banner_dismissed_at timestamptz,
-  primary key (announcement_id, recipient_supabase_user_id)
+  constraint fxsnap_system_announcement_recipient_target_check
+    check (recipient_supabase_user_id is not null or recipient_account_id is not null)
 );
+alter table public.fxsnap_system_announcement_recipients
+  add column if not exists recipient_account_id text;
+alter table public.fxsnap_system_announcement_recipients
+  drop constraint if exists fxsnap_system_announcement_recipients_pkey;
+alter table public.fxsnap_system_announcement_recipients
+  alter column recipient_supabase_user_id drop not null;
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.fxsnap_system_announcement_recipients'::regclass
+      and conname = 'fxsnap_system_announcement_recipient_target_check'
+  ) then
+    alter table public.fxsnap_system_announcement_recipients
+      add constraint fxsnap_system_announcement_recipient_target_check
+      check (recipient_supabase_user_id is not null or recipient_account_id is not null) not valid;
+  end if;
+end;
+$$;
+create unique index if not exists fxsnap_system_announcement_recipient_user_unique
+  on public.fxsnap_system_announcement_recipients (announcement_id, recipient_supabase_user_id)
+  where recipient_supabase_user_id is not null;
+create unique index if not exists fxsnap_system_announcement_recipient_account_unique
+  on public.fxsnap_system_announcement_recipients (announcement_id, recipient_account_id)
+  where recipient_account_id is not null;
 
 create index if not exists fxsnap_system_announcement_recipients_user_idx
   on public.fxsnap_system_announcement_recipients (recipient_supabase_user_id, created_at desc);
+create index if not exists fxsnap_system_announcement_recipients_account_idx
+  on public.fxsnap_system_announcement_recipients (recipient_account_id, created_at desc);
 
 create table if not exists public.fxsnap_system_announcement_push_queue (
   id uuid primary key default gen_random_uuid(),
@@ -154,17 +183,12 @@ security definer
 set search_path = ''
 as $$
   select count(*)
-  from auth.users u
-  where u.deleted_at is null
-    and (u.banned_until is null or u.banned_until <= now())
-    and coalesce(u.is_anonymous, false) = false
-    and (
-      p_audience = 'all'
-      or (
-        p_audience = 'recently_active'
-        and p_audience_days between 1 and 365
-        and u.last_sign_in_at >= now() - make_interval(days => p_audience_days)
-      )
+  from public.fxsnap_anonymous_devices d
+  where p_audience = 'all'
+    or (
+      p_audience = 'recently_active'
+      and p_audience_days between 1 and 365
+      and d.last_active_at >= now() - make_interval(days => p_audience_days)
     );
 $$;
 
@@ -188,21 +212,18 @@ begin
   end if;
 
   insert into public.fxsnap_system_announcement_recipients (
-    announcement_id, recipient_supabase_user_id
+    announcement_id, recipient_account_id
   )
-  select announcement.id, u.id
-  from auth.users u
-  where u.deleted_at is null
-    and (u.banned_until is null or u.banned_until <= now())
-    and coalesce(u.is_anonymous, false) = false
-    and (
-      announcement.audience = 'all'
-      or (
-        announcement.audience = 'recently_active'
-        and u.last_sign_in_at >= now() - make_interval(days => announcement.audience_days)
-      )
+  select announcement.id, d.account_id
+  from public.fxsnap_anonymous_devices d
+  where announcement.audience = 'all'
+    or (
+      announcement.audience = 'recently_active'
+      and d.last_active_at >= now() - make_interval(days => announcement.audience_days)
     )
-  on conflict (announcement_id, recipient_supabase_user_id) do nothing;
+  on conflict (announcement_id, recipient_account_id)
+    where recipient_account_id is not null
+    do nothing;
 
   get diagnostics added_recipients = row_count;
 
@@ -210,9 +231,12 @@ begin
     insert into public.fxsnap_system_announcement_push_queue (announcement_id, device_id)
     select announcement.id, d.device_id
     from public.fxsnap_system_announcement_recipients r
+    join public.fxsnap_anonymous_devices a
+      on a.account_id = r.recipient_account_id
     join public.fxsnap_push_devices d
-      on d.supabase_user_id = r.recipient_supabase_user_id
+      on d.device_id = a.device_id
     where r.announcement_id = announcement.id
+      and r.recipient_account_id is not null
       and coalesce(d.preferences->>'systemAnnouncements', 'true') <> 'false'
       and coalesce(d.preferences->>'enabled', 'true') <> 'false'
       and nullif(d.expo_token, '') is not null
@@ -230,6 +254,35 @@ begin
 
   return added_recipients;
 end;
+$$;
+
+create or replace function public.fxsnap_system_announcement_inbox_for_account(p_account_id text)
+returns table (
+  id uuid,
+  type text,
+  title text,
+  message text,
+  destination text,
+  destination_params jsonb,
+  channels jsonb,
+  published_at timestamptz,
+  created_at timestamptz,
+  read_at timestamptz,
+  banner_dismissed_at timestamptz
+)
+language sql
+security definer
+set search_path = ''
+as $$
+  select a.id, a.type, a.title, a.message, a.destination, a.destination_params, a.channels,
+         a.published_at, r.created_at, r.read_at, r.banner_dismissed_at
+  from public.fxsnap_system_announcement_recipients r
+  join public.fxsnap_system_announcements a on a.id = r.announcement_id
+  where r.recipient_account_id = p_account_id
+    and a.status = 'published'
+    and a.expires_at > now()
+  order by a.published_at desc
+  limit 100;
 $$;
 
 create or replace function public.fxsnap_system_announcement_save(
@@ -382,6 +435,72 @@ as $$
   order by a.published_at desc
   limit 100;
 $$;
+
+create or replace function public.fxsnap_system_announcement_assign_anonymous_device()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  with inserted_recipients as (
+    insert into public.fxsnap_system_announcement_recipients (
+      announcement_id, recipient_account_id
+    )
+    select a.id, new.account_id
+    from public.fxsnap_system_announcements a
+    where a.status = 'published'
+      and a.expires_at > now()
+      and (
+        a.audience = 'all'
+        or (
+          a.audience = 'recently_active'
+          and new.last_active_at >= now() - make_interval(days => a.audience_days)
+        )
+      )
+    on conflict (announcement_id, recipient_account_id)
+      where recipient_account_id is not null
+      do nothing
+    returning announcement_id
+  )
+  update public.fxsnap_system_announcements a
+  set recipient_count = (
+    select count(*)::integer
+    from public.fxsnap_system_announcement_recipients r
+    where r.announcement_id = a.id
+  )
+  from inserted_recipients i
+  where a.id = i.announcement_id;
+
+  insert into public.fxsnap_system_announcement_push_queue (announcement_id, device_id)
+  select a.id, new.device_id
+  from public.fxsnap_system_announcements a
+  join public.fxsnap_push_devices d on d.device_id = new.device_id
+  where a.status = 'published'
+    and a.expires_at > now()
+    and a.channels->'push' = 'true'::jsonb
+    and (
+      a.audience = 'all'
+      or (
+        a.audience = 'recently_active'
+        and new.last_active_at >= now() - make_interval(days => a.audience_days)
+      )
+    )
+    and coalesce(d.preferences->>'systemAnnouncements', 'true') <> 'false'
+    and coalesce(d.preferences->>'enabled', 'true') <> 'false'
+    and nullif(d.expo_token, '') is not null
+  on conflict (announcement_id, device_id) do nothing;
+
+  return new;
+end;
+$$;
+revoke all on function public.fxsnap_system_announcement_assign_anonymous_device() from public, anon, authenticated;
+
+drop trigger if exists fxsnap_system_announcement_assign_device
+  on public.fxsnap_anonymous_devices;
+create trigger fxsnap_system_announcement_assign_device
+  after insert or update of last_active_at on public.fxsnap_anonymous_devices
+  for each row execute function public.fxsnap_system_announcement_assign_anonymous_device();
 
 create or replace function public.fxsnap_system_announcement_admin_list()
 returns table (
@@ -559,6 +678,8 @@ revoke all on function public.fxsnap_system_announcement_enqueue(uuid) from publ
 revoke all on function public.fxsnap_system_announcement_save(uuid, uuid, jsonb) from public, anon, authenticated;
 revoke all on function public.fxsnap_system_announcement_transition(uuid, uuid, text, jsonb) from public, anon, authenticated;
 revoke all on function public.fxsnap_system_announcement_inbox(uuid) from public, anon, authenticated;
+revoke all on function public.fxsnap_system_announcement_inbox_for_account(text) from public, anon, authenticated;
+revoke all on function public.fxsnap_system_announcement_assign_anonymous_device() from public, anon, authenticated;
 revoke all on function public.fxsnap_system_announcement_admin_list() from public, anon, authenticated;
 revoke all on function public.fxsnap_system_announcement_claim_push_jobs(integer) from public, anon, authenticated;
 revoke all on function public.fxsnap_system_announcement_finish_push_job(uuid, text, text, boolean, boolean) from public, anon, authenticated;
@@ -568,6 +689,7 @@ grant execute on function public.fxsnap_system_announcement_enqueue(uuid) to ser
 grant execute on function public.fxsnap_system_announcement_save(uuid, uuid, jsonb) to service_role;
 grant execute on function public.fxsnap_system_announcement_transition(uuid, uuid, text, jsonb) to service_role;
 grant execute on function public.fxsnap_system_announcement_inbox(uuid) to service_role;
+grant execute on function public.fxsnap_system_announcement_inbox_for_account(text) to service_role;
 grant execute on function public.fxsnap_system_announcement_admin_list() to service_role;
 grant execute on function public.fxsnap_system_announcement_claim_push_jobs(integer) to service_role;
 grant execute on function public.fxsnap_system_announcement_finish_push_job(uuid, text, text, boolean, boolean) to service_role;

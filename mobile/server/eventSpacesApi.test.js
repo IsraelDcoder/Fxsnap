@@ -240,6 +240,31 @@ test('admins can create a space and start its LiveKit room immediately without s
   assert.equal(harness.liveRooms.has(result.body.space.livekit_room_name), true);
 });
 
+test('admins can load the live participant roster for moderation', async () => {
+  const harness = makeHarness();
+  const created = await harness.call('/api/admin/event-spaces/go-live', {
+    method: 'POST',
+    body: validInput({
+      status: 'draft',
+      scheduledAt: null,
+      waitingRoomOpensAt: null,
+    }),
+  });
+  const spaceId = created.body.space.id;
+
+  harness.setActor({ isAdmin: false, accountId: LISTENER_ACCOUNT_ID });
+  const joined = await harness.call(`/api/events/spaces/${spaceId}/join`, { method: 'POST' });
+  assert.equal(joined.statusCode, 200);
+
+  harness.setActor({ isAdmin: true, accountId: ADMIN_ACCOUNT_ID });
+  const roster = await harness.call(`/api/admin/event-spaces/${spaceId}/participants`);
+
+  assert.equal(roster.statusCode, 200);
+  assert.equal(roster.body.roster.length, 1);
+  assert.equal(roster.body.roster[0].accountId, LISTENER_ACCOUNT_ID);
+  assert.equal(roster.body.roster[0].displayName, 'FXSnap member');
+});
+
 test('non-admins cannot create and immediately start an event space', async () => {
   const harness = makeHarness({ isAdmin: false });
   const result = await harness.call('/api/admin/event-spaces/go-live', {

@@ -37,6 +37,7 @@ export type PushNotificationPayload = {
 
 const NOTIFICATION_SETTINGS_KEY = 'fxsnap:notificationSettings';
 const PUSH_TOKEN_KEY = 'fxsnapPushToken';
+const ONBOARDING_NOTIFICATION_PROMPT_KEY = 'fxsnap:onboardingNotificationPromptSeen';
 
 Notifications.setNotificationHandler({
   handleNotification: async (notification) => {
@@ -97,17 +98,35 @@ export async function saveNotificationPreferences(preferences: {
   notifyAccountDataChanged();
 }
 
+export async function hasSeenOnboardingNotificationPrompt(): Promise<boolean> {
+  return (await AsyncStorage.getItem(ONBOARDING_NOTIFICATION_PROMPT_KEY)) === 'true';
+}
+
+export async function markOnboardingNotificationPromptSeen(): Promise<void> {
+  await AsyncStorage.setItem(ONBOARDING_NOTIFICATION_PROMPT_KEY, 'true');
+}
+
+export async function requestPushNotificationPermission(): Promise<boolean> {
+  if (Platform.OS === 'web') return false;
+  const currentPermissions = await Notifications.getPermissionsAsync();
+  if (currentPermissions.granted) return true;
+  const permissions = await Notifications.requestPermissionsAsync({
+    ios: { allowAlert: true, allowBadge: true, allowSound: true },
+  });
+  return permissions.granted;
+}
+
 export async function requestAndRegisterPushNotifications(preferences?: NotificationPreferences, requestPermission = true) {
   const resolvedPreferences = preferences ?? await getNotificationPreferences();
   if (!resolvedPreferences.enabled || Platform.OS === 'web') {
     return { granted: false, token: null };
   }
 
-  const currentPermissions = await Notifications.getPermissionsAsync();
-  const permissions = currentPermissions.granted || !requestPermission ? currentPermissions : await Notifications.requestPermissionsAsync({
-    ios: { allowAlert: true, allowBadge: true, allowSound: true },
-  });
-  if (!permissions.granted) return { granted: false, token: null };
+  if (requestPermission) {
+    if (!(await requestPushNotificationPermission())) return { granted: false, token: null };
+  } else if (!(await hasPushNotificationPermission())) {
+    return { granted: false, token: null };
+  }
 
   if (Platform.OS === 'android') {
     await Notifications.setNotificationChannelAsync('fxsnap-community', {
@@ -172,7 +191,16 @@ export async function requestAndRegisterPushNotifications(preferences?: Notifica
 
 export async function syncRegisteredPushNotifications() {
   const preferences = await getNotificationPreferences();
-  if (!preferences.enabled) return;
+  const token = await AsyncStorage.getItem(PUSH_TOKEN_KEY);
+  if (!preferences.enabled) {
+    if (token) await unregisterPushToken();
+    return;
+  }
+  if (!(await hasPushNotificationPermission())) {
+    if (token) await unregisterPushToken();
+    await saveNotificationPreferences({ ...preferences, enabled: false });
+    return;
+  }
   await requestAndRegisterPushNotifications(preferences, false);
 }
 
@@ -257,4 +285,5 @@ export async function unregisterPushToken() {
 export async function clearNotificationPreferences() {
   await AsyncStorage.removeItem(NOTIFICATION_SETTINGS_KEY);
   await AsyncStorage.removeItem(PUSH_TOKEN_KEY);
+  await AsyncStorage.removeItem(ONBOARDING_NOTIFICATION_PROMPT_KEY);
 }

@@ -23,7 +23,12 @@ export function isPremiumFeatureRoute(path: string): boolean {
 }
 
 export function isCommunityFeatureRoute(path: string): boolean {
-  return path === '/community' || path.startsWith('/community-') || path.startsWith('/community/');
+  return path === '/community'
+    || path === '/(tabs)/community'
+    || path.startsWith('/community-')
+    || path.startsWith('/community/')
+    || path.startsWith('/(tabs)/community-')
+    || path.startsWith('/(tabs)/community/');
 }
 
 export function getAccessGateRoute(
@@ -32,9 +37,10 @@ export function getAccessGateRoute(
   isSubscribed: boolean,
   paywallDismissed = false,
 ): '/onboarding' | '/paywall' | null {
-  if (isSubscribed || path === '/paywall' || path === '/exit-offer' || path === '/auth/callback') return null;
+  if (isSubscribed || path === '/paywall' || path === '/exit-offer') return null;
   if (!onboardingComplete && (path === '/' || path === '/onboarding')) return null;
   if (!onboardingComplete) return '/onboarding';
+  if (isCommunityFeatureRoute(path)) return '/paywall';
   return null;
 }
 
@@ -43,7 +49,11 @@ export function getFeatureAccessDecision(
   isSubscribed: boolean,
   developmentBypass = isDevelopmentAnalysisPremiumBypassEnabled(),
 ): FeatureAccessDecision {
-  if (feature === 'COMMUNITY') return { allowed: true, requiresPaywall: false };
+  if (feature === 'COMMUNITY') {
+    return isSubscribed
+      ? { allowed: true, requiresPaywall: false }
+      : { allowed: false, requiresPaywall: true };
+  }
   if (isSubscribed || (feature !== 'STRATEGY_GENERATOR' && developmentBypass)) {
     return { allowed: true, requiresPaywall: false };
   }

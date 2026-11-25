@@ -119,6 +119,7 @@ test('simultaneous cold-start callers persist and request one identical device I
     const headers = await Promise.all(Array.from({ length: 16 }, () => apiAuth.getApiHeaders()));
     const storedDeviceId = values.get('fxsnap:deviceId');
     assert.ok(storedDeviceId);
+    assert.match(storedDeviceId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
     assert.deepEqual(new Set(requestedDeviceIds), new Set([storedDeviceId]));
     assert.equal(new Set(headers.map((item: Record<string, string>) => item.authorization)).size, 1);
   } finally {
@@ -296,7 +297,7 @@ test('exhausted API quota is shown as a temporary analysis outage instead of a r
   });
 });
 
-test('premium routes are centrally recognized and Community remains available to free users', () => {
+test('premium routes and Community access are centrally recognized', () => {
   assert.equal(isPremiumFeatureRoute('/analysis'), true);
   assert.equal(isPremiumFeatureRoute('/strategy'), true);
   assert.equal(isPremiumFeatureRoute('/community'), false);
@@ -309,8 +310,8 @@ test('premium routes are centrally recognized and Community remains available to
   assert.equal(shouldGuardFeatureRoute('/analysis', true), false);
   assert.equal(shouldGuardFeatureRoute('/strategy', false), true);
   assert.equal(shouldGuardFeatureRoute('/strategy', true), false);
-  assert.equal(shouldGuardFeatureRoute('/community', false), false);
-  assert.equal(shouldGuardFeatureRoute('/community-search', false), false);
+  assert.equal(shouldGuardFeatureRoute('/community', false), true);
+  assert.equal(shouldGuardFeatureRoute('/community-search', false), true);
   assert.equal(shouldGuardFeatureRoute('/community-notifications', true), false);
   assert.equal(shouldGuardFeatureRoute('/lot-size-calculator', false), false);
   assert.equal(shouldGuardFeatureRoute('/risk-management', false), false);
@@ -340,7 +341,7 @@ test('analysis and strategy generation require an active subscription', () => {
   assert.deepEqual(getFeatureAccessDecision('AI_ANALYSIS', true), { allowed: true, requiresPaywall: false });
   assert.deepEqual(getFeatureAccessDecision('TRADE_SETUP', true), { allowed: true, requiresPaywall: false });
   assert.deepEqual(getFeatureAccessDecision('STRATEGY_GENERATOR', true), { allowed: true, requiresPaywall: false });
-  assert.deepEqual(getFeatureAccessDecision('COMMUNITY', false), { allowed: true, requiresPaywall: false });
+  assert.deepEqual(getFeatureAccessDecision('COMMUNITY', false), { allowed: false, requiresPaywall: true });
   assert.deepEqual(getFeatureAccessDecision('COMMUNITY', true), { allowed: true, requiresPaywall: false });
   assert.deepEqual(getFeatureAccessDecision('LOT_SIZE', false), { allowed: true, requiresPaywall: false });
   assert.deepEqual(getFeatureAccessDecision('LIVE_CHARTS', false), { allowed: true, requiresPaywall: false });
@@ -355,7 +356,7 @@ test('analysis premium bypass is opt-in and only active in development builds', 
     assert.deepEqual(getFeatureAccessDecision('AI_ANALYSIS', false, developmentBypass), { allowed: true, requiresPaywall: false });
     assert.deepEqual(getFeatureAccessDecision('TRADE_SETUP', false, developmentBypass), { allowed: true, requiresPaywall: false });
     assert.deepEqual(getFeatureAccessDecision('STRATEGY_GENERATOR', false, developmentBypass), { allowed: false, requiresPaywall: true });
-    assert.deepEqual(getFeatureAccessDecision('COMMUNITY', false, developmentBypass), { allowed: true, requiresPaywall: false });
+    assert.deepEqual(getFeatureAccessDecision('COMMUNITY', false, developmentBypass), { allowed: false, requiresPaywall: true });
     assert.equal(canViewFullAnalysis(false, developmentBypass), true);
   } finally {
     if (previousBypass === undefined) delete process.env.EXPO_PUBLIC_DEV_PREMIUM_BYPASS;

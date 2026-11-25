@@ -10,7 +10,6 @@ import {
   getCommunityNotifications,
   markCommunityNotificationRead,
   markSystemAnnouncementRead,
-  subscribeToSystemAnnouncementChanges,
   subscribeToCommunityChanges,
   type CommunityNotification,
 } from '@/services/community';
@@ -69,14 +68,11 @@ export default function CommunityNotificationsScreen() {
       if (refreshTimer) clearTimeout(refreshTimer);
       refreshTimer = setTimeout(() => { void load(); }, 180);
     });
-    const unsubscribeAnnouncements = subscribeToSystemAnnouncementChanges(() => {
-      if (refreshTimer) clearTimeout(refreshTimer);
-      refreshTimer = setTimeout(() => { void load(); }, 180);
-    });
+    const pollTimer = setInterval(() => { void load(); }, 30_000);
     return () => {
       if (refreshTimer) clearTimeout(refreshTimer);
+      clearInterval(pollTimer);
       unsubscribe();
-      unsubscribeAnnouncements();
     };
   }, [load]);
 

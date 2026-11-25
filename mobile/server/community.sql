@@ -3,7 +3,7 @@
 
 create table if not exists public.fxsnap_community_profiles (
   account_id text primary key,
-  supabase_user_id uuid not null unique,
+  supabase_user_id uuid unique,
   username text not null,
   picture_url text,
   accepted_rules_version text not null,
@@ -11,8 +11,11 @@ create table if not exists public.fxsnap_community_profiles (
   muted_until timestamptz,
   joined_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
+  -- The API enforces 3-20 for new/changed usernames; the wider storage check preserves legacy names.
   constraint fxsnap_community_username_format check (username ~ '^[a-z0-9_]{3,24}$')
 );
+alter table public.fxsnap_community_profiles
+  alter column supabase_user_id drop not null;
 alter table public.fxsnap_community_profiles
   add column if not exists picture_url text;
 create unique index if not exists fxsnap_community_username_lower_unique

@@ -174,11 +174,6 @@ function createSupportInboxApi({ getActor, sendJson, readJsonBody, getPremiumSta
   async function actorFor(req, res, admin = false) {
     const actor = await getActor(req, res);
     if (!actor) return null;
-    if (typeof actor.supabaseUserId !== 'string'
-      || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(actor.supabaseUserId)) {
-      sendJson(res, 403, { error: 'Sign in with your linked Google account to use private FXSnap Support.' });
-      return null;
-    }
     if (admin && !actor.isAdmin) {
       sendJson(res, 403, { error: 'Administrator permissions are required.' });
       return null;
@@ -220,6 +215,7 @@ function createSupportInboxApi({ getActor, sendJson, readJsonBody, getPremiumSta
       account_id: actor.accountId,
       supabase_user_id: actor.supabaseUserId,
       display_name: String(actor.displayName || '').trim().slice(0, 120) || null,
+      community_username: String(actor.communityUsername || '').trim().toLowerCase().slice(0, 20) || null,
       subscription_status: premium,
       app_version: metadata.appVersion || null,
       platform: metadata.platform || null,
@@ -268,6 +264,7 @@ function createSupportInboxApi({ getActor, sendJson, readJsonBody, getPremiumSta
         await patchRows('fxsnap_support_conversations', `id=eq.${encodeURIComponent(conversation.id)}`, {
           member_last_read_at: now,
           supabase_user_id: actor.supabaseUserId,
+          community_username: String(actor.communityUsername || '').trim().toLowerCase().slice(0, 20) || null,
         });
         const messages = parseRows(await getRows(
           'fxsnap_support_messages',
@@ -354,7 +351,7 @@ function createSupportInboxApi({ getActor, sendJson, readJsonBody, getPremiumSta
         const query = String(url.searchParams.get('q') || '').trim().slice(0, 80).toLowerCase();
         const conversations = parseRows(await getRows(
           'fxsnap_support_conversations',
-          'select=id,account_id,display_name,subscription_status,app_version,platform,topic,status,created_at,updated_at,admin_last_read_at&order=updated_at.desc&limit=200',
+          'select=id,account_id,display_name,community_username,subscription_status,app_version,platform,topic,status,created_at,updated_at,admin_last_read_at&order=updated_at.desc&limit=200',
         ));
         const ids = conversations.map((item) => item.id).filter((id) => /^[0-9a-f-]{36}$/i.test(id));
         const messages = ids.length ? parseRows(await getRows(
@@ -384,6 +381,7 @@ function createSupportInboxApi({ getActor, sendJson, readJsonBody, getPremiumSta
         }).filter((conversation) => !query || [
           conversation.account_id,
           conversation.display_name || '',
+          conversation.community_username || '',
           conversation.topic || '',
           conversation.latest_message,
         ].some((value) => value.toLowerCase().includes(query)) || conversation.matches_message_search);
@@ -394,7 +392,7 @@ function createSupportInboxApi({ getActor, sendJson, readJsonBody, getPremiumSta
       if (adminMatch && req.method === 'GET') {
         const conversation = parseRows(await getRows(
           'fxsnap_support_conversations',
-          `id=eq.${encodeURIComponent(adminMatch[1])}&select=id,account_id,display_name,subscription_status,app_version,platform,topic,status,created_at,updated_at&limit=1`,
+          `id=eq.${encodeURIComponent(adminMatch[1])}&select=id,account_id,display_name,community_username,subscription_status,app_version,platform,topic,status,created_at,updated_at&limit=1`,
         ))[0];
         if (!conversation) return sendJson(res, 404, { error: 'Support conversation not found.' });
         const now = new Date().toISOString();

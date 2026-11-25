@@ -24,25 +24,7 @@ function createAuth(secret, deviceId, ttlMs = 30 * 24 * 60 * 60 * 1000) {
 
 function decodeAuth(secret, token) {
   const decoded = decodePayload(secret, token);
-  if (!decoded || decoded.scope === 'account' || typeof decoded.sub !== 'string') return null;
-  return decoded;
-}
-
-function createAccountAuth(secret, userId, deviceId, sessionId, ttlMs = 30 * 24 * 60 * 60 * 1000) {
-  return signPayload(secret, {
-    sub: userId,
-    deviceSub: deviceId,
-    sid: sessionId,
-    scope: 'account',
-    exp: Date.now() + ttlMs,
-  });
-}
-
-function decodeAccountAuth(secret, token) {
-  const decoded = decodePayload(secret, token);
-  if (!decoded || decoded.scope !== 'account'
-    || typeof decoded.sub !== 'string' || typeof decoded.deviceSub !== 'string'
-    || typeof decoded.sid !== 'string') return null;
+  if (!decoded || typeof decoded.sub !== 'string') return null;
   return decoded;
 }
 
@@ -52,8 +34,6 @@ function verifyAuth(secret, token) {
 
 module.exports = {
   createAuth,
-  createAccountAuth,
   decodeAuth,
-  decodeAccountAuth,
   verifyAuth,
 };

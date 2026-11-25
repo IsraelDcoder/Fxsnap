@@ -36,11 +36,10 @@ const { createCommunityApi } = require('./communityApi');
 const { createEventSpacesApi } = require('./eventSpacesApi');
 const { createSupportInboxApi } = require('./supportInboxApi');
 const {
-  createAccountAuth,
   createAuth,
-  decodeAccountAuth,
   verifyAuth,
 } = require('./auth');
+const { getStaffAdminActor, getStaffAdminIds } = require('./staffAuth');
 const { analyzeWithSingleRetry, callOpenRouterVision } = require('./singleSetupAnalysis');
 const marketService = require('./marketService');
 // Optional Twelve Data provider (server-side market data proxy)
@@ -80,6 +79,8 @@ const STATIC_ROOT = path.resolve(__dirname, '..', 'static-build');
 const TEMPLATE_PATH = path.resolve(__dirname, 'templates', 'landing-page.html');
 const PRIVACY_TEMPLATE_PATH = path.resolve(__dirname, 'templates', 'privacy-policy.html');
 const TERMS_TEMPLATE_PATH = path.resolve(__dirname, 'templates', 'terms-of-use.html');
+const STAFF_CONSOLE_TEMPLATE_PATH = path.resolve(__dirname, 'templates', 'admin-console.html');
+const STAFF_CONSOLE_SCRIPT_PATH = path.resolve(__dirname, 'templates', 'admin-console.js');
 const basePath = (process.env.BASE_PATH || '/').replace(/\/+$/, '');
 const requestCounts = new Map();
 const recentEvents = [];
@@ -195,7 +196,7 @@ function sendJson(res, status, body) {
   res.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
     'access-control-allow-origin': process.env.ALLOWED_ORIGIN || '*',
-    'access-control-allow-headers': 'content-type, authorization, x-device-id, x-notification-secret, x-fxsnap-account-token, idempotency-key',
+    'access-control-allow-headers': 'content-type, authorization, x-device-id, x-notification-secret, idempotency-key',
     'access-control-allow-methods': 'GET, POST, DELETE, OPTIONS',
   });
   res.end(JSON.stringify(body));
@@ -228,9 +229,6 @@ function readJsonBody(req) {
   });
 }
 
-const ACCOUNT_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const ACCOUNT_SESSION_LIMIT = 20;
-
 function accountStorageKey(userId) {
   return `fxsnap:account:user:${userId}`;
 }
@@ -239,311 +237,93 @@ function accountDataStorageKey(userId) {
   return `fxsnap:account:data:${userId}`;
 }
 
-function accountUserIdForSubject(subject) {
-  return `usr_${crypto.createHash('sha256').update(subject).digest('hex').slice(0, 32)}`;
+function accountUserIdForDevice(deviceId) {
+  return `device_${crypto.createHash('sha256').update(deviceId).digest('hex').slice(0, 32)}`;
+}
+
+async function touchAnonymousDevice(deviceId, accountId) {
+  if (!persistentStore.supabaseEnabled) return;
+  try {
+    await persistentStore.touchAnonymousDevice(deviceId, accountId);
+  } catch (error) {
+    console.error('[Announcements] Anonymous device activity could not be recorded.', error?.message || 'Unknown error.');
+  }
 }
 
 function publicAccountProfile(record) {
   return {
-    provider: record.provider,
-    email: record.email,
-    emailVerified: record.emailVerified,
+    userId: record.userId,
+    provider: 'anonymous',
     displayName: record.displayName,
     pictureUrl: record.pictureUrl,
     communityUsername: record.communityUsername,
-    status: record.status,
+    status: 'active',
     createdAt: record.createdAt,
-    lastSignInAt: record.lastSignInAt,
   };
 }
 
-function configuredGoogleClientIds() {
-  return String(process.env.FXSNAP_GOOGLE_OAUTH_CLIENT_IDS || '')
-    .split(',')
-    .map((clientId) => clientId.trim())
-    .filter(Boolean);
-}
-
-async function verifyGoogleIdToken(idToken) {
-  const clientIds = configuredGoogleClientIds();
-  if (clientIds.length === 0) {
-    return { error: 'Google sign-in is not configured on the server.', status: 503 };
+async function getAnonymousAccountRecord(deviceId) {
+  const userId = accountUserIdForDevice(deviceId);
+  let record = await persistentStore.getJson(accountStorageKey(userId));
+  if (!record) {
+    record = {
+      userId,
+      displayName: '',
+      pictureUrl: null,
+      communityUsername: '',
+      createdAt: new Date().toISOString(),
+    };
+    await persistentStore.setJson(accountStorageKey(userId), record);
   }
-
-  const response = await fetchWithTimeout('https://oauth2.googleapis.com/tokeninfo', {
-    method: 'POST',
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ id_token: idToken }).toString(),
-  });
-  if (!response.ok) return { error: 'Google could not verify this sign-in. Please try again.', status: 401 };
-
-  const claims = await response.json();
-  const expiresAt = Number(claims.exp) * 1000;
-  const isVerified = claims.email_verified === true || claims.email_verified === 'true';
-  const isGoogleIssuer = ['accounts.google.com', 'https://accounts.google.com'].includes(claims.iss);
-  if (!isGoogleIssuer || !clientIds.includes(claims.aud)
-    || !Number.isFinite(expiresAt) || expiresAt <= Date.now()
-    || typeof claims.sub !== 'string' || claims.sub.length < 1 || claims.sub.length > 255
-    || !isVerified || typeof claims.email !== 'string' || !claims.email.includes('@')) {
-    return { error: 'Google returned an incomplete or unverified account.', status: 401 };
-  }
-
-  const pictureUrl = typeof claims.picture === 'string'
-    && claims.picture.length <= 2048
-    && claims.picture.startsWith('https://')
-    ? claims.picture
-    : null;
-  const displayName = typeof claims.name === 'string'
-    ? claims.name.trim().slice(0, 120)
-    : '';
-
-  return {
-    claims: {
-      subject: claims.sub,
-      email: claims.email.trim().slice(0, 320),
-      displayName,
-      pictureUrl,
-    },
-  };
-}
-
-async function verifySupabaseAccessToken(accessToken) {
-  const supabaseUrl = String(process.env.SUPABASE_URL || process.env.SUPABASE_PROJECT_URL || '').replace(/\/+$/, '');
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
-  if (!supabaseUrl || !serviceRoleKey) {
-    return { error: 'Supabase account verification is not configured on the server.', status: 503 };
-  }
-
-  const response = await fetchWithTimeout(`${supabaseUrl}/auth/v1/user`, {
-    headers: {
-      apikey: serviceRoleKey,
-      authorization: `Bearer ${accessToken}`,
-    },
-  });
-  if (!response.ok) return { error: 'Supabase could not verify this account session. Please sign in again.', status: 401 };
-
-  const user = await response.json();
-  const googleIdentity = Array.isArray(user.identities)
-    ? user.identities.find((identity) => identity?.provider === 'google')
-    : null;
-  const identityData = googleIdentity?.identity_data || {};
-  const subject = typeof identityData.sub === 'string'
-    ? identityData.sub
-    : typeof googleIdentity?.id === 'string' ? googleIdentity.id : '';
-  const email = typeof user.email === 'string' ? user.email.trim() : '';
-  const emailVerified = Boolean(user.email_confirmed_at)
-    || identityData.email_verified === true
-    || identityData.verified_email === true;
-  if (!googleIdentity || !subject || subject.length > 255
-    || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !emailVerified
-    || typeof user.id !== 'string' || user.id.length < 1 || user.id.length > 255) {
-    return { error: 'Supabase did not return a verified Google account.', status: 401 };
-  }
-
-  const metadata = user.user_metadata || {};
-  const picture = identityData.picture || metadata.avatar_url || metadata.picture;
-  const displayName = identityData.full_name || identityData.name || metadata.full_name || metadata.name;
-  return {
-    claims: {
-      subject,
-      supabaseUserId: user.id,
-      email: email.slice(0, 320),
-      emailVerified: true,
-      displayName: typeof displayName === 'string' ? displayName.trim().slice(0, 120) : '',
-      pictureUrl: typeof picture === 'string' && picture.length <= 2048 && picture.startsWith('https://')
-        ? picture
-        : null,
-    },
-  };
-}
-
-function accountSessionFromRequest(req, res, deviceId) {
-  const token = String(req.headers['x-fxsnap-account-token'] || '');
-  const session = decodeAccountAuth(AUTH_SECRET, token);
-  if (!session || session.deviceSub !== deviceId) {
-    sendJson(res, 401, { error: 'A valid signed-in FXSnap account session is required.' });
-    return null;
-  }
-  return session;
+  return record;
 }
 
 async function getCommunityActor(req, res) {
   const deviceId = requireAuth(req, res);
   if (!deviceId) return null;
-  const session = accountSessionFromRequest(req, res, deviceId);
-  if (!session) return null;
-  if (!persistentStore.supabaseEnabled) {
-    sendJson(res, 503, { error: 'Community requires configured Supabase durable storage.' });
+  if (!persistentStore.enabled) {
+    sendJson(res, 503, { error: 'Community requires configured durable storage.' });
     return null;
   }
-  const account = await persistentStore.getJson(accountStorageKey(session.sub));
-  if (!account || account.status !== 'active'
-    || !account.linkedDeviceIds?.includes(deviceId)
-    || !account.sessionIds?.includes(session.sid)) {
-    sendJson(res, 401, { error: 'Your FXSnap account session has expired. Sign in again.' });
-    return null;
-  }
+  const account = await getAnonymousAccountRecord(deviceId);
   return {
-    accountId: session.sub,
+    accountId: account.userId,
     deviceId,
-    supabaseUserId: account.supabaseUserId || null,
+    supabaseUserId: null,
     displayName: typeof account.displayName === 'string' ? account.displayName : '',
-    pictureUrl: typeof account.pictureUrl === 'string'
-      && account.pictureUrl.startsWith('https://')
-      && account.pictureUrl.length <= 2048
-      ? account.pictureUrl
-      : null,
+    communityUsername: typeof account.communityUsername === 'string' ? account.communityUsername : '',
+    pictureUrl: null,
   };
 }
 
 async function saveCommunityUsername(accountId, username) {
   const key = accountStorageKey(accountId);
   const account = await persistentStore.getJson(key);
-  if (!account || account.status !== 'active') {
-    throw new Error('The linked FXSnap account could not be updated.');
-  }
+  if (!account) throw new Error('The device profile could not be updated.');
   await persistentStore.setJson(key, { ...account, communityUsername: username });
-}
-
-async function createAccountSession(deviceId, claims) {
-  const now = new Date().toISOString();
-  const userId = accountUserIdForSubject(claims.subject);
-  const key = accountStorageKey(userId);
-  const previous = await persistentStore.getJson(key);
-  if (previous && (previous.provider !== 'google' || previous.providerSubject !== claims.subject
-    || (previous.supabaseUserId && claims.supabaseUserId && previous.supabaseUserId !== claims.supabaseUserId))) {
-    return { error: 'This Google account cannot be linked to the existing FXSnap account.', status: 409 };
-  }
-
-  const sessionId = crypto.randomUUID();
-  const linkedDeviceIds = Array.isArray(previous?.linkedDeviceIds) ? previous.linkedDeviceIds : [];
-  const sessionIds = Array.isArray(previous?.sessionIds) ? previous.sessionIds : [];
-  const record = {
-    userId,
-    provider: 'google',
-    providerSubject: claims.subject,
-    supabaseUserId: claims.supabaseUserId || previous?.supabaseUserId || null,
-    email: claims.email,
-    emailVerified: claims.emailVerified !== false,
-    displayName: claims.displayName || previous?.displayName || '',
-    pictureUrl: claims.pictureUrl || previous?.pictureUrl || null,
-    linkedDeviceIds: Array.from(new Set([...linkedDeviceIds, deviceId])).slice(-ACCOUNT_SESSION_LIMIT),
-    communityUsername: previous?.communityUsername || '',
-    createdAt: previous?.createdAt || now,
-    lastSignInAt: now,
-    status: 'active',
-    role: 'user',
-    sessionIds: [...sessionIds.filter((id) => id !== sessionId), sessionId].slice(-ACCOUNT_SESSION_LIMIT),
-  };
-  await persistentStore.setJson(key, record);
-  const accountToken = createAccountAuth(AUTH_SECRET, userId, deviceId, sessionId, ACCOUNT_TOKEN_TTL_MS);
-  return {
-    account: publicAccountProfile(record),
-    accountToken,
-    expiresIn: ACCOUNT_TOKEN_TTL_MS / 1000,
-  };
-}
-
-async function handleGoogleAccountSignIn(req, res) {
-  const deviceId = requireAuth(req, res);
-  if (!deviceId) return;
-  if (!persistentStore.enabled) {
-    return sendJson(res, 503, { error: 'Google accounts require durable server storage. No account was created.' });
-  }
-
-  const input = z.object({ idToken: z.string().trim().min(20).max(12_000) }).safeParse(await readJsonBody(req));
-  if (!input.success) return sendJson(res, 400, { error: 'A valid Google sign-in credential is required.' });
-
-  let verification;
-  try {
-    verification = await verifyGoogleIdToken(input.data.idToken);
-  } catch (error) {
-    console.error('[Account] Google token verification failed.', {
-      error: error?.name === 'AbortError' ? 'Google verification timed out.' : 'Google verification request failed.',
-    });
-    return sendJson(res, error?.name === 'AbortError' ? 504 : 502, {
-      error: error?.name === 'AbortError'
-        ? 'Google sign-in verification timed out. Please try again.'
-        : 'Google sign-in verification is temporarily unavailable.',
-    });
-  }
-  if (verification.error) return sendJson(res, verification.status, { error: verification.error });
-  const session = await createAccountSession(deviceId, {
-    ...verification.claims,
-    emailVerified: true,
-  });
-  if (session.error) return sendJson(res, session.status, { error: session.error });
-  return sendJson(res, 200, session);
-}
-
-async function handleSupabaseAccountSignIn(req, res) {
-  const deviceId = requireAuth(req, res);
-  if (!deviceId) return;
-  if (!persistentStore.enabled) {
-    return sendJson(res, 503, { error: 'Google accounts require durable server storage. No account was created.' });
-  }
-
-  const input = z.object({ accessToken: z.string().trim().min(20).max(20_000) }).safeParse(await readJsonBody(req));
-  if (!input.success) return sendJson(res, 400, { error: 'A valid Supabase account session is required.' });
-
-  let verification;
-  try {
-    verification = await verifySupabaseAccessToken(input.data.accessToken);
-  } catch (error) {
-    console.error('[Account] Supabase account verification failed.', {
-      error: error?.name === 'AbortError' ? 'Supabase verification timed out.' : 'Supabase verification request failed.',
-    });
-    return sendJson(res, error?.name === 'AbortError' ? 504 : 502, {
-      error: error?.name === 'AbortError'
-        ? 'Supabase account verification timed out. Please try again.'
-        : 'Supabase account verification is temporarily unavailable.',
-    });
-  }
-  if (verification.error) return sendJson(res, verification.status, { error: verification.error });
-  const session = await createAccountSession(deviceId, verification.claims);
-  if (session.error) return sendJson(res, session.status, { error: session.error });
-  return sendJson(res, 200, session);
 }
 
 async function handleAccountProfile(req, res) {
   const deviceId = requireAuth(req, res);
   if (!deviceId) return;
-  const session = accountSessionFromRequest(req, res, deviceId);
-  if (!session) return;
-  if (!persistentStore.enabled) return sendJson(res, 503, { error: 'Account storage is unavailable.' });
-
-  const record = await persistentStore.getJson(accountStorageKey(session.sub));
-  if (!record || record.status !== 'active'
-    || !record.linkedDeviceIds?.includes(deviceId)
-    || !record.sessionIds?.includes(session.sid)) {
-    return sendJson(res, 401, { error: 'Your FXSnap account session has expired. Sign in again.' });
-  }
-  return sendJson(res, 200, { account: publicAccountProfile(record) });
+  if (!persistentStore.enabled) return sendJson(res, 503, { error: 'Device profile storage is unavailable.' });
+  const account = await getAnonymousAccountRecord(deviceId);
+  await touchAnonymousDevice(deviceId, account.userId);
+  return sendJson(res, 200, { account: publicAccountProfile(account) });
 }
 
 async function handleAccountData(req, res) {
   const deviceId = requireAuth(req, res);
   if (!deviceId) return;
-  const session = accountSessionFromRequest(req, res, deviceId);
-  if (!session) return;
-  if (!persistentStore.enabled) return sendJson(res, 503, { error: 'Account storage is unavailable.' });
-
-  const account = await persistentStore.getJson(accountStorageKey(session.sub));
-  if (!account || account.status !== 'active'
-    || !account.linkedDeviceIds?.includes(deviceId)
-    || !account.sessionIds?.includes(session.sid)) {
-    return sendJson(res, 401, { error: 'Your FXSnap account session has expired. Sign in again.' });
-  }
-
-  const key = accountDataStorageKey(session.sub);
+  if (!persistentStore.enabled) return sendJson(res, 503, { error: 'Device data storage is unavailable.' });
+  const account = await getAnonymousAccountRecord(deviceId);
+  const key = accountDataStorageKey(account.userId);
   if (req.method === 'GET') {
     const data = await persistentStore.getJson(key);
     return sendJson(res, 200, { data });
   }
 
-  const input = z.object({
-    data: z.record(z.string(), z.unknown()),
-  }).safeParse(await readJsonBody(req));
+  const input = z.object({ data: z.record(z.string(), z.unknown()) }).safeParse(await readJsonBody(req));
   if (!input.success || input.data.data.backupVersion !== 1) {
     return sendJson(res, 400, { error: 'A valid FXSnap data backup is required.' });
   }
@@ -556,86 +336,12 @@ async function handleAccountData(req, res) {
     updatedAt: new Date().toISOString(),
     data: input.data.data,
   };
+  const displayName = input.data.data.settings?.displayName;
   await persistentStore.setJson(key, saved);
+  if (typeof displayName === 'string' && displayName !== account.displayName) {
+    await persistentStore.setJson(accountStorageKey(account.userId), { ...account, displayName: displayName.slice(0, 40) });
+  }
   return sendJson(res, 200, { updatedAt: saved.updatedAt });
-}
-
-async function handleAccountSignOut(req, res) {
-  const deviceId = requireAuth(req, res);
-  if (!deviceId) return;
-  const session = accountSessionFromRequest(req, res, deviceId);
-  if (!session) return;
-  if (!persistentStore.enabled) return sendJson(res, 503, { error: 'Account storage is unavailable; sign-out could not be confirmed.' });
-
-  const key = accountStorageKey(session.sub);
-  const record = await persistentStore.getJson(key);
-  if (!record || !record.sessionIds?.includes(session.sid)) {
-    return sendJson(res, 401, { error: 'Your FXSnap account session has expired. Sign in again.' });
-  }
-  record.sessionIds = record.sessionIds.filter((id) => id !== session.sid);
-  await persistentStore.setJson(key, record);
-  return sendJson(res, 200, { signedOut: true });
-}
-
-async function handleAccountDeletion(req, res) {
-  const deviceId = requireAuth(req, res);
-  if (!deviceId) return;
-  const session = accountSessionFromRequest(req, res, deviceId);
-  if (!session) return;
-  if (!persistentStore.enabled) return sendJson(res, 503, { error: 'Account storage is unavailable; account was not deleted.' });
-
-  const key = accountStorageKey(session.sub);
-  const record = await persistentStore.getJson(key);
-  if (!record || !record.linkedDeviceIds?.includes(deviceId)
-    || !record.sessionIds?.includes(session.sid)) {
-    return sendJson(res, 401, { error: 'Your FXSnap account session has expired. Sign in again.' });
-  }
-  if (record.supabaseUserId && process.env.FXSNAP_COMMUNITY_ENABLED === 'true') {
-    const supabaseUrl = String(process.env.SUPABASE_URL || process.env.SUPABASE_PROJECT_URL || '').replace(/\/+$/, '');
-    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
-    if (!supabaseUrl || !serviceRoleKey) {
-      return sendJson(res, 503, { error: 'Community account cleanup is not configured; your account was not deleted.' });
-    }
-    const communityDeleteResponse = await fetchWithTimeout(
-      `${supabaseUrl}/rest/v1/rpc/fxsnap_community_delete_member`,
-      {
-        method: 'POST',
-        headers: {
-          apikey: serviceRoleKey,
-          authorization: `Bearer ${serviceRoleKey}`,
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify({ p_account_id: session.sub }),
-      },
-    );
-    if (!communityDeleteResponse.ok) {
-      console.error('[Account] Community data cleanup failed.', { status: communityDeleteResponse.status });
-      return sendJson(res, 503, { error: 'Community privacy cleanup could not be confirmed; your account was not deleted.' });
-    }
-  }
-  if (record.supabaseUserId) {
-    const supabaseUrl = String(process.env.SUPABASE_URL || process.env.SUPABASE_PROJECT_URL || '').replace(/\/+$/, '');
-    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
-    if (!supabaseUrl || !serviceRoleKey) {
-      return sendJson(res, 503, { error: 'Supabase account deletion is not configured; your account was not deleted.' });
-    }
-    const deleteResponse = await fetchWithTimeout(
-      `${supabaseUrl}/auth/v1/admin/users/${encodeURIComponent(record.supabaseUserId)}`,
-      {
-        method: 'DELETE',
-        headers: {
-          apikey: serviceRoleKey,
-          authorization: `Bearer ${serviceRoleKey}`,
-        },
-      },
-    );
-    if (!deleteResponse.ok && deleteResponse.status !== 404) {
-      return sendJson(res, 502, { error: 'Supabase could not delete this account; your FXSnap data was not deleted.' });
-    }
-  }
-  await persistentStore.deleteKey(accountDataStorageKey(session.sub));
-  await persistentStore.deleteKey(key);
-  return sendJson(res, 200, { deleted: true });
 }
 
 async function generateStrategy(req, res) {
@@ -1106,16 +812,19 @@ async function updateSignalOutcome(req, res) {
 const landingPageTemplate = fs.readFileSync(TEMPLATE_PATH, 'utf-8');
 const privacyTemplate = fs.existsSync(PRIVACY_TEMPLATE_PATH) ? fs.readFileSync(PRIVACY_TEMPLATE_PATH, 'utf-8') : null;
 const termsTemplate = fs.existsSync(TERMS_TEMPLATE_PATH) ? fs.readFileSync(TERMS_TEMPLATE_PATH, 'utf-8') : null;
+const staffConsoleTemplate = fs.readFileSync(STAFF_CONSOLE_TEMPLATE_PATH, 'utf-8');
+const staffConsoleScript = fs.readFileSync(STAFF_CONSOLE_SCRIPT_PATH, 'utf-8');
 const appName = getAppName();
 
 function createRequestHandler() {
   const handleSupportInboxRequest = createSupportInboxApi({
     getActor: async (req, res) => {
-      const actor = await getCommunityActor(req, res);
+      const pathname = String(req.url || '').split('?')[0];
+      const actor = pathname.startsWith('/api/admin/support/')
+        ? await getStaffAdminActor(req, res, { sendJson })
+        : await getCommunityActor(req, res);
       if (!actor) return null;
-      const adminIds = new Set((process.env.FXSNAP_COMMUNITY_ADMIN_SUPABASE_USER_IDS || '')
-        .split(',').map((id) => id.trim()).filter(Boolean));
-      return { ...actor, isAdmin: adminIds.has(actor.supabaseUserId) };
+      return { ...actor, isAdmin: actor.isAdmin || getStaffAdminIds(process.env).has(String(actor.supabaseUserId || '').toLowerCase()) };
     },
     sendJson,
     readJsonBody,
@@ -1125,21 +834,27 @@ function createRequestHandler() {
   });
   const handleEventSpacesRequest = createEventSpacesApi({
     getActor: async (req, res) => {
-      const actor = await getCommunityActor(req, res);
+      const pathname = String(req.url || '').split('?')[0];
+      const actor = pathname.startsWith('/api/admin/event-spaces')
+        ? await getStaffAdminActor(req, res, { sendJson })
+        : await getCommunityActor(req, res);
       if (!actor) return null;
-      const adminIds = new Set((process.env.FXSNAP_COMMUNITY_ADMIN_SUPABASE_USER_IDS || '')
-        .split(',').map((id) => id.trim()).filter(Boolean));
       return {
         ...actor,
         displayName: actor.displayName,
-        isAdmin: adminIds.has(actor.supabaseUserId),
+        isAdmin: actor.isAdmin || getStaffAdminIds(process.env).has(String(actor.supabaseUserId || '').toLowerCase()),
       };
     },
     sendJson,
     readJsonBody,
   });
   const handleCommunityRequest = createCommunityApi({
-    getActor: getCommunityActor,
+    getActor: (req, res) => {
+      const pathname = String(req.url || '').split('?')[0];
+      return pathname.startsWith('/api/admin/')
+        ? getStaffAdminActor(req, res, { sendJson })
+        : getCommunityActor(req, res);
+    },
     sendJson,
     readJsonBody,
     saveCommunityUsername,
@@ -1151,9 +866,40 @@ function createRequestHandler() {
 
     if (req.method === 'OPTIONS') return sendJson(res, 204, {});
     if (pathname === '/api/health' && req.method === 'GET') return sendJson(res, 200, { status: 'ok', service: 'fxsnap' });
+    if (pathname === '/api/admin/auth-config' && req.method === 'GET') {
+      const supabaseUrl = String(process.env.SUPABASE_URL || process.env.SUPABASE_PROJECT_URL || '').replace(/\/+$/, '');
+      const publicKey = process.env.SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY || '';
+      if (!supabaseUrl || !publicKey) return sendJson(res, 503, { error: 'The staff console sign-in is not configured.' });
+      return sendJson(res, 200, { supabaseUrl, publicKey });
+    }
+    if ((pathname === '/admin-console' || pathname === '/admin-console/') && req.method === 'GET') {
+      const supabaseUrl = String(process.env.SUPABASE_URL || process.env.SUPABASE_PROJECT_URL || '');
+      let supabaseOrigin = 'https://*.supabase.co';
+      try { supabaseOrigin = new URL(supabaseUrl).origin; } catch {}
+      res.writeHead(200, {
+        'content-type': 'text/html; charset=utf-8',
+        'cache-control': 'no-store',
+        'referrer-policy': 'no-referrer',
+        'x-content-type-options': 'nosniff',
+        'content-security-policy': `default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ${supabaseOrigin}; img-src 'self' data: https:; form-action 'self' ${supabaseOrigin}; base-uri 'none'; frame-ancestors 'none'; object-src 'none'`,
+      });
+      return res.end(staffConsoleTemplate);
+    }
+    if (pathname === '/admin-console' || pathname === '/admin-console/') {
+      res.writeHead(405, { 'content-type': 'text/plain; charset=utf-8', allow: 'GET' });
+      return res.end('GET required.');
+    }
+    if (pathname === '/admin-console.js' && req.method === 'GET') {
+      res.writeHead(200, {
+        'content-type': 'application/javascript; charset=utf-8',
+        'cache-control': 'no-store',
+        'x-content-type-options': 'nosniff',
+      });
+      return res.end(staffConsoleScript);
+    }
     if (pathname.startsWith('/api/support/') || pathname.startsWith('/api/admin/support/')) {
       return Promise.resolve(handleSupportInboxRequest(req, res, url)).then((handled) => (
-        handled ? undefined : sendJson(res, 404, { error: 'Support endpoint not found.' })
+        handled === false ? sendJson(res, 404, { error: 'Support endpoint not found.' }) : undefined
       ));
     }
     if (pathname === '/api/session' && req.method === 'POST') {
@@ -1163,40 +909,16 @@ function createRequestHandler() {
         return sendJson(res, 200, { token: createAuth(AUTH_SECRET, deviceId), expiresIn: 30 * 24 * 60 * 60 });
       }).catch((error) => sendJson(res, 400, { error: error.message }));
     }
-    if (pathname === '/api/account/google' && req.method === 'POST') {
-      return handleGoogleAccountSignIn(req, res).catch((error) => {
-        console.error('[Account] Google sign-in failed.', error?.name || 'Unknown error');
-        return sendJson(res, 500, { error: 'Unable to complete Google sign-in. Please try again.' });
-      });
-    }
-    if (pathname === '/api/account/supabase' && req.method === 'POST') {
-      return handleSupabaseAccountSignIn(req, res).catch((error) => {
-        console.error('[Account] Supabase sign-in failed.', error?.name || 'Unknown error');
-        return sendJson(res, 500, { error: 'Unable to complete Supabase sign-in. Please try again.' });
-      });
-    }
     if (pathname === '/api/account/data' && (req.method === 'GET' || req.method === 'POST')) {
       return handleAccountData(req, res).catch((error) => {
-        console.error('[Account] Data sync failed.', error?.name || 'Unknown error');
-        return sendJson(res, 500, { error: 'Unable to sync your FXSnap data.' });
+        console.error('[Account] Device data sync failed.', error?.name || 'Unknown error');
+        return sendJson(res, 500, { error: 'Unable to sync your device data.' });
       });
     }
     if (pathname === '/api/account' && req.method === 'GET') {
       return handleAccountProfile(req, res).catch((error) => {
-        console.error('[Account] Profile lookup failed.', error?.name || 'Unknown error');
-        return sendJson(res, 500, { error: 'Unable to load your FXSnap account.' });
-      });
-    }
-    if (pathname === '/api/account/session' && req.method === 'DELETE') {
-      return handleAccountSignOut(req, res).catch((error) => {
-        console.error('[Account] Sign-out failed.', error?.name || 'Unknown error');
-        return sendJson(res, 500, { error: 'Unable to securely sign out. Please try again.' });
-      });
-    }
-    if (pathname === '/api/account' && req.method === 'DELETE') {
-      return handleAccountDeletion(req, res).catch((error) => {
-        console.error('[Account] Account deletion failed.', error?.name || 'Unknown error');
-        return sendJson(res, 500, { error: 'Unable to delete your FXSnap account.' });
+        console.error('[Account] Device profile lookup failed.', error?.name || 'Unknown error');
+        return sendJson(res, 500, { error: 'Unable to load this device profile.' });
       });
     }
 
@@ -1215,36 +937,26 @@ function createRequestHandler() {
       const deviceId = requireAuth(req, res);
       if (!deviceId) return;
       if (!persistentStore.supabaseEnabled) return sendJson(res, 503, { error: 'Push notifications require Supabase storage.' });
-      const hasAccountToken = typeof req.headers['x-fxsnap-account-token'] === 'string';
-      const accountSession = hasAccountToken ? accountSessionFromRequest(req, res, deviceId) : null;
-      if (hasAccountToken && !accountSession) return;
       const notifications = require('./notificationService');
-      const removeRegistration = () => notifications.unregisterPushToken(deviceId, accountSession?.sub || null)
+      const removeRegistration = () => notifications.unregisterPushToken(deviceId)
         .then(() => sendJson(res, 200, { registered: false }))
         .catch((error) => sendJson(res, 500, { error: error.message }));
       if (req.method === 'DELETE') return removeRegistration();
-      const register = async (account = null) => {
-        if (accountSession && (!account || account.status !== 'active'
-          || !account.linkedDeviceIds?.includes(deviceId)
-          || !account.sessionIds?.includes(accountSession.sid)
-          || !account.supabaseUserId)) {
-          return sendJson(res, 401, { error: 'A valid signed-in FXSnap account is required to register these notifications.' });
-        }
+      const register = async () => {
         const body = await readJsonBody(req);
         if (typeof body.token !== 'string' || typeof body.platform !== 'string') {
           return sendJson(res, 400, { error: 'A push token and platform are required.' });
         }
+        const account = await getAnonymousAccountRecord(deviceId);
         await notifications.registerPushToken(deviceId, {
           ...body,
-          accountId: accountSession?.sub || null,
-          supabaseUserId: account?.supabaseUserId || null,
+          accountId: account.userId,
+          supabaseUserId: null,
         });
+        await touchAnonymousDevice(deviceId, account.userId);
         return sendJson(res, 200, { registered: true });
       };
-      const accountPromise = accountSession
-        ? persistentStore.getJson(accountStorageKey(accountSession.sub))
-        : Promise.resolve(null);
-      return accountPromise.then((account) => register(account))
+      return register()
         .catch((error) => sendJson(res, 400, { error: error.message }));
     }
     if (pathname === '/api/notifications/paywall-reminders' && req.method === 'POST') {
