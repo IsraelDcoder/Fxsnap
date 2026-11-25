@@ -72,9 +72,9 @@ create table if not exists public.fxsnap_system_announcement_recipients (
 alter table public.fxsnap_system_announcement_recipients
   add column if not exists recipient_account_id text;
 alter table public.fxsnap_system_announcement_recipients
-  alter column recipient_supabase_user_id drop not null;
-alter table public.fxsnap_system_announcement_recipients
   drop constraint if exists fxsnap_system_announcement_recipients_pkey;
+alter table public.fxsnap_system_announcement_recipients
+  alter column recipient_supabase_user_id drop not null;
 do $$
 begin
   if not exists (
